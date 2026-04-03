@@ -1,0 +1,11 @@
+.DS_Store
+zig-out
+.zig-cache
+benchmarks
+testing
+*.a
+*.o
+*.dylib
+*.so
+*.obj
+*.md

@@ -1,0 +1,17 @@
+.{
+    .name = .ztop,
+
+    .version = "0.0.1",
+
+    .fingerprint = 0xc45e593cecee3572,
+
+    .minimum_zig_version = "0.15.2",
+
+    .dependencies = .{},
+
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
