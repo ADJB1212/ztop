@@ -3,6 +3,11 @@ const common = @import("common.zig");
 
 const CpuStats = common.CpuStats;
 const MemStats = common.MemStats;
+const DiskStats = common.DiskStats;
+const NetStats = common.NetStats;
+const ThermalStats = common.ThermalStats;
+const BatteryStats = common.BatteryStats;
+const BatteryStatus = common.BatteryStatus;
 const ProcStats = common.ProcStats;
 const ProcCpuEntry = common.ProcCpuEntry;
 const MAX_CORES = common.MAX_CORES;
@@ -40,6 +45,30 @@ const CPU_STATE_IDLE = 2;
 const CPU_STATE_NICE = 3;
 const CPU_STATE_MAX = 4;
 
+const PROC_PIDRUSAGE = 5;
+
+const rusage_info_v2 = extern struct {
+    ri_uuid: [16]u8,
+    ri_user_time: u64,
+    ri_system_time: u64,
+    ri_pkg_idle_wkups: u64,
+    ri_interrupt_wkups: u64,
+    ri_pageins: u64,
+    ri_wired_size: u64,
+    ri_resident_size: u64,
+    ri_phys_footprint: u64,
+    ri_proc_start_abstime: u64,
+    ri_proc_exit_abstime: u64,
+    ri_child_user_time: u64,
+    ri_child_system_time: u64,
+    ri_child_pkg_idle_wkups: u64,
+    ri_child_interrupt_wkups: u64,
+    ri_child_pageins: u64,
+    ri_child_elapsed_abstime: u64,
+    ri_diskio_bytesread: u64,
+    ri_diskio_byteswritten: u64,
+};
+
 const HostCpuLoadInfo = extern struct {
     ticks: [4]u32,
 };
@@ -59,6 +88,14 @@ const VmStatistics = extern struct {
     hits: u32,
     purgeable_count: u32,
     speculative_count: u32,
+};
+
+const xsw_usage = extern struct {
+    xsu_total: u64,
+    xsu_avail: u64,
+    xsu_used: u64,
+    xsu_pagesize: u32,
+    xsu_encrypted: bool,
 };
 
 const ProcTaskInfo = extern struct {
@@ -94,6 +131,13 @@ pub const SysInfo = struct {
     prev_procs: [MAX_PROCS]ProcCpuEntry = undefined,
     prev_proc_count: usize = 0,
     prev_time: u64 = 0,
+    prev_disk_read: u64 = 0,
+    prev_disk_write: u64 = 0,
+    prev_net_rx: u64 = 0,
+    prev_net_tx: u64 = 0,
+    prev_ms: i64 = 0,
+    prev_disk_ms: i64 = 0,
+    prev_net_ms: i64 = 0,
 
     pub fn init() SysInfo {
         const host_port = mach_host_self();
@@ -112,12 +156,17 @@ pub const SysInfo = struct {
         var timebase: MachTimebaseInfo = undefined;
         _ = mach_timebase_info(&timebase);
 
+        const now = std.time.milliTimestamp();
+
         return .{
             .ncpu = if (ncpu > 0) @min(ncpu, @as(u32, MAX_CORES)) else 1,
             .total_mem = total_mem,
             .page_size = if (pg_size > 0) pg_size else 4096,
             .host_port = host_port,
             .timebase = timebase,
+            .prev_ms = now,
+            .prev_disk_ms = now,
+            .prev_net_ms = now,
         };
     }
 
@@ -205,21 +254,95 @@ pub const SysInfo = struct {
         const ret = host_statistics(self.host_port, HOST_VM_INFO, @ptrCast(&vm_stats), &count);
 
         if (ret != KERN_SUCCESS) {
-            return .{ .total = self.total_mem, .used = 0, .free = self.total_mem };
+            return .{ .total = self.total_mem, .used = 0, .free = self.total_mem, .cached = 0, .buffered = 0, .swap_total = 0, .swap_used = 0 };
         }
 
         const pg = self.page_size;
         const active: u64 = @as(u64, vm_stats.active_count) * pg;
         const wired: u64 = @as(u64, vm_stats.wire_count) * pg;
+        const inactive: u64 = @as(u64, vm_stats.inactive_count) * pg;
+        const purgeable: u64 = @as(u64, vm_stats.purgeable_count) * pg;
+        const speculative: u64 = @as(u64, vm_stats.speculative_count) * pg;
+        
         const used = active + wired;
         const free = if (self.total_mem > used) self.total_mem - used else 0;
+        const cached = purgeable + inactive + speculative;
 
-        return .{ .total = self.total_mem, .used = used, .free = free };
+        var swap: xsw_usage = std.mem.zeroes(xsw_usage);
+        var swap_size: usize = @sizeOf(xsw_usage);
+        _ = sysctlbyname("vm.swapusage", @ptrCast(&swap), &swap_size, null, 0);
+
+        return .{ 
+            .total = self.total_mem, 
+            .used = used, 
+            .free = free,
+            .cached = cached,
+            .buffered = 0,
+            .swap_total = swap.xsu_total,
+            .swap_used = swap.xsu_used,
+        };
     }
 
-    fn findPrevCpuTotal(self: *const SysInfo, pid: u32) ?u64 {
+    pub fn getDiskStats(self: *SysInfo) DiskStats {
+        _ = self;
+        return .{};
+    }
+
+    pub fn getNetStats(self: *SysInfo) NetStats {
+        _ = self;
+        return .{};
+    }
+
+    pub fn getThermalStats(self: *SysInfo) ThermalStats {
+        _ = self;
+        return .{};
+    }
+
+    pub fn getBatteryStats(self: *SysInfo) BatteryStats {
+        _ = self;
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        const allocator = arena.allocator();
+
+        var child = std.process.Child.init(&.{ "pmset", "-g", "batt" }, allocator);
+        child.stdout_behavior = .Pipe;
+        child.stderr_behavior = .Ignore;
+        
+        child.spawn() catch return .{};
+        
+        const out_str = child.stdout.?.readToEndAlloc(allocator, 4096) catch return .{};
+        
+        _ = child.wait() catch return .{};
+        
+        var charge: ?f32 = null;
+        var status: BatteryStatus = .unknown;
+        
+        // Output looks like: " -InternalBattery-0 (id=...) 100%; charged; 0:00 remaining present: true"
+        if (std.mem.indexOf(u8, out_str, "%")) |pct_idx| {
+            var start = pct_idx;
+            while (start > 0 and out_str[start - 1] >= '0' and out_str[start - 1] <= '9') {
+                start -= 1;
+            }
+            if (start < pct_idx) {
+                const val = std.fmt.parseInt(u32, out_str[start..pct_idx], 10) catch 0;
+                charge = @as(f32, @floatFromInt(val));
+            }
+            
+            if (std.mem.indexOf(u8, out_str, "charging")) |_| {
+                status = .charging;
+            } else if (std.mem.indexOf(u8, out_str, "discharging")) |_| {
+                status = .discharging;
+            } else if (std.mem.indexOf(u8, out_str, "charged")) |_| {
+                status = .full;
+            }
+        }
+        
+        return .{ .charge_percent = charge, .power_draw_w = null, .status = status };
+    }
+
+    fn findPrevProcEntry(self: *const SysInfo, pid: u32) ?ProcCpuEntry {
         for (self.prev_procs[0..self.prev_proc_count]) |entry| {
-            if (entry.pid == pid) return entry.cpu_total;
+            if (entry.pid == pid) return entry;
         }
         return null;
     }
@@ -228,7 +351,7 @@ pub const SysInfo = struct {
         return mach_time * self.timebase.numer / self.timebase.denom;
     }
 
-    pub fn getProcStats(self: *SysInfo, allocator: std.mem.Allocator) ![]ProcStats {
+    pub fn getProcStats(self: *SysInfo, allocator: std.mem.Allocator, sort_by: common.SortBy) ![]ProcStats {
         const current_time = mach_absolute_time();
         const wall_delta_ns: u64 = if (self.prev_time > 0) self.machToNs(current_time -| self.prev_time) else 0;
 
@@ -255,18 +378,35 @@ pub const SysInfo = struct {
 
             const cpu_total = task_info.pti_total_user +| task_info.pti_total_system;
 
+            var rusage: rusage_info_v2 = undefined;
+            const ru_ret = proc_pidinfo(raw_pid, PROC_PIDRUSAGE, 0, @ptrCast(&rusage), @sizeOf(rusage_info_v2));
+            const disk_read = if (ru_ret > 0) rusage.ri_diskio_bytesread else 0;
+            const disk_write = if (ru_ret > 0) rusage.ri_diskio_byteswritten else 0;
+
             if (new_proc_count < MAX_PROCS) {
-                new_procs[new_proc_count] = .{ .pid = pid, .cpu_total = cpu_total };
+                new_procs[new_proc_count] = .{ .pid = pid, .cpu_total = cpu_total, .disk_read = disk_read, .disk_write = disk_write };
                 new_proc_count += 1;
             }
 
             var cpu_percent: f32 = 0;
-            if (wall_delta_ns > 0) {
-                if (self.findPrevCpuTotal(pid)) |prev_total| {
-                    if (cpu_total >= prev_total) {
-                        const delta_cpu = cpu_total - prev_total;
+            var disk_read_ps: u64 = 0;
+            var disk_write_ps: u64 = 0;
+
+            const prev_entry = self.findPrevProcEntry(pid);
+
+            if (prev_entry) |prev| {
+                if (wall_delta_ns > 0) {
+                    if (cpu_total >= prev.cpu_total) {
+                        const delta_cpu = cpu_total - prev.cpu_total;
                         cpu_percent = @as(f32, @floatFromInt(delta_cpu)) / @as(f32, @floatFromInt(wall_delta_ns)) * 100.0;
                     }
+                }
+                const elapsed_ms = std.time.milliTimestamp() - self.prev_ms;
+                if (elapsed_ms > 0) {
+                    const d_read = disk_read -| prev.disk_read;
+                    const d_write = disk_write -| prev.disk_write;
+                    disk_read_ps = (d_read *| 1000) / @as(u64, @intCast(elapsed_ms));
+                    disk_write_ps = (d_write *| 1000) / @as(u64, @intCast(elapsed_ms));
                 }
             }
 
@@ -279,6 +419,9 @@ pub const SysInfo = struct {
                 .pid = pid,
                 .cpu_percent = cpu_percent,
                 .mem_percent = mem_percent,
+                .threads = @intCast(task_info.pti_threadnum),
+                .disk_read_ps = disk_read_ps,
+                .disk_write_ps = disk_write_ps,
                 .name_len = name_len,
             };
             @memcpy(proc_stat.name_buf[0..name_len], nbuf[0..name_len]);
@@ -291,7 +434,7 @@ pub const SysInfo = struct {
         self.prev_time = current_time;
 
         const slice = try result.toOwnedSlice(allocator);
-        common.sortProcStats(slice);
+        common.sortProcStats(slice, sort_by);
         return slice;
     }
 };

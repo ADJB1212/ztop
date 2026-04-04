@@ -3,6 +3,11 @@ const common = @import("common.zig");
 
 const CpuStats = common.CpuStats;
 const MemStats = common.MemStats;
+const DiskStats = common.DiskStats;
+const NetStats = common.NetStats;
+const ThermalStats = common.ThermalStats;
+const BatteryStats = common.BatteryStats;
+const BatteryStatus = common.BatteryStatus;
 const ProcStats = common.ProcStats;
 const ProcCpuEntry = common.ProcCpuEntry;
 const MAX_CORES = common.MAX_CORES;
@@ -22,6 +27,7 @@ const CpuSnapshot = struct {
 const ParsedProcStat = struct {
     name: []const u8,
     cpu_total: u64,
+    num_threads: u32,
 };
 
 pub const SysInfo = struct {
@@ -34,13 +40,24 @@ pub const SysInfo = struct {
     prev_procs: [MAX_PROCS]ProcCpuEntry = undefined,
     prev_proc_count: usize = 0,
     prev_proc_total_ticks: u64 = 0,
+    prev_disk_read: u64 = 0,
+    prev_disk_write: u64 = 0,
+    prev_net_rx: u64 = 0,
+    prev_net_tx: u64 = 0,
+    prev_time: i64 = 0,
+    prev_disk_ms: i64 = 0,
+    prev_net_ms: i64 = 0,
 
     pub fn init() SysInfo {
         const initial_cores = @min(std.Thread.getCpuCount() catch 1, MAX_CORES);
+        const now = std.time.milliTimestamp();
         return .{
             .ncpu = @intCast(initial_cores),
             .total_mem = readMemInfoTotal() catch 0,
             .page_size = std.heap.pageSize(),
+            .prev_time = now,
+            .prev_disk_ms = now,
+            .prev_net_ms = now,
         };
     }
 
@@ -78,28 +95,113 @@ pub const SysInfo = struct {
 
     pub fn getMemStats(self: *SysInfo) MemStats {
         const mem_info = readMemInfo() catch {
-            return .{ .total = self.total_mem, .used = 0, .free = self.total_mem };
+            return .{ .total = self.total_mem, .used = 0, .free = self.total_mem, .cached = 0, .buffered = 0, .swap_total = 0, .swap_used = 0 };
         };
 
         self.total_mem = mem_info.total;
 
-        return .{
-            .total = mem_info.total,
-            .used = mem_info.used,
-            .free = mem_info.free,
-        };
+        return mem_info;
     }
 
-    fn findPrevCpuTotal(self: *const SysInfo, pid: u32) ?u64 {
+    pub fn getDiskStats(self: *SysInfo) DiskStats {
+        const stats = readDiskStats() catch .{ .read_bytes = 0, .write_bytes = 0 };
+        const now = std.time.milliTimestamp();
+        const elapsed = now - self.prev_disk_ms;
+        
+        var read_ps: u64 = 0;
+        var write_ps: u64 = 0;
+
+        if (elapsed > 0 and self.prev_disk_read > 0) {
+            const d_read = stats.read_bytes -| self.prev_disk_read;
+            const d_write = stats.write_bytes -| self.prev_disk_write;
+            read_ps = (d_read *| 1000) / @as(u64, @intCast(elapsed));
+            write_ps = (d_write *| 1000) / @as(u64, @intCast(elapsed));
+        }
+
+        self.prev_disk_read = stats.read_bytes;
+        self.prev_disk_write = stats.write_bytes;
+        self.prev_disk_ms = now;
+
+        return .{ .read_bytes_ps = read_ps, .write_bytes_ps = write_ps };
+    }
+
+    pub fn getNetStats(self: *SysInfo) NetStats {
+        const stats = readNetStats() catch .{ .rx_bytes = 0, .tx_bytes = 0 };
+        const now = std.time.milliTimestamp();
+        const elapsed = now - self.prev_net_ms;
+        
+        var rx_ps: u64 = 0;
+        var tx_ps: u64 = 0;
+
+        if (elapsed > 0 and self.prev_net_rx > 0) {
+            const d_rx = stats.rx_bytes -| self.prev_net_rx;
+            const d_tx = stats.tx_bytes -| self.prev_net_tx;
+            rx_ps = (d_rx * 1000) / @as(u64, @intCast(elapsed));
+            tx_ps = (d_tx * 1000) / @as(u64, @intCast(elapsed));
+        }
+
+        self.prev_net_rx = stats.rx_bytes;
+        self.prev_net_tx = stats.tx_bytes;
+        self.prev_net_ms = now;
+
+        return .{ .rx_bytes_ps = rx_ps, .tx_bytes_ps = tx_ps };
+    }
+
+    pub fn getThermalStats(self: *SysInfo) ThermalStats {
+        _ = self;
+        var buf: [64]u8 = undefined;
+        const contents = readAbsoluteFile("/sys/class/thermal/thermal_zone0/temp", &buf) catch return .{};
+        const temp_str = std.mem.trim(u8, contents, " \n");
+        const milli_c = std.fmt.parseInt(i32, temp_str, 10) catch return .{};
+        return .{ .cpu_temp = @as(f32, @floatFromInt(milli_c)) / 1000.0, .gpu_temp = null };
+    }
+
+    pub fn getBatteryStats(self: *SysInfo) BatteryStats {
+        _ = self;
+        var buf_cap: [64]u8 = undefined;
+        var buf_stat: [64]u8 = undefined;
+        var buf_power: [64]u8 = undefined;
+
+        var charge_percent: ?f32 = null;
+        if (readAbsoluteFile("/sys/class/power_supply/BAT0/capacity", &buf_cap)) |cap| {
+            const val = std.fmt.parseInt(u32, std.mem.trim(u8, cap, " \n"), 10) catch 0;
+            charge_percent = @as(f32, @floatFromInt(val));
+        } else |_| {}
+
+        var status: BatteryStatus = .unknown;
+        if (readAbsoluteFile("/sys/class/power_supply/BAT0/status", &buf_stat)) |stat| {
+            const s = std.mem.trim(u8, stat, " \n");
+            if (std.mem.eql(u8, s, "Charging")) {
+                status = .charging;
+            } else if (std.mem.eql(u8, s, "Discharging")) {
+                status = .discharging;
+            } else if (std.mem.eql(u8, s, "Full")) {
+                status = .full;
+            }
+        } else |_| {}
+
+        var power_draw_w: ?f32 = null;
+        if (readAbsoluteFile("/sys/class/power_supply/BAT0/power_now", &buf_power)) |power| {
+            const val = std.fmt.parseInt(u64, std.mem.trim(u8, power, " \n"), 10) catch 0;
+            power_draw_w = @as(f32, @floatFromInt(val)) / 1000000.0;
+        } else |_| {}
+
+        return .{ .charge_percent = charge_percent, .power_draw_w = power_draw_w, .status = status };
+    }
+
+    fn findPrevProcEntry(self: *const SysInfo, pid: u32) ?ProcCpuEntry {
         for (self.prev_procs[0..self.prev_proc_count]) |entry| {
-            if (entry.pid == pid) return entry.cpu_total;
+            if (entry.pid == pid) return entry;
         }
         return null;
     }
 
-    pub fn getProcStats(self: *SysInfo, allocator: std.mem.Allocator) ![]ProcStats {
+    pub fn getProcStats(self: *SysInfo, allocator: std.mem.Allocator, sort_by: common.SortBy) ![]ProcStats {
         const snapshot = readCpuSnapshot() catch CpuSnapshot{};
         const total_tick_delta = if (self.prev_proc_total_ticks > 0) snapshot.overall.total -| self.prev_proc_total_ticks else 0;
+        
+        const now = std.time.milliTimestamp();
+        const elapsed_ms = now - self.prev_time;
 
         var proc_dir = try std.fs.openDirAbsolute("/proc", .{ .iterate = true });
         defer proc_dir.close();
@@ -125,18 +227,43 @@ pub const SysInfo = struct {
             const resident_pages = parseResidentPages(statm_contents) orelse continue;
             const resident_size = resident_pages * self.page_size;
 
+            var io_buf: [1024]u8 = undefined;
+            var disk_read: u64 = 0;
+            var disk_write: u64 = 0;
+            if (readDirFile(&pid_dir, "io", &io_buf)) |io_contents| {
+                var lines = std.mem.splitScalar(u8, io_contents, '\n');
+                while (lines.next()) |line| {
+                    if (std.mem.startsWith(u8, line, "read_bytes:")) {
+                        disk_read = std.fmt.parseInt(u64, std.mem.trim(u8, line[11..], " \t"), 10) catch 0;
+                    } else if (std.mem.startsWith(u8, line, "write_bytes:")) {
+                        disk_write = std.fmt.parseInt(u64, std.mem.trim(u8, line[12..], " \t"), 10) catch 0;
+                    }
+                }
+            } else |_| {}
+
             if (new_proc_count < MAX_PROCS) {
-                new_procs[new_proc_count] = .{ .pid = pid, .cpu_total = proc_info.cpu_total };
+                new_procs[new_proc_count] = .{ .pid = pid, .cpu_total = proc_info.cpu_total, .disk_read = disk_read, .disk_write = disk_write };
                 new_proc_count += 1;
             }
 
             var cpu_percent: f32 = 0;
-            if (total_tick_delta > 0) {
-                if (self.findPrevCpuTotal(pid)) |prev_total| {
-                    if (proc_info.cpu_total >= prev_total) {
-                        const delta_cpu = proc_info.cpu_total - prev_total;
+            var disk_read_ps: u64 = 0;
+            var disk_write_ps: u64 = 0;
+
+            const prev_entry = self.findPrevProcEntry(pid);
+
+            if (prev_entry) |prev| {
+                if (total_tick_delta > 0) {
+                    if (proc_info.cpu_total >= prev.cpu_total) {
+                        const delta_cpu = proc_info.cpu_total - prev.cpu_total;
                         cpu_percent = @as(f32, @floatFromInt(delta_cpu * self.ncpu)) / @as(f32, @floatFromInt(total_tick_delta)) * 100.0;
                     }
+                }
+                if (elapsed_ms > 0) {
+                    const d_read = disk_read -| prev.disk_read;
+                    const d_write = disk_write -| prev.disk_write;
+                    disk_read_ps = (d_read *| 1000) / @as(u64, @intCast(elapsed_ms));
+                    disk_write_ps = (d_write *| 1000) / @as(u64, @intCast(elapsed_ms));
                 }
             }
 
@@ -150,6 +277,9 @@ pub const SysInfo = struct {
                 .pid = pid,
                 .cpu_percent = cpu_percent,
                 .mem_percent = mem_percent,
+                .threads = proc_info.num_threads,
+                .disk_read_ps = disk_read_ps,
+                .disk_write_ps = disk_write_ps,
                 .name_len = @intCast(name.len),
             };
             @memcpy(proc_stat.name_buf[0..name.len], name);
@@ -159,9 +289,10 @@ pub const SysInfo = struct {
         @memcpy(self.prev_procs[0..new_proc_count], new_procs[0..new_proc_count]);
         self.prev_proc_count = new_proc_count;
         self.prev_proc_total_ticks = snapshot.overall.total;
+        self.prev_time = now;
 
         const slice = try result.toOwnedSlice(allocator);
-        common.sortProcStats(slice);
+        common.sortProcStats(slice, sort_by);
         return slice;
     }
 };
@@ -243,12 +374,15 @@ fn parseProcStat(contents: []const u8) ?ParsedProcStat {
     var field_number: usize = 3;
     var utime: ?u64 = null;
     var stime: ?u64 = null;
+    var num_threads: ?u32 = null;
 
     while (fields.next()) |field| : (field_number += 1) {
         if (field_number == 14) {
             utime = std.fmt.parseInt(u64, field, 10) catch return null;
         } else if (field_number == 15) {
             stime = std.fmt.parseInt(u64, field, 10) catch return null;
+        } else if (field_number == 20) {
+            num_threads = std.fmt.parseInt(u32, field, 10) catch return null;
             break;
         }
     }
@@ -256,6 +390,7 @@ fn parseProcStat(contents: []const u8) ?ParsedProcStat {
     return .{
         .name = name,
         .cpu_total = (utime orelse return null) + (stime orelse return null),
+        .num_threads = num_threads orelse return null,
     };
 }
 
@@ -266,17 +401,76 @@ fn parseResidentPages(contents: []const u8) ?u64 {
     return std.fmt.parseInt(u64, resident, 10) catch null;
 }
 
+fn readDiskStats() !struct { read_bytes: u64, write_bytes: u64 } {
+    var buf: [4096]u8 = undefined;
+    const contents = readAbsoluteFile("/proc/diskstats", &buf) catch return .{ .read_bytes = 0, .write_bytes = 0 };
+    var lines = std.mem.splitScalar(u8, contents, '\n');
+    var read_sectors: u64 = 0;
+    var write_sectors: u64 = 0;
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        var fields = std.mem.tokenizeAny(u8, line, " \t");
+        _ = fields.next();
+        _ = fields.next();
+        const dev = fields.next() orelse continue;
+        if (std.mem.startsWith(u8, dev, "loop") or std.mem.startsWith(u8, dev, "ram")) continue;
+        
+        _ = fields.next();
+        _ = fields.next();
+        const rs = fields.next() orelse continue;
+        _ = fields.next();
+        _ = fields.next();
+        _ = fields.next();
+        const ws = fields.next() orelse continue;
+
+        read_sectors += std.fmt.parseInt(u64, rs, 10) catch 0;
+        write_sectors += std.fmt.parseInt(u64, ws, 10) catch 0;
+    }
+    return .{ .read_bytes = read_sectors * 512, .write_bytes = write_sectors * 512 };
+}
+
+fn readNetStats() !struct { rx_bytes: u64, tx_bytes: u64 } {
+    var buf: [4096]u8 = undefined;
+    const contents = readAbsoluteFile("/proc/net/dev", &buf) catch return .{ .rx_bytes = 0, .tx_bytes = 0 };
+    var lines = std.mem.splitScalar(u8, contents, '\n');
+    _ = lines.next();
+    _ = lines.next();
+    
+    var rx: u64 = 0;
+    var tx: u64 = 0;
+    
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
+        const dev = std.mem.trim(u8, line[0..colon], " \t");
+        if (std.mem.eql(u8, dev, "lo")) continue;
+        
+        var fields = std.mem.tokenizeAny(u8, line[colon + 1 ..], " \t");
+        const r_bytes = fields.next() orelse continue;
+        rx += std.fmt.parseInt(u64, r_bytes, 10) catch 0;
+        
+        for (0..7) |_| { _ = fields.next(); }
+        const t_bytes = fields.next() orelse continue;
+        tx += std.fmt.parseInt(u64, t_bytes, 10) catch 0;
+    }
+    return .{ .rx_bytes = rx, .tx_bytes = tx };
+}
+
 fn readMemInfoTotal() !u64 {
     const mem_info = try readMemInfo();
     return mem_info.total;
 }
 
-fn readMemInfo() !struct { total: u64, used: u64, free: u64 } {
+fn readMemInfo() !MemStats {
     var buf: [4096]u8 = undefined;
     const contents = try readAbsoluteFile("/proc/meminfo", &buf);
 
     var total_kb: ?u64 = null;
     var available_kb: ?u64 = null;
+    var cached_kb: ?u64 = null;
+    var buffered_kb: ?u64 = null;
+    var swap_total_kb: ?u64 = null;
+    var swap_free_kb: ?u64 = null;
 
     var lines = std.mem.splitScalar(u8, contents, '\n');
     while (lines.next()) |line| {
@@ -284,13 +478,35 @@ fn readMemInfo() !struct { total: u64, used: u64, free: u64 } {
             total_kb = parseMemInfoValue(line);
         } else if (std.mem.startsWith(u8, line, "MemAvailable:")) {
             available_kb = parseMemInfoValue(line);
+        } else if (std.mem.startsWith(u8, line, "Cached:")) {
+            cached_kb = parseMemInfoValue(line);
+        } else if (std.mem.startsWith(u8, line, "Buffers:")) {
+            buffered_kb = parseMemInfoValue(line);
+        } else if (std.mem.startsWith(u8, line, "SwapTotal:")) {
+            swap_total_kb = parseMemInfoValue(line);
+        } else if (std.mem.startsWith(u8, line, "SwapFree:")) {
+            swap_free_kb = parseMemInfoValue(line);
         }
     }
 
     const total = (total_kb orelse return error.UnexpectedProcMemInfo) * 1024;
     const free = (available_kb orelse return error.UnexpectedProcMemInfo) * 1024;
     const used = total -| free;
-    return .{ .total = total, .used = used, .free = free };
+    const cached = (cached_kb orelse 0) * 1024;
+    const buffered = (buffered_kb orelse 0) * 1024;
+    const swap_total = (swap_total_kb orelse 0) * 1024;
+    const swap_free = (swap_free_kb orelse 0) * 1024;
+    const swap_used = swap_total -| swap_free;
+
+    return .{ 
+        .total = total, 
+        .used = used, 
+        .free = free,
+        .cached = cached,
+        .buffered = buffered,
+        .swap_total = swap_total,
+        .swap_used = swap_used,
+    };
 }
 
 fn parseMemInfoValue(line: []const u8) ?u64 {

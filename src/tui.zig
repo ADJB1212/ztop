@@ -23,6 +23,7 @@ pub const Tui = struct {
 
     pub const Style = struct {
         fg: ?Color = null,
+        bg: ?Color = null,
         bold: bool = false,
         dim: bool = false,
     };
@@ -92,6 +93,7 @@ pub const Tui = struct {
         if (style.bold) try writer.writeAll(";1");
         if (style.dim) try writer.writeAll(";2");
         if (style.fg) |fg| try writer.print(";{d}", .{@intFromEnum(fg)});
+        if (style.bg) |bg| try writer.print(";{d}", .{@intFromEnum(bg) + 10});
         try writer.writeAll("m");
 
         try self.out.writeAll(stream.getWritten());
@@ -131,9 +133,9 @@ pub const Tui = struct {
 
         // Draw top border
         try self.moveCursor(x, y);
-        try self.out.writeAll("┌");
+        try self.out.writeAll("╭");
         for (0..width - 2) |_| try self.out.writeAll("─");
-        try self.out.writeAll("┐");
+        try self.out.writeAll("╮");
 
         // Draw sides
         for (1..height - 1) |i| {
@@ -145,9 +147,9 @@ pub const Tui = struct {
 
         // Draw bottom border
         try self.moveCursor(x, y + height - 1);
-        try self.out.writeAll("└");
+        try self.out.writeAll("╰");
         for (0..width - 2) |_| try self.out.writeAll("─");
-        try self.out.writeAll("┘");
+        try self.out.writeAll("╯");
         try self.resetStyle();
 
         // Draw title
