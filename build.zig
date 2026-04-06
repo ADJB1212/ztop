@@ -25,6 +25,11 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    if (target.result.os.tag == .macos) {
+        exe.root_module.linkFramework("IOKit", .{});
+        exe.root_module.linkFramework("CoreFoundation", .{});
+    }
+
     b.installArtifact(exe);
 
     const run_step = b.step("run", "Run the app");

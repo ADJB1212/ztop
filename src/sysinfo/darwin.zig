@@ -1,5 +1,14 @@
 const std = @import("std");
 const common = @import("common.zig");
+const c = @cImport({
+    @cInclude("sys/sysctl.h");
+    @cInclude("sys/socket.h");
+    @cInclude("net/if.h");
+    @cInclude("net/route.h");
+    @cInclude("IOKit/IOKitLib.h");
+    @cInclude("IOKit/storage/IOBlockStorageDriver.h");
+    @cInclude("CoreFoundation/CoreFoundation.h");
+});
 
 const CpuStats = common.CpuStats;
 const MemStats = common.MemStats;
@@ -12,6 +21,16 @@ const ProcStats = common.ProcStats;
 const ProcCpuEntry = common.ProcCpuEntry;
 const MAX_CORES = common.MAX_CORES;
 const MAX_PROCS = common.MAX_PROCS;
+
+const DiskTotals = struct {
+    read_bytes: u64,
+    write_bytes: u64,
+};
+
+const NetTotals = struct {
+    rx_bytes: u64,
+    tx_bytes: u64,
+};
 
 const mach_port_t = u32;
 const kern_return_t = c_int;
@@ -284,13 +303,47 @@ pub const SysInfo = struct {
     }
 
     pub fn getDiskStats(self: *SysInfo) DiskStats {
-        _ = self;
-        return .{};
+        const stats = readDiskTotals() catch DiskTotals{ .read_bytes = 0, .write_bytes = 0 };
+        const now = std.time.milliTimestamp();
+        const elapsed = now - self.prev_disk_ms;
+
+        var read_ps: u64 = 0;
+        var write_ps: u64 = 0;
+
+        if (elapsed > 0 and self.prev_disk_read > 0) {
+            const d_read = stats.read_bytes -| self.prev_disk_read;
+            const d_write = stats.write_bytes -| self.prev_disk_write;
+            read_ps = (d_read *| 1000) / @as(u64, @intCast(elapsed));
+            write_ps = (d_write *| 1000) / @as(u64, @intCast(elapsed));
+        }
+
+        self.prev_disk_read = stats.read_bytes;
+        self.prev_disk_write = stats.write_bytes;
+        self.prev_disk_ms = now;
+
+        return .{ .read_bytes_ps = read_ps, .write_bytes_ps = write_ps };
     }
 
     pub fn getNetStats(self: *SysInfo) NetStats {
-        _ = self;
-        return .{};
+        const stats = readNetTotals() catch NetTotals{ .rx_bytes = 0, .tx_bytes = 0 };
+        const now = std.time.milliTimestamp();
+        const elapsed = now - self.prev_net_ms;
+
+        var rx_ps: u64 = 0;
+        var tx_ps: u64 = 0;
+
+        if (elapsed > 0 and self.prev_net_rx > 0) {
+            const d_rx = stats.rx_bytes -| self.prev_net_rx;
+            const d_tx = stats.tx_bytes -| self.prev_net_tx;
+            rx_ps = (d_rx *| 1000) / @as(u64, @intCast(elapsed));
+            tx_ps = (d_tx *| 1000) / @as(u64, @intCast(elapsed));
+        }
+
+        self.prev_net_rx = stats.rx_bytes;
+        self.prev_net_tx = stats.tx_bytes;
+        self.prev_net_ms = now;
+
+        return .{ .rx_bytes_ps = rx_ps, .tx_bytes_ps = tx_ps };
     }
 
     pub fn getThermalStats(self: *SysInfo) ThermalStats {
@@ -354,6 +407,8 @@ pub const SysInfo = struct {
     pub fn getProcStats(self: *SysInfo, allocator: std.mem.Allocator, sort_by: common.SortBy) ![]ProcStats {
         const current_time = mach_absolute_time();
         const wall_delta_ns: u64 = if (self.prev_time > 0) self.machToNs(current_time -| self.prev_time) else 0;
+        const now_ms = std.time.milliTimestamp();
+        const elapsed_ms = now_ms - self.prev_ms;
 
         var pid_buf: [MAX_PROCS]c_int = undefined;
         const num_pids_raw = proc_listallpids(&pid_buf, @intCast(MAX_PROCS * @sizeOf(c_int)));
@@ -401,7 +456,6 @@ pub const SysInfo = struct {
                         cpu_percent = @as(f32, @floatFromInt(delta_cpu)) / @as(f32, @floatFromInt(wall_delta_ns)) * 100.0;
                     }
                 }
-                const elapsed_ms = std.time.milliTimestamp() - self.prev_ms;
                 if (elapsed_ms > 0) {
                     const d_read = disk_read -| prev.disk_read;
                     const d_write = disk_write -| prev.disk_write;
@@ -432,9 +486,102 @@ pub const SysInfo = struct {
         @memcpy(self.prev_procs[0..new_proc_count], new_procs[0..new_proc_count]);
         self.prev_proc_count = new_proc_count;
         self.prev_time = current_time;
+        self.prev_ms = now_ms;
 
         const slice = try result.toOwnedSlice(allocator);
         common.sortProcStats(slice, sort_by);
         return slice;
     }
 };
+
+fn readNetTotals() !NetTotals {
+    var mib = [_]c_int{
+        c.CTL_NET,
+        c.PF_ROUTE,
+        0,
+        0,
+        c.NET_RT_IFLIST2,
+        0,
+    };
+    var len: usize = 0;
+    if (c.sysctl(&mib, mib.len, null, &len, null, 0) != 0) return error.SysctlFailed;
+
+    const buf = try std.heap.page_allocator.alloc(u8, len);
+    defer std.heap.page_allocator.free(buf);
+
+    if (c.sysctl(&mib, mib.len, buf.ptr, &len, null, 0) != 0) return error.SysctlFailed;
+
+    var rx: u64 = 0;
+    var tx: u64 = 0;
+    var offset: usize = 0;
+
+    while (offset + @sizeOf(c.struct_if_msghdr2) <= len) {
+        const hdr: *align(1) const c.struct_if_msghdr2 = @ptrCast(buf.ptr + offset);
+        const msg_len: usize = hdr.ifm_msglen;
+        if (msg_len == 0) break;
+
+        if (msg_len >= @sizeOf(c.struct_if_msghdr2) and hdr.ifm_type == c.RTM_IFINFO2 and (hdr.ifm_flags & c.IFF_LOOPBACK) == 0) {
+            rx +|= hdr.ifm_data.ifi_ibytes;
+            tx +|= hdr.ifm_data.ifi_obytes;
+        }
+
+        offset += msg_len;
+    }
+
+    return .{ .rx_bytes = rx, .tx_bytes = tx };
+}
+
+fn readDiskTotals() !DiskTotals {
+    const matching = c.IOServiceMatching(c.kIOBlockStorageDriverClass) orelse return error.IOKitMatchingFailed;
+
+    var iter: c.io_iterator_t = 0;
+    if (c.IOServiceGetMatchingServices(c.kIOMainPortDefault, matching, &iter) != c.KERN_SUCCESS) {
+        return error.IOKitQueryFailed;
+    }
+    defer _ = c.IOObjectRelease(iter);
+
+    const stats_key = c.CFStringCreateWithCString(null, c.kIOBlockStorageDriverStatisticsKey, c.kCFStringEncodingUTF8) orelse {
+        return error.OutOfMemory;
+    };
+    defer c.CFRelease(stats_key);
+
+    const read_key = c.CFStringCreateWithCString(null, c.kIOBlockStorageDriverStatisticsBytesReadKey, c.kCFStringEncodingUTF8) orelse {
+        return error.OutOfMemory;
+    };
+    defer c.CFRelease(read_key);
+
+    const write_key = c.CFStringCreateWithCString(null, c.kIOBlockStorageDriverStatisticsBytesWrittenKey, c.kCFStringEncodingUTF8) orelse {
+        return error.OutOfMemory;
+    };
+    defer c.CFRelease(write_key);
+
+    var read_bytes: u64 = 0;
+    var write_bytes: u64 = 0;
+
+    while (true) {
+        const service = c.IOIteratorNext(iter);
+        if (service == 0) break;
+        defer _ = c.IOObjectRelease(service);
+
+        const stats_ref = c.IORegistryEntryCreateCFProperty(service, stats_key, null, 0) orelse continue;
+        defer c.CFRelease(stats_ref);
+
+        if (c.CFGetTypeID(stats_ref) != c.CFDictionaryGetTypeID()) continue;
+
+        const stats_dict: c.CFDictionaryRef = @ptrCast(stats_ref);
+        read_bytes +|= getCFDictionaryU64(stats_dict, read_key);
+        write_bytes +|= getCFDictionaryU64(stats_dict, write_key);
+    }
+
+    return .{ .read_bytes = read_bytes, .write_bytes = write_bytes };
+}
+
+fn getCFDictionaryU64(dict: c.CFDictionaryRef, key: c.CFStringRef) u64 {
+    const value = c.CFDictionaryGetValue(dict, key) orelse return 0;
+    if (c.CFGetTypeID(value) != c.CFNumberGetTypeID()) return 0;
+
+    var raw: i64 = 0;
+    if (c.CFNumberGetValue(@ptrCast(value), c.kCFNumberSInt64Type, &raw) == 0 or raw < 0) return 0;
+
+    return @intCast(raw);
+}
