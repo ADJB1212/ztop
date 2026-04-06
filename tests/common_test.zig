@@ -18,6 +18,15 @@ test "ProcStats name slice" {
     try std.testing.expectEqualStrings("test", proc.name());
 }
 
+test "ProcStats defaults" {
+    const proc = common.ProcStats{
+        .pid = 1234,
+    };
+    try std.testing.expectEqual(@as(u32, 1234), proc.pid);
+    try std.testing.expectEqual(@as(u32, 0), proc.ppid);
+    try std.testing.expectEqual(common.ProcState.unknown, proc.state);
+}
+
 test "sortProcStats by cpu" {
     var procs = [_]common.ProcStats{
         .{ .pid = 1, .cpu_percent = 5.0 },

@@ -12,6 +12,9 @@ pub const ProcStats = common.ProcStats;
 pub const SortBy = common.SortBy;
 pub const sortProcStats = common.sortProcStats;
 
+pub const sys_linux = @import("sysinfo/linux.zig");
+pub const sys_darwin = @import("sysinfo/darwin.zig");
+
 pub const SysInfo = switch (builtin.target.os.tag) {
     .macos => @import("sysinfo/darwin.zig").SysInfo,
     .linux => @import("sysinfo/linux.zig").SysInfo,

@@ -44,10 +44,24 @@ pub const BatteryStats = struct {
     status: BatteryStatus = .unknown,
 };
 
+pub const ProcState = enum {
+    running,
+    sleeping,
+    disk_sleep,
+    stopped,
+    tracing_stop,
+    zombie,
+    dead,
+    idle,
+    unknown,
+};
+
 pub const ProcStats = struct {
     pid: u32,
+    ppid: u32 = 0,
     name_buf: [64]u8 = std.mem.zeroes([64]u8),
     name_len: u8 = 0,
+    state: ProcState = .unknown,
     cpu_percent: f32 = 0,
     mem_percent: f32 = 0,
     threads: u32 = 0,

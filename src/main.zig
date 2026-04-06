@@ -68,6 +68,10 @@ pub fn main() !void {
     var filter_len: usize = 0;
     var is_filtering: bool = false;
 
+    var cmd_buf: [128]u8 = std.mem.zeroes([128]u8);
+    var cmd_len: usize = 0;
+    var is_cmd_mode: bool = false;
+
     var filtered_indices: [2048]usize = undefined;
     var filtered_count: usize = 0;
 
@@ -446,13 +450,21 @@ pub fn main() !void {
                     try app_tui.printStyled(.{ .fg = .bright_white }, "q:            ", .{});
                     try app_tui.printStyled(.{ .fg = .bright_black }, "Quit", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 9);
+                    try app_tui.moveCursor(h_x + 2, h_y + 8);
+                    try app_tui.printStyled(.{ .fg = .bright_white }, ":             ", .{});
+                    try app_tui.printStyled(.{ .fg = .bright_black }, "Command mode", .{});
+
+                    try app_tui.moveCursor(h_x + 2, h_y + 10);
                     try app_tui.printStyled(.{ .fg = .bright_black }, "Press any key to close...", .{});
                 }
 
                 // Footer
                 try app_tui.moveCursor(1, size.height);
-                if (is_filtering) {
+                if (is_cmd_mode) {
+                    try app_tui.printStyled(.{ .fg = .bright_green, .bold = true }, ":", .{});
+                    try app_tui.printStyled(.{ .fg = .bright_white }, "{s}", .{cmd_buf[0..cmd_len]});
+                    try app_tui.printStyled(.{ .fg = .bright_black }, " (Press Enter to execute, Esc to cancel)", .{});
+                } else if (is_filtering) {
                     try app_tui.printStyled(.{ .fg = .bright_yellow, .bold = true }, "Filter: ", .{});
                     try app_tui.printStyled(.{ .fg = .bright_white }, "{s}", .{filter_buf[0..filter_len]});
                     try app_tui.printStyled(.{ .fg = .bright_black }, " (Press Enter to apply, Esc to cancel)", .{});
@@ -489,6 +501,61 @@ pub fn main() !void {
                 if (show_help) {
                     show_help = false;
                     handled = true;
+                } else if (is_cmd_mode) {
+                    if (buf[0] == '\r' or buf[0] == '\n') {
+                        is_cmd_mode = false;
+                        const cmd = cmd_buf[0..cmd_len];
+                        if (std.mem.startsWith(u8, cmd, "killall ")) {
+                            const target = cmd[8..];
+                            if (std.mem.eql(u8, target, "defunct")) {
+                                for (cached_procs) |proc| {
+                                    if (proc.state == .zombie or proc.state == .dead) {
+                                        if (proc.ppid > 0) {
+                                            _ = posix.kill(@intCast(proc.ppid), posix.SIG.CHLD) catch {};
+                                        }
+                                    }
+                                }
+                            } else {
+                                for (cached_procs) |proc| {
+                                    var l_name: [64]u8 = undefined;
+                                    const name_len = proc.name().len;
+                                    @memcpy(l_name[0..name_len], proc.name());
+                                    const n_str = l_name[0..name_len];
+                                    for (n_str) |*c| c.* = std.ascii.toLower(c.*);
+
+                                    var l_target: [64]u8 = undefined;
+                                    const target_len = @min(target.len, 64);
+                                    @memcpy(l_target[0..target_len], target[0..target_len]);
+                                    const t_str = l_target[0..target_len];
+                                    for (t_str) |*c| c.* = std.ascii.toLower(c.*);
+
+                                    if (std.mem.indexOf(u8, n_str, t_str) != null) {
+                                        _ = posix.kill(@intCast(proc.pid), posix.SIG.TERM) catch {};
+                                    }
+                                }
+                            }
+                        } else if (std.mem.startsWith(u8, cmd, "search ")) {
+                            const target = cmd[7..];
+                            is_filtering = true;
+                            filter_len = @min(target.len, filter_buf.len);
+                            @memcpy(filter_buf[0..filter_len], target[0..filter_len]);
+                        } else if (std.mem.eql(u8, cmd, "q") or std.mem.eql(u8, cmd, "quit")) {
+                            quit_flag = true;
+                        }
+                        cmd_len = 0;
+                        handled = true;
+                    } else if (buf[0] == '\x1b') {
+                        is_cmd_mode = false;
+                        cmd_len = 0;
+                        handled = true;
+                    } else if (buf[0] == 127 or buf[0] == '\x08') {
+                        if (cmd_len > 0) cmd_len -= 1;
+                        handled = true;
+                    } else if (buf[0] >= 32 and buf[0] <= 126 and cmd_len < cmd_buf.len) {
+                        cmd_buf[cmd_len] = buf[0];
+                        cmd_len += 1;
+                        handled = true;
+                    }
                 } else if (is_filtering) {
                     if (buf[0] == '\r' or buf[0] == '\n') {
                         is_filtering = false;
@@ -521,6 +588,7 @@ pub fn main() !void {
                             'p' => { sort_by = .pid; handled = true; },
                             'n' => { sort_by = .name; handled = true; },
                             '/' => { is_filtering = true; handled = true; },
+                            ':' => { is_cmd_mode = true; handled = true; },
                             '\x1b' => { filter_len = 0; handled = true; },
                             't' => {
                                 if (filtered_count > 0 and selected_idx < filtered_count) {

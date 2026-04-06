@@ -65,6 +65,29 @@ const CPU_STATE_NICE = 3;
 const CPU_STATE_MAX = 4;
 
 const PROC_PIDRUSAGE = 5;
+const PROC_PIDT_SHORTBSDINFO: c_int = 13;
+
+const SIDL = 1;
+const SRUN = 2;
+const SSLEEP = 3;
+const SSTOP = 4;
+const SZOMB = 5;
+
+const ProcBsdShortInfo = extern struct {
+    pbsi_pid: u32,
+    pbsi_ppid: u32,
+    pbsi_pgid: u32,
+    pbsi_status: u32,
+    pbsi_comm: [16]u8,
+    pbsi_flags: u32,
+    pbsi_uid: u32,
+    pbsi_gid: u32,
+    pbsi_ruid: u32,
+    pbsi_rgid: u32,
+    pbsi_svuid: u32,
+    pbsi_svgid: u32,
+    pbsi_rfu: u32,
+};
 
 const rusage_info_v2 = extern struct {
     ri_uuid: [16]u8,
@@ -426,6 +449,20 @@ pub const SysInfo = struct {
             const info_ret = proc_pidinfo(raw_pid, PROC_PIDTASKINFO, 0, @ptrCast(&task_info), @sizeOf(ProcTaskInfo));
             if (info_ret <= 0) continue;
 
+            var bsd_info: ProcBsdShortInfo = undefined;
+            const bsd_ret = proc_pidinfo(raw_pid, PROC_PIDT_SHORTBSDINFO, 0, @ptrCast(&bsd_info), @sizeOf(ProcBsdShortInfo));
+            var state: common.ProcState = .unknown;
+            if (bsd_ret > 0) {
+                state = switch (bsd_info.pbsi_status) {
+                    SIDL => .idle,
+                    SRUN => .running,
+                    SSLEEP => .sleeping,
+                    SSTOP => .stopped,
+                    SZOMB => .zombie,
+                    else => .unknown,
+                };
+            }
+
             var nbuf: [64]u8 = std.mem.zeroes([64]u8);
             const name_ret = proc_name(raw_pid, &nbuf, 64);
             const name_len: u8 = if (name_ret > 0) @intCast(@min(@as(usize, @intCast(name_ret)), 63)) else 0;
@@ -471,12 +508,14 @@ pub const SysInfo = struct {
 
             var proc_stat = ProcStats{
                 .pid = pid,
+                .ppid = bsd_info.pbsi_ppid,
                 .cpu_percent = cpu_percent,
                 .mem_percent = mem_percent,
                 .threads = @intCast(task_info.pti_threadnum),
                 .disk_read_ps = disk_read_ps,
                 .disk_write_ps = disk_write_ps,
                 .name_len = name_len,
+                .state = state,
             };
             @memcpy(proc_stat.name_buf[0..name_len], nbuf[0..name_len]);
 

@@ -24,8 +24,10 @@ const CpuSnapshot = struct {
     core_count: usize = 0,
 };
 
-const ParsedProcStat = struct {
+pub const ParsedProcStat = struct {
     name: []const u8,
+    state: common.ProcState,
+    ppid: u32,
     cpu_total: u64,
     num_threads: u32,
 };
@@ -275,12 +277,14 @@ pub const SysInfo = struct {
             const name = if (proc_info.name.len > 63) proc_info.name[0..63] else proc_info.name;
             var proc_stat = ProcStats{
                 .pid = pid,
+                .ppid = proc_info.ppid,
                 .cpu_percent = cpu_percent,
                 .mem_percent = mem_percent,
                 .threads = proc_info.num_threads,
                 .disk_read_ps = disk_read_ps,
                 .disk_write_ps = disk_write_ps,
                 .name_len = @intCast(name.len),
+                .state = proc_info.state,
             };
             @memcpy(proc_stat.name_buf[0..name.len], name);
             try result.append(allocator, proc_stat);
@@ -362,7 +366,7 @@ fn readCpuSnapshot() !CpuSnapshot {
     return snapshot;
 }
 
-fn parseProcStat(contents: []const u8) ?ParsedProcStat {
+pub fn parseProcStat(contents: []const u8) ?ParsedProcStat {
     const line = std.mem.trimRight(u8, contents, "\n");
     const open_paren = std.mem.indexOfScalar(u8, line, '(') orelse return null;
     const close_paren = std.mem.lastIndexOfScalar(u8, line, ')') orelse return null;
@@ -372,12 +376,28 @@ fn parseProcStat(contents: []const u8) ?ParsedProcStat {
     const rest = std.mem.trimLeft(u8, line[close_paren + 1 ..], " ");
     var fields = std.mem.tokenizeAny(u8, rest, " ");
     var field_number: usize = 3;
+    var state: common.ProcState = .unknown;
+    var ppid: ?u32 = null;
     var utime: ?u64 = null;
     var stime: ?u64 = null;
     var num_threads: ?u32 = null;
 
     while (fields.next()) |field| : (field_number += 1) {
-        if (field_number == 14) {
+        if (field_number == 3) {
+            state = switch (field[0]) {
+                'R' => .running,
+                'S' => .sleeping,
+                'D' => .disk_sleep,
+                'T' => .stopped,
+                't' => .tracing_stop,
+                'Z' => .zombie,
+                'X' => .dead,
+                'I' => .idle,
+                else => .unknown,
+            };
+        } else if (field_number == 4) {
+            ppid = std.fmt.parseInt(u32, field, 10) catch return null;
+        } else if (field_number == 14) {
             utime = std.fmt.parseInt(u64, field, 10) catch return null;
         } else if (field_number == 15) {
             stime = std.fmt.parseInt(u64, field, 10) catch return null;
@@ -389,6 +409,8 @@ fn parseProcStat(contents: []const u8) ?ParsedProcStat {
 
     return .{
         .name = name,
+        .state = state,
+        .ppid = ppid orelse return null,
         .cpu_total = (utime orelse return null) + (stime orelse return null),
         .num_threads = num_threads orelse return null,
     };
