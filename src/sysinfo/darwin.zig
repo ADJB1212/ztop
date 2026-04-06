@@ -204,7 +204,7 @@ pub const SysInfo = struct {
         if (prev_total == 0 or delta_total == 0) return 0;
 
         return @as(f32, @floatFromInt(delta_active)) / @as(f32, @floatFromInt(delta_total)) * 100.0;
-    }
+        }
 
     pub fn getCpuStats(self: *SysInfo) CpuStats {
         var cpu_load: HostCpuLoadInfo = undefined;
@@ -282,7 +282,7 @@ pub const SysInfo = struct {
         const inactive: u64 = @as(u64, vm_stats.inactive_count) * pg;
         const purgeable: u64 = @as(u64, vm_stats.purgeable_count) * pg;
         const speculative: u64 = @as(u64, vm_stats.speculative_count) * pg;
-        
+
         const used = active + wired;
         const free = if (self.total_mem > used) self.total_mem - used else 0;
         const cached = purgeable + inactive + speculative;
@@ -291,9 +291,9 @@ pub const SysInfo = struct {
         var swap_size: usize = @sizeOf(xsw_usage);
         _ = sysctlbyname("vm.swapusage", @ptrCast(&swap), &swap_size, null, 0);
 
-        return .{ 
-            .total = self.total_mem, 
-            .used = used, 
+        return .{
+            .total = self.total_mem,
+            .used = used,
             .free = free,
             .cached = cached,
             .buffered = 0,
@@ -360,16 +360,16 @@ pub const SysInfo = struct {
         var child = std.process.Child.init(&.{ "pmset", "-g", "batt" }, allocator);
         child.stdout_behavior = .Pipe;
         child.stderr_behavior = .Ignore;
-        
+
         child.spawn() catch return .{};
-        
+
         const out_str = child.stdout.?.readToEndAlloc(allocator, 4096) catch return .{};
-        
+
         _ = child.wait() catch return .{};
-        
+
         var charge: ?f32 = null;
         var status: BatteryStatus = .unknown;
-        
+
         // Output looks like: " -InternalBattery-0 (id=...) 100%; charged; 0:00 remaining present: true"
         if (std.mem.indexOf(u8, out_str, "%")) |pct_idx| {
             var start = pct_idx;
@@ -380,7 +380,7 @@ pub const SysInfo = struct {
                 const val = std.fmt.parseInt(u32, out_str[start..pct_idx], 10) catch 0;
                 charge = @as(f32, @floatFromInt(val));
             }
-            
+
             if (std.mem.indexOf(u8, out_str, "charging")) |_| {
                 status = .charging;
             } else if (std.mem.indexOf(u8, out_str, "discharging")) |_| {
@@ -389,7 +389,7 @@ pub const SysInfo = struct {
                 status = .full;
             }
         }
-        
+
         return .{ .charge_percent = charge, .power_draw_w = null, .status = status };
     }
 
@@ -495,14 +495,7 @@ pub const SysInfo = struct {
 };
 
 fn readNetTotals() !NetTotals {
-    var mib = [_]c_int{
-        c.CTL_NET,
-        c.PF_ROUTE,
-        0,
-        0,
-        c.NET_RT_IFLIST2,
-        0,
-    };
+    var mib = [_]c_int{ c.CTL_NET, c.PF_ROUTE, 0, 0, c.NET_RT_IFLIST2, 0 };
     var len: usize = 0;
     if (c.sysctl(&mib, mib.len, null, &len, null, 0) != 0) return error.SysctlFailed;
 

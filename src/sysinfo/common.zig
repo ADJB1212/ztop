@@ -76,6 +76,10 @@ pub const SortBy = enum {
     name,
 };
 
+pub inline fn kbToBytes(x: usize) usize {
+    return x << 10;
+}
+
 pub fn sortProcStats(slice: []ProcStats, sort_by: SortBy) void {
     const Context = struct {
         sort_by: SortBy,

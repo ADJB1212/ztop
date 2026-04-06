@@ -107,7 +107,7 @@ pub const SysInfo = struct {
         const stats = readDiskStats() catch .{ .read_bytes = 0, .write_bytes = 0 };
         const now = std.time.milliTimestamp();
         const elapsed = now - self.prev_disk_ms;
-        
+
         var read_ps: u64 = 0;
         var write_ps: u64 = 0;
 
@@ -129,7 +129,7 @@ pub const SysInfo = struct {
         const stats = readNetStats() catch .{ .rx_bytes = 0, .tx_bytes = 0 };
         const now = std.time.milliTimestamp();
         const elapsed = now - self.prev_net_ms;
-        
+
         var rx_ps: u64 = 0;
         var tx_ps: u64 = 0;
 
@@ -199,7 +199,7 @@ pub const SysInfo = struct {
     pub fn getProcStats(self: *SysInfo, allocator: std.mem.Allocator, sort_by: common.SortBy) ![]ProcStats {
         const snapshot = readCpuSnapshot() catch CpuSnapshot{};
         const total_tick_delta = if (self.prev_proc_total_ticks > 0) snapshot.overall.total -| self.prev_proc_total_ticks else 0;
-        
+
         const now = std.time.milliTimestamp();
         const elapsed_ms = now - self.prev_time;
 
@@ -414,7 +414,7 @@ fn readDiskStats() !struct { read_bytes: u64, write_bytes: u64 } {
         _ = fields.next();
         const dev = fields.next() orelse continue;
         if (std.mem.startsWith(u8, dev, "loop") or std.mem.startsWith(u8, dev, "ram")) continue;
-        
+
         _ = fields.next();
         _ = fields.next();
         const rs = fields.next() orelse continue;
@@ -435,21 +435,23 @@ fn readNetStats() !struct { rx_bytes: u64, tx_bytes: u64 } {
     var lines = std.mem.splitScalar(u8, contents, '\n');
     _ = lines.next();
     _ = lines.next();
-    
+
     var rx: u64 = 0;
     var tx: u64 = 0;
-    
+
     while (lines.next()) |line| {
         if (line.len == 0) continue;
         const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
         const dev = std.mem.trim(u8, line[0..colon], " \t");
         if (std.mem.eql(u8, dev, "lo")) continue;
-        
+
         var fields = std.mem.tokenizeAny(u8, line[colon + 1 ..], " \t");
         const r_bytes = fields.next() orelse continue;
         rx += std.fmt.parseInt(u64, r_bytes, 10) catch 0;
-        
-        for (0..7) |_| { _ = fields.next(); }
+
+        for (0..7) |_| {
+            _ = fields.next();
+        }
         const t_bytes = fields.next() orelse continue;
         tx += std.fmt.parseInt(u64, t_bytes, 10) catch 0;
     }
@@ -489,18 +491,18 @@ fn readMemInfo() !MemStats {
         }
     }
 
-    const total = (total_kb orelse return error.UnexpectedProcMemInfo) * 1024;
-    const free = (available_kb orelse return error.UnexpectedProcMemInfo) * 1024;
+    const total = common.kbToBytes(total_kb orelse return error.UnexpectedProcMemInfo);
+    const free = common.kbToBytes(available_kb orelse return error.UnexpectedProcMemInfo);
     const used = total -| free;
-    const cached = (cached_kb orelse 0) * 1024;
-    const buffered = (buffered_kb orelse 0) * 1024;
-    const swap_total = (swap_total_kb orelse 0) * 1024;
-    const swap_free = (swap_free_kb orelse 0) * 1024;
+    const cached = common.kbToBytes(cached_kb orelse 0);
+    const buffered = common.kbToBytes(buffered_kb orelse 0);
+    const swap_total = common.kbToBytes(swap_total_kb orelse 0);
+    const swap_free = common.kbToBytes(swap_free_kb orelse 0);
     const swap_used = swap_total -| swap_free;
 
-    return .{ 
-        .total = total, 
-        .used = used, 
+    return .{
+        .total = total,
+        .used = used,
         .free = free,
         .cached = cached,
         .buffered = buffered,

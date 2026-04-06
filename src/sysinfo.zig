@@ -1,5 +1,5 @@
 const builtin = @import("builtin");
-const common = @import("sysinfo/common.zig");
+pub const common = @import("sysinfo/common.zig");
 
 pub const CpuStats = common.CpuStats;
 pub const MemStats = common.MemStats;
