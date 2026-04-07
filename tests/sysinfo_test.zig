@@ -23,7 +23,7 @@ test "SysInfo fetches Proc stats" {
 
     const procs = try sys_info.getProcStats(allocator, .cpu);
     try std.testing.expect(procs.len > 0);
-    
+
     // Check that at least one process has a valid state and name
     var valid_found = false;
     for (procs) |p| {

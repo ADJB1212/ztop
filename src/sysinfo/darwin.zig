@@ -227,7 +227,7 @@ pub const SysInfo = struct {
         if (prev_total == 0 or delta_total == 0) return 0;
 
         return @as(f32, @floatFromInt(delta_active)) / @as(f32, @floatFromInt(delta_total)) * 100.0;
-        }
+    }
 
     pub fn getCpuStats(self: *SysInfo) CpuStats {
         var cpu_load: HostCpuLoadInfo = undefined;
@@ -366,7 +366,12 @@ pub const SysInfo = struct {
         self.prev_net_tx = stats.tx_bytes;
         self.prev_net_ms = now;
 
-        return .{ .rx_bytes_ps = rx_ps, .tx_bytes_ps = tx_ps };
+        return .{
+            .rx_bytes_ps = rx_ps,
+            .tx_bytes_ps = tx_ps,
+            .rx_bytes = stats.rx_bytes,
+            .tx_bytes = stats.tx_bytes,
+        };
     }
 
     pub fn getThermalStats(self: *SysInfo) ThermalStats {

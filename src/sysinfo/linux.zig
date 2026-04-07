@@ -146,7 +146,12 @@ pub const SysInfo = struct {
         self.prev_net_tx = stats.tx_bytes;
         self.prev_net_ms = now;
 
-        return .{ .rx_bytes_ps = rx_ps, .tx_bytes_ps = tx_ps };
+        return .{
+            .rx_bytes_ps = rx_ps,
+            .tx_bytes_ps = tx_ps,
+            .rx_bytes = stats.rx_bytes,
+            .tx_bytes = stats.tx_bytes,
+        };
     }
 
     pub fn getThermalStats(self: *SysInfo) ThermalStats {

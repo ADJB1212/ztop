@@ -24,6 +24,24 @@ fn usageColor(percent: f32) Tui.Color {
     return .bright_cyan;
 }
 
+const UnitValue = struct {
+    value: f32,
+    unit: []const u8,
+};
+
+fn formatUnit(bytes: u64) UnitValue {
+    const fbytes = @as(f32, @floatFromInt(bytes));
+    if (bytes >= (1 << 30)) {
+        return .{ .value = fbytes / @as(f32, 1 << 30), .unit = "GB" };
+    } else if (bytes >= (1 << 20)) {
+        return .{ .value = fbytes / @as(f32, 1 << 20), .unit = "MB" };
+    } else if (bytes >= (1 << 10)) {
+        return .{ .value = fbytes / @as(f32, 1 << 10), .unit = "KB" };
+    } else {
+        return .{ .value = fbytes, .unit = "B" };
+    }
+}
+
 fn memoryColor(percent: f32) Tui.Color {
     if (percent >= 80) return .bright_red;
     if (percent >= 60) return .bright_yellow;
@@ -63,7 +81,7 @@ pub fn main() !void {
     var selected_idx: usize = 0;
     var scroll_offset: usize = 0;
     var show_help: bool = false;
-    
+
     var filter_buf: [32]u8 = std.mem.zeroes([32]u8);
     var filter_len: usize = 0;
     var is_filtering: bool = false;
@@ -152,7 +170,7 @@ pub fn main() !void {
                 const is_small_width = size.width < 80;
 
                 const top_boxes_height = if (is_small_width) available_height / 4 else available_height / 3;
-                
+
                 const cpu_box_x: u16 = 1;
                 const cpu_box_y: u16 = 2;
                 const cpu_box_width: u16 = if (is_small_width) size.width else size.width / 2;
@@ -171,10 +189,15 @@ pub fn main() !void {
                 if (current_tab == 1) {
                     // CPU Box
                     try app_tui.drawBoxStyled(
-                        cpu_box_x, cpu_box_y, cpu_box_width, cpu_box_height,
-                        "CPU", .{ .fg = .bright_black }, .{ .fg = .bright_cyan, .bold = true },
+                        cpu_box_x,
+                        cpu_box_y,
+                        cpu_box_width,
+                        cpu_box_height,
+                        "CPU",
+                        .{ .fg = .bright_black },
+                        .{ .fg = .bright_cyan, .bold = true },
                     );
-                    
+
                     if (cpu_box_height >= 3) {
                         try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 1);
                         try app_tui.printStyled(.{ .fg = .white, .dim = true }, "Usage: ", .{});
@@ -202,10 +225,15 @@ pub fn main() !void {
 
                     // Memory Box
                     try app_tui.drawBoxStyled(
-                        mem_box_x, mem_box_y, mem_box_width, mem_box_height,
-                        "Memory", .{ .fg = .bright_black }, .{ .fg = .bright_yellow, .bold = true },
+                        mem_box_x,
+                        mem_box_y,
+                        mem_box_width,
+                        mem_box_height,
+                        "Memory",
+                        .{ .fg = .bright_black },
+                        .{ .fg = .bright_yellow, .bold = true },
                     );
-                    
+
                     if (mem_box_height >= 3) {
                         const mem_used_percent: f32 = if (mem.total > 0)
                             @as(f32, @floatFromInt(mem.used)) / @as(f32, @floatFromInt(mem.total)) * 100.0
@@ -214,49 +242,79 @@ pub fn main() !void {
                         try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 1);
                         try app_tui.printStyled(.{ .fg = .white, .dim = true }, "Used: ", .{});
                         try app_tui.printStyled(.{ .fg = memoryColor(mem_used_percent), .bold = true }, "{d} GB", .{mem.used / 1024 / 1024 / 1024});
-                        try app_tui.printStyled(.{ .fg = .bright_black }, " (C: {d}M B: {d}M)", .{mem.cached / 1024 / 1024, mem.buffered / 1024 / 1024});
+                        try app_tui.printStyled(.{ .fg = .bright_black }, " (C: {d}M B: {d}M)", .{ mem.cached / 1024 / 1024, mem.buffered / 1024 / 1024 });
                         try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 2);
                         try app_tui.printStyled(.{ .fg = .white, .dim = true }, "Free: ", .{});
                         try app_tui.printStyled(.{ .fg = .bright_green, .bold = true }, "{d} GB", .{mem.free / 1024 / 1024 / 1024});
                         if (mem.swap_total > 0 and mem_box_height >= 4) {
                             try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 3);
                             try app_tui.printStyled(.{ .fg = .white, .dim = true }, "Swap: ", .{});
-                            try app_tui.printStyled(.{ .fg = .bright_magenta }, "{d} MB / {d} MB", .{mem.swap_used / 1024 / 1024, mem.swap_total / 1024 / 1024});
+                            try app_tui.printStyled(.{ .fg = .bright_magenta }, "{d} MB / {d} MB", .{ mem.swap_used / 1024 / 1024, mem.swap_total / 1024 / 1024 });
                         }
                     }
                 } else if (current_tab == 2) {
                     // Disk Box
                     try app_tui.drawBoxStyled(
-                        cpu_box_x, cpu_box_y, cpu_box_width, cpu_box_height,
-                        "Disk I/O", .{ .fg = .bright_black }, .{ .fg = .bright_cyan, .bold = true },
+                        cpu_box_x,
+                        cpu_box_y,
+                        cpu_box_width,
+                        cpu_box_height,
+                        "Disk I/O",
+                        .{ .fg = .bright_black },
+                        .{ .fg = .bright_cyan, .bold = true },
                     );
                     if (cpu_box_height >= 3) {
                         try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 1);
                         try app_tui.printStyled(.{ .fg = .white, .dim = true }, "Read: ", .{});
-                        try app_tui.printStyled(.{ .fg = .bright_white, .bold = true }, "{d} B/s", .{disk.read_bytes_ps});
+                        const r = formatUnit(disk.read_bytes_ps);
+                        try app_tui.printStyled(.{ .fg = .bright_white, .bold = true }, "{d:4.1} {s}/s", .{ r.value, r.unit });
                         try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 2);
                         try app_tui.printStyled(.{ .fg = .white, .dim = true }, "Write: ", .{});
-                        try app_tui.printStyled(.{ .fg = .bright_white, .bold = true }, "{d} B/s", .{disk.write_bytes_ps});
+                        const w = formatUnit(disk.write_bytes_ps);
+                        try app_tui.printStyled(.{ .fg = .bright_white, .bold = true }, "{d:4.1} {s}/s", .{ w.value, w.unit });
                     }
 
                     // Network Box
                     try app_tui.drawBoxStyled(
-                        mem_box_x, mem_box_y, mem_box_width, mem_box_height,
-                        "Network I/O", .{ .fg = .bright_black }, .{ .fg = .bright_yellow, .bold = true },
+                        mem_box_x,
+                        mem_box_y,
+                        mem_box_width,
+                        mem_box_height,
+                        "Network I/O",
+                        .{ .fg = .bright_black },
+                        .{ .fg = .bright_yellow, .bold = true },
                     );
                     if (mem_box_height >= 3) {
                         try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 1);
                         try app_tui.printStyled(.{ .fg = .white, .dim = true }, "Rx: ", .{});
-                        try app_tui.printStyled(.{ .fg = .bright_white, .bold = true }, "{d} B/s", .{net.rx_bytes_ps});
+                        const rx_ps = formatUnit(net.rx_bytes_ps);
+                        try app_tui.printStyled(.{ .fg = .bright_white, .bold = true }, "{d:4.1} {s}/s", .{ rx_ps.value, rx_ps.unit });
+
+                        try app_tui.moveCursor(mem_box_x + 22, mem_box_y + 1);
+                        try app_tui.printStyled(.{ .fg = .white, .dim = true }, "Total: ", .{});
+                        const rx_total = formatUnit(net.rx_bytes);
+                        try app_tui.printStyled(.{ .fg = .bright_white, .bold = true }, "{d:4.1} {s}", .{ rx_total.value, rx_total.unit });
+
                         try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 2);
                         try app_tui.printStyled(.{ .fg = .white, .dim = true }, "Tx: ", .{});
-                        try app_tui.printStyled(.{ .fg = .bright_white, .bold = true }, "{d} B/s", .{net.tx_bytes_ps});
+                        const tx_ps = formatUnit(net.tx_bytes_ps);
+                        try app_tui.printStyled(.{ .fg = .bright_white, .bold = true }, "{d:4.1} {s}/s", .{ tx_ps.value, tx_ps.unit });
+
+                        try app_tui.moveCursor(mem_box_x + 22, mem_box_y + 2);
+                        try app_tui.printStyled(.{ .fg = .white, .dim = true }, "Total: ", .{});
+                        const tx_total = formatUnit(net.tx_bytes);
+                        try app_tui.printStyled(.{ .fg = .bright_white, .bold = true }, "{d:4.1} {s}", .{ tx_total.value, tx_total.unit });
                     }
                 } else if (current_tab == 3) {
                     // Thermal Box
                     try app_tui.drawBoxStyled(
-                        cpu_box_x, cpu_box_y, cpu_box_width, cpu_box_height,
-                        "Sensors", .{ .fg = .bright_black }, .{ .fg = .bright_red, .bold = true },
+                        cpu_box_x,
+                        cpu_box_y,
+                        cpu_box_width,
+                        cpu_box_height,
+                        "Sensors",
+                        .{ .fg = .bright_black },
+                        .{ .fg = .bright_red, .bold = true },
                     );
                     if (cpu_box_height >= 3) {
                         try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 1);
@@ -277,8 +335,13 @@ pub fn main() !void {
 
                     // Battery Box
                     try app_tui.drawBoxStyled(
-                        mem_box_x, mem_box_y, mem_box_width, mem_box_height,
-                        "Battery", .{ .fg = .bright_black }, .{ .fg = .bright_green, .bold = true },
+                        mem_box_x,
+                        mem_box_y,
+                        mem_box_width,
+                        mem_box_height,
+                        "Battery",
+                        .{ .fg = .bright_black },
+                        .{ .fg = .bright_green, .bold = true },
                     );
                     if (mem_box_height >= 3) {
                         try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 1);
@@ -295,7 +358,7 @@ pub fn main() !void {
                         } else {
                             try app_tui.printStyled(.{ .fg = .bright_black }, "N/A", .{});
                         }
-                        
+
                         if (mem_box_height >= 4) {
                             try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 3);
                             try app_tui.printStyled(.{ .fg = .white, .dim = true }, "Status: ", .{});
@@ -322,8 +385,13 @@ pub fn main() !void {
                     const title = std.fmt.bufPrint(&title_buf, "Processes (Sort: {s})", .{sort_name}) catch "Processes";
 
                     try app_tui.drawBoxStyled(
-                        procs_box_x, procs_box_y, procs_box_width, procs_box_height,
-                        title, .{ .fg = .bright_black }, .{ .fg = .bright_magenta, .bold = true },
+                        procs_box_x,
+                        procs_box_y,
+                        procs_box_width,
+                        procs_box_height,
+                        title,
+                        .{ .fg = .bright_black },
+                        .{ .fg = .bright_magenta, .bold = true },
                     );
 
                     // Filtering
@@ -374,36 +442,38 @@ pub fn main() !void {
                         const proc = cached_procs[proc_idx];
 
                         const is_selected = (idx == selected_idx) and !show_help;
-                        
+
                         try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1 + @as(u16, @intCast(row)));
-                        
+
                         if (is_selected) {
                             try app_tui.setStyle(.{ .bg = .bright_black });
                             for (0..procs_box_width - 4) |_| try app_tui.out.writeAll(" ");
                             try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1 + @as(u16, @intCast(row)));
                         }
-                        
-                        try app_tui.printStyled(if(is_selected) .{ .bg = .bright_black, .fg = .bright_white } else .{ .fg = .bright_black }, "{d:5} ", .{proc.pid});
-                        
+
+                        try app_tui.printStyled(if (is_selected) .{ .bg = .bright_black, .fg = .bright_white } else .{ .fg = .bright_black }, "{d:5} ", .{proc.pid});
+
                         const name_width: usize = if (procs_box_width > 40) 16 else 8;
                         if (proc.name().len > name_width) {
-                            try app_tui.printStyled(if(is_selected) .{ .bg = .bright_black, .fg = .bright_white } else .{ .fg = .bright_white }, "{s}.. ", .{proc.name()[0..name_width-2]});
+                            try app_tui.printStyled(if (is_selected) .{ .bg = .bright_black, .fg = .bright_white } else .{ .fg = .bright_white }, "{s}.. ", .{proc.name()[0 .. name_width - 2]});
                         } else {
-                            try app_tui.printStyled(if(is_selected) .{ .bg = .bright_black, .fg = .bright_white } else .{ .fg = .bright_white }, "{s} ", .{proc.name()});
-                            for (proc.name().len..name_width) |_| try app_tui.printStyled(if(is_selected) .{ .bg = .bright_black } else .{}, " ", .{});
+                            try app_tui.printStyled(if (is_selected) .{ .bg = .bright_black, .fg = .bright_white } else .{ .fg = .bright_white }, "{s} ", .{proc.name()});
+                            for (proc.name().len..name_width) |_| try app_tui.printStyled(if (is_selected) .{ .bg = .bright_black } else .{}, " ", .{});
                         }
 
                         if (current_tab == 2) {
-                            try app_tui.printStyled(if(is_selected) .{ .bg = .bright_black, .fg = .bright_yellow } else .{ .fg = .bright_yellow }, "{d:6} B/s R ", .{proc.disk_read_ps});
-                            try app_tui.printStyled(if(is_selected) .{ .bg = .bright_black, .fg = .bright_yellow } else .{ .fg = .bright_yellow }, "{d:6} B/s W ", .{proc.disk_write_ps});
+                            const dr = formatUnit(proc.disk_read_ps);
+                            const dw = formatUnit(proc.disk_write_ps);
+                            try app_tui.printStyled(if (is_selected) .{ .bg = .bright_black, .fg = .bright_yellow } else .{ .fg = .bright_yellow }, "{d:5.1} {s}/s R ", .{ dr.value, dr.unit });
+                            try app_tui.printStyled(if (is_selected) .{ .bg = .bright_black, .fg = .bright_yellow } else .{ .fg = .bright_yellow }, "{d:5.1} {s}/s W ", .{ dw.value, dw.unit });
                         } else {
-                            const c_style: Tui.Style = if(is_selected) .{ .bg = .bright_black, .fg = usageColor(proc.cpu_percent), .bold = proc.cpu_percent >= 70 } else .{ .fg = usageColor(proc.cpu_percent), .bold = proc.cpu_percent >= 70 };
+                            const c_style: Tui.Style = if (is_selected) .{ .bg = .bright_black, .fg = usageColor(proc.cpu_percent), .bold = proc.cpu_percent >= 70 } else .{ .fg = usageColor(proc.cpu_percent), .bold = proc.cpu_percent >= 70 };
                             try app_tui.printStyled(c_style, "{d:5.1}% CPU ", .{proc.cpu_percent});
-                            
-                            const m_style: Tui.Style = if(is_selected) .{ .bg = .bright_black, .fg = memoryColor(proc.mem_percent), .bold = proc.mem_percent >= 10 } else .{ .fg = memoryColor(proc.mem_percent), .bold = proc.mem_percent >= 10 };
+
+                            const m_style: Tui.Style = if (is_selected) .{ .bg = .bright_black, .fg = memoryColor(proc.mem_percent), .bold = proc.mem_percent >= 10 } else .{ .fg = memoryColor(proc.mem_percent), .bold = proc.mem_percent >= 10 };
                             try app_tui.printStyled(m_style, "{d:5.1}% MEM ", .{proc.mem_percent});
 
-                            try app_tui.printStyled(if(is_selected) .{ .bg = .bright_black, .fg = .bright_cyan } else .{ .fg = .bright_cyan }, "{d:4} THR", .{proc.threads});
+                            try app_tui.printStyled(if (is_selected) .{ .bg = .bright_black, .fg = .bright_cyan } else .{ .fg = .bright_cyan }, "{d:4} THR", .{proc.threads});
                         }
 
                         if (is_selected) {
@@ -418,7 +488,7 @@ pub fn main() !void {
                     const help_height = 12;
                     const h_x = if (size.width > help_width) (size.width - help_width) / 2 else 1;
                     const h_y = if (size.height > help_height) (size.height - help_height) / 2 else 1;
-                    
+
                     // Clear background for overlay
                     for (0..help_height) |i| {
                         try app_tui.moveCursor(h_x, h_y + @as(u16, @intCast(i)));
@@ -429,7 +499,7 @@ pub fn main() !void {
                     try app_tui.moveCursor(h_x + 2, h_y + 2);
                     try app_tui.printStyled(.{ .fg = .bright_white }, "j/k, Up/Down: ", .{});
                     try app_tui.printStyled(.{ .fg = .bright_black }, "Navigate processes", .{});
-                    
+
                     try app_tui.moveCursor(h_x + 2, h_y + 3);
                     try app_tui.printStyled(.{ .fg = .bright_white }, "c, m, p, n:   ", .{});
                     try app_tui.printStyled(.{ .fg = .bright_black }, "Sort by CPU/Mem/PID/Name", .{});
@@ -485,13 +555,13 @@ pub fn main() !void {
             }
         } // end force_redraw
 
-        var fds = [_]posix.pollfd{ .{ .fd = app_tui.in.handle, .events = posix.POLL.IN, .revents = 0 } };
+        var fds = [_]posix.pollfd{.{ .fd = app_tui.in.handle, .events = posix.POLL.IN, .revents = 0 }};
         const now = std.time.milliTimestamp();
         var remaining_ms = fetch_interval_ms - (now - last_fetch_time);
         if (remaining_ms < 0) remaining_ms = 0;
 
         const poll_res = posix.poll(&fds, @intCast(remaining_ms)) catch 0;
-        
+
         if (poll_res > 0 and (fds[0].revents & posix.POLL.IN) != 0) {
             var buf: [16]u8 = undefined;
             const n = app_tui.in.read(&buf) catch 0;
@@ -575,21 +645,63 @@ pub fn main() !void {
                 } else {
                     if (n == 1) {
                         switch (buf[0]) {
-                            '1' => { current_tab = 1; handled = true; },
-                            '2' => { current_tab = 2; handled = true; },
-                            '3' => { current_tab = 3; handled = true; },
+                            '1' => {
+                                current_tab = 1;
+                                handled = true;
+                            },
+                            '2' => {
+                                current_tab = 2;
+                                handled = true;
+                            },
+                            '3' => {
+                                current_tab = 3;
+                                handled = true;
+                            },
                             'q' => quit_flag = true,
-                            '?' => { show_help = true; handled = true; },
-                            'h' => { show_help = true; handled = true; },
-                            'j' => { if (selected_idx + 1 < filtered_count) selected_idx += 1; handled = true; },
-                            'k' => { if (selected_idx > 0) selected_idx -= 1; handled = true; },
-                            'c' => { sort_by = .cpu; handled = true; },
-                            'm' => { sort_by = .mem; handled = true; },
-                            'p' => { sort_by = .pid; handled = true; },
-                            'n' => { sort_by = .name; handled = true; },
-                            '/' => { is_filtering = true; handled = true; },
-                            ':' => { is_cmd_mode = true; handled = true; },
-                            '\x1b' => { filter_len = 0; handled = true; },
+                            '?' => {
+                                show_help = true;
+                                handled = true;
+                            },
+                            'h' => {
+                                show_help = true;
+                                handled = true;
+                            },
+                            'j' => {
+                                if (selected_idx + 1 < filtered_count) selected_idx += 1;
+                                handled = true;
+                            },
+                            'k' => {
+                                if (selected_idx > 0) selected_idx -= 1;
+                                handled = true;
+                            },
+                            'c' => {
+                                sort_by = .cpu;
+                                handled = true;
+                            },
+                            'm' => {
+                                sort_by = .mem;
+                                handled = true;
+                            },
+                            'p' => {
+                                sort_by = .pid;
+                                handled = true;
+                            },
+                            'n' => {
+                                sort_by = .name;
+                                handled = true;
+                            },
+                            '/' => {
+                                is_filtering = true;
+                                handled = true;
+                            },
+                            ':' => {
+                                is_cmd_mode = true;
+                                handled = true;
+                            },
+                            '\x1b' => {
+                                filter_len = 0;
+                                handled = true;
+                            },
                             't' => {
                                 if (filtered_count > 0 and selected_idx < filtered_count) {
                                     const pid = cached_procs[filtered_indices[selected_idx]].pid;
@@ -608,13 +720,19 @@ pub fn main() !void {
                         }
                     } else if (n == 3 and buf[0] == '\x1b' and buf[1] == '[') {
                         switch (buf[2]) {
-                            'A' => { if (selected_idx > 0) selected_idx -= 1; handled = true; },
-                            'B' => { if (selected_idx + 1 < filtered_count) selected_idx += 1; handled = true; },
+                            'A' => {
+                                if (selected_idx > 0) selected_idx -= 1;
+                                handled = true;
+                            },
+                            'B' => {
+                                if (selected_idx + 1 < filtered_count) selected_idx += 1;
+                                handled = true;
+                            },
                             else => {},
                         }
                     }
                 }
-                
+
                 if (handled) {
                     force_redraw = true;
                     if (n == 1 and (buf[0] == 'c' or buf[0] == 'm' or buf[0] == 'p' or buf[0] == 'n')) {

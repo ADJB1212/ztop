@@ -24,6 +24,8 @@ pub const DiskStats = struct {
 pub const NetStats = struct {
     rx_bytes_ps: u64 = 0,
     tx_bytes_ps: u64 = 0,
+    rx_bytes: u64 = 0,
+    tx_bytes: u64 = 0,
 };
 
 pub const ThermalStats = struct {
