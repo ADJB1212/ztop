@@ -1,5 +1,7 @@
 const std = @import("std");
 const ztop = @import("ztop");
+const process_commands = ztop.process_commands;
+const text_input = ztop.text_input;
 const Tui = ztop.tui.Tui;
 const SysInfo = ztop.sysinfo.SysInfo;
 const posix = std.posix;
@@ -17,11 +19,11 @@ fn handleSigWinch(sig: c_int) callconv(.c) void {
     sigwinch_flag = true;
 }
 
-fn usageColor(percent: f32) Tui.Color {
-    if (percent >= 90) return .bright_red;
-    if (percent >= 70) return .bright_yellow;
-    if (percent >= 40) return .bright_green;
-    return .bright_cyan;
+fn usageColor(theme: ztop.config.Theme, percent: f32) Tui.Color {
+    if (percent >= 90) return theme.usage_critical;
+    if (percent >= 70) return theme.usage_warn;
+    if (percent >= 40) return theme.usage_good;
+    return theme.usage_idle;
 }
 
 const UnitValue = struct {
@@ -42,17 +44,31 @@ fn formatUnit(bytes: u64) UnitValue {
     }
 }
 
-fn memoryColor(percent: f32) Tui.Color {
-    if (percent >= 80) return .bright_red;
-    if (percent >= 60) return .bright_yellow;
-    if (percent >= 35) return .bright_magenta;
-    return .bright_blue;
+fn memoryColor(theme: ztop.config.Theme, percent: f32) Tui.Color {
+    if (percent >= 80) return theme.memory_critical;
+    if (percent >= 60) return theme.memory_warn;
+    if (percent >= 35) return theme.memory_mid;
+    return theme.memory_low;
+}
+
+fn setStatus(status_buf: *[160]u8, status_len: *usize, comptime fmt: []const u8, args: anytype) void {
+    const msg = std.fmt.bufPrint(status_buf, fmt, args) catch {
+        status_len.* = 0;
+        return;
+    };
+    status_len.* = msg.len;
 }
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+
+    const app_config = ztop.config.load(allocator) catch |err| {
+        std.debug.print("ztop: failed to load config: {s}\n", .{@errorName(err)});
+        return err;
+    };
+    const theme = app_config.theme;
 
     var act: posix.Sigaction = .{
         .handler = .{ .handler = handleSigInt },
@@ -77,7 +93,7 @@ pub fn main() !void {
     var cached_procs: []ztop.sysinfo.ProcStats = &.{};
     defer if (cached_procs.len > 0) allocator.free(cached_procs);
 
-    var sort_by: ztop.sysinfo.SortBy = .cpu;
+    var sort_by: ztop.sysinfo.SortBy = app_config.default_sort;
     var selected_idx: usize = 0;
     var scroll_offset: usize = 0;
     var show_help: bool = false;
@@ -93,6 +109,13 @@ pub fn main() !void {
     var filtered_indices: [2048]usize = undefined;
     var filtered_count: usize = 0;
 
+    var zombie_parents: [ztop.sysinfo.common.MAX_PROCS]process_commands.ZombieParentEntry = undefined;
+    var zombie_summary: process_commands.ZombieParentSummary = .{};
+    var show_zombie_parents: bool = false;
+
+    var status_buf: [160]u8 = std.mem.zeroes([160]u8);
+    var status_len: usize = 0;
+
     var cpu = sys_info.getCpuStats();
     var mem = sys_info.getMemStats();
     var disk = sys_info.getDiskStats();
@@ -102,7 +125,7 @@ pub fn main() !void {
     cached_procs = try sys_info.getProcStats(allocator, sort_by);
 
     var last_fetch_time = std.time.milliTimestamp();
-    const fetch_interval_ms: i64 = 500;
+    const fetch_interval_ms: i64 = @intCast(app_config.update_interval_ms);
 
     var force_redraw = true;
     var current_tab: u8 = 1;
@@ -143,7 +166,7 @@ pub fn main() !void {
                 const x = if (size.width > msg.len) (size.width - @as(u16, @intCast(msg.len))) / 2 else 1;
                 const y = size.height / 2;
                 try app_tui.moveCursor(x, y);
-                try app_tui.printStyled(.{ .fg = .bright_red, .bold = true }, "{s}", .{msg});
+                try app_tui.printStyled(.{ .fg = theme.usage_critical, .bold = true }, "{s}", .{msg});
             } else {
                 // Status Bar
                 const uname = posix.uname();
@@ -153,17 +176,17 @@ pub fn main() !void {
                 const nodename = std.mem.sliceTo(&uname.nodename, 0);
 
                 try app_tui.moveCursor(1, 1);
-                try app_tui.printStyled(.{ .fg = .bright_cyan, .bold = true }, " ztop ", .{});
-                try app_tui.printStyled(.{ .fg = .white, .dim = true }, "- {s} {s} {s} - {s}", .{ sysname, release, machine, nodename });
+                try app_tui.printStyled(.{ .fg = theme.brand, .bold = true }, " ztop ", .{});
+                try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "- {s} {s} {s} - {s}", .{ sysname, release, machine, nodename });
 
                 const tabs_str = "[1] Main  [2] I/O  [3] Sensors";
                 if (size.width > tabs_str.len + 30) {
                     try app_tui.moveCursor(size.width - @as(u16, @intCast(tabs_str.len)) - 2, 1);
-                    if (current_tab == 1) try app_tui.printStyled(.{ .fg = .bright_cyan, .bold = true }, "[1] Main", .{}) else try app_tui.printStyled(.{ .fg = .white, .dim = true }, "[1] Main", .{});
+                    if (current_tab == 1) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "[1] Main", .{}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "[1] Main", .{});
                     try app_tui.out.writeAll("  ");
-                    if (current_tab == 2) try app_tui.printStyled(.{ .fg = .bright_cyan, .bold = true }, "[2] I/O", .{}) else try app_tui.printStyled(.{ .fg = .white, .dim = true }, "[2] I/O", .{});
+                    if (current_tab == 2) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "[2] I/O", .{}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "[2] I/O", .{});
                     try app_tui.out.writeAll("  ");
-                    if (current_tab == 3) try app_tui.printStyled(.{ .fg = .bright_cyan, .bold = true }, "[3] Sensors", .{}) else try app_tui.printStyled(.{ .fg = .white, .dim = true }, "[3] Sensors", .{});
+                    if (current_tab == 3) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "[3] Sensors", .{}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "[3] Sensors", .{});
                 }
 
                 const available_height = size.height -| 2;
@@ -194,15 +217,15 @@ pub fn main() !void {
                         cpu_box_width,
                         cpu_box_height,
                         "CPU",
-                        .{ .fg = .bright_black },
-                        .{ .fg = .bright_cyan, .bold = true },
+                        .{ .fg = theme.border },
+                        .{ .fg = theme.cpu_title, .bold = true },
                     );
 
                     if (cpu_box_height >= 3) {
                         try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 1);
-                        try app_tui.printStyled(.{ .fg = .white, .dim = true }, "Usage: ", .{});
-                        try app_tui.printStyled(.{ .fg = usageColor(cpu.usage_percent), .bold = true }, "{d:4.1}%", .{cpu.usage_percent});
-                        try app_tui.printStyled(.{ .fg = .bright_black }, " ({d} cores)", .{cpu.cores});
+                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Usage: ", .{});
+                        try app_tui.printStyled(.{ .fg = usageColor(theme, cpu.usage_percent), .bold = true }, "{d:4.1}%", .{cpu.usage_percent});
+                        try app_tui.printStyled(.{ .fg = theme.muted }, " ({d} cores)", .{cpu.cores});
 
                         if (cpu_box_height > 3 and cpu.per_core_usage.len > 0) {
                             const rows_available: usize = cpu_box_height - 3;
@@ -217,8 +240,8 @@ pub fn main() !void {
                                 const x = cpu_box_x + 2 + @as(u16, @intCast(column)) * column_width;
                                 const y = cpu_box_y + 2 + @as(u16, @intCast(row));
                                 try app_tui.moveCursor(x, y);
-                                try app_tui.printStyled(.{ .fg = .bright_black }, "CPU{d:>2}: ", .{i});
-                                try app_tui.printStyled(.{ .fg = usageColor(cpu.per_core_usage[i]), .bold = cpu.per_core_usage[i] >= 70 }, "{d:5.1}%", .{cpu.per_core_usage[i]});
+                                try app_tui.printStyled(.{ .fg = theme.muted }, "CPU{d:>2}: ", .{i});
+                                try app_tui.printStyled(.{ .fg = usageColor(theme, cpu.per_core_usage[i]), .bold = cpu.per_core_usage[i] >= 70 }, "{d:5.1}%", .{cpu.per_core_usage[i]});
                             }
                         }
                     }
@@ -230,8 +253,8 @@ pub fn main() !void {
                         mem_box_width,
                         mem_box_height,
                         "Memory",
-                        .{ .fg = .bright_black },
-                        .{ .fg = .bright_yellow, .bold = true },
+                        .{ .fg = theme.border },
+                        .{ .fg = theme.memory_title, .bold = true },
                     );
 
                     if (mem_box_height >= 3) {
@@ -240,16 +263,16 @@ pub fn main() !void {
                         else
                             0;
                         try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 1);
-                        try app_tui.printStyled(.{ .fg = .white, .dim = true }, "Used: ", .{});
-                        try app_tui.printStyled(.{ .fg = memoryColor(mem_used_percent), .bold = true }, "{d} GB", .{mem.used / 1024 / 1024 / 1024});
-                        try app_tui.printStyled(.{ .fg = .bright_black }, " (C: {d}M B: {d}M)", .{ mem.cached / 1024 / 1024, mem.buffered / 1024 / 1024 });
+                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Used: ", .{});
+                        try app_tui.printStyled(.{ .fg = memoryColor(theme, mem_used_percent), .bold = true }, "{d} GB", .{mem.used / 1024 / 1024 / 1024});
+                        try app_tui.printStyled(.{ .fg = theme.muted }, " (C: {d}M B: {d}M)", .{ mem.cached / 1024 / 1024, mem.buffered / 1024 / 1024 });
                         try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 2);
-                        try app_tui.printStyled(.{ .fg = .white, .dim = true }, "Free: ", .{});
-                        try app_tui.printStyled(.{ .fg = .bright_green, .bold = true }, "{d} GB", .{mem.free / 1024 / 1024 / 1024});
+                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Free: ", .{});
+                        try app_tui.printStyled(.{ .fg = theme.usage_good, .bold = true }, "{d} GB", .{mem.free / 1024 / 1024 / 1024});
                         if (mem.swap_total > 0 and mem_box_height >= 4) {
                             try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 3);
-                            try app_tui.printStyled(.{ .fg = .white, .dim = true }, "Swap: ", .{});
-                            try app_tui.printStyled(.{ .fg = .bright_magenta }, "{d} MB / {d} MB", .{ mem.swap_used / 1024 / 1024, mem.swap_total / 1024 / 1024 });
+                            try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Swap: ", .{});
+                            try app_tui.printStyled(.{ .fg = theme.memory_mid }, "{d} MB / {d} MB", .{ mem.swap_used / 1024 / 1024, mem.swap_total / 1024 / 1024 });
                         }
                     }
                 } else if (current_tab == 2) {
@@ -260,18 +283,18 @@ pub fn main() !void {
                         cpu_box_width,
                         cpu_box_height,
                         "Disk I/O",
-                        .{ .fg = .bright_black },
-                        .{ .fg = .bright_cyan, .bold = true },
+                        .{ .fg = theme.border },
+                        .{ .fg = theme.disk_title, .bold = true },
                     );
                     if (cpu_box_height >= 3) {
                         try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 1);
-                        try app_tui.printStyled(.{ .fg = .white, .dim = true }, "Read: ", .{});
+                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Read: ", .{});
                         const r = formatUnit(disk.read_bytes_ps);
-                        try app_tui.printStyled(.{ .fg = .bright_white, .bold = true }, "{d:4.1} {s}/s", .{ r.value, r.unit });
+                        try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} {s}/s", .{ r.value, r.unit });
                         try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 2);
-                        try app_tui.printStyled(.{ .fg = .white, .dim = true }, "Write: ", .{});
+                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Write: ", .{});
                         const w = formatUnit(disk.write_bytes_ps);
-                        try app_tui.printStyled(.{ .fg = .bright_white, .bold = true }, "{d:4.1} {s}/s", .{ w.value, w.unit });
+                        try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} {s}/s", .{ w.value, w.unit });
                     }
 
                     // Network Box
@@ -281,29 +304,29 @@ pub fn main() !void {
                         mem_box_width,
                         mem_box_height,
                         "Network I/O",
-                        .{ .fg = .bright_black },
-                        .{ .fg = .bright_yellow, .bold = true },
+                        .{ .fg = theme.border },
+                        .{ .fg = theme.network_title, .bold = true },
                     );
                     if (mem_box_height >= 3) {
                         try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 1);
-                        try app_tui.printStyled(.{ .fg = .white, .dim = true }, "Rx: ", .{});
+                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Rx: ", .{});
                         const rx_ps = formatUnit(net.rx_bytes_ps);
-                        try app_tui.printStyled(.{ .fg = .bright_white, .bold = true }, "{d:4.1} {s}/s", .{ rx_ps.value, rx_ps.unit });
+                        try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} {s}/s", .{ rx_ps.value, rx_ps.unit });
 
                         try app_tui.moveCursor(mem_box_x + 22, mem_box_y + 1);
-                        try app_tui.printStyled(.{ .fg = .white, .dim = true }, "Total: ", .{});
+                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Total: ", .{});
                         const rx_total = formatUnit(net.rx_bytes);
-                        try app_tui.printStyled(.{ .fg = .bright_white, .bold = true }, "{d:4.1} {s}", .{ rx_total.value, rx_total.unit });
+                        try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} {s}", .{ rx_total.value, rx_total.unit });
 
                         try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 2);
-                        try app_tui.printStyled(.{ .fg = .white, .dim = true }, "Tx: ", .{});
+                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Tx: ", .{});
                         const tx_ps = formatUnit(net.tx_bytes_ps);
-                        try app_tui.printStyled(.{ .fg = .bright_white, .bold = true }, "{d:4.1} {s}/s", .{ tx_ps.value, tx_ps.unit });
+                        try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} {s}/s", .{ tx_ps.value, tx_ps.unit });
 
                         try app_tui.moveCursor(mem_box_x + 22, mem_box_y + 2);
-                        try app_tui.printStyled(.{ .fg = .white, .dim = true }, "Total: ", .{});
+                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Total: ", .{});
                         const tx_total = formatUnit(net.tx_bytes);
-                        try app_tui.printStyled(.{ .fg = .bright_white, .bold = true }, "{d:4.1} {s}", .{ tx_total.value, tx_total.unit });
+                        try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} {s}", .{ tx_total.value, tx_total.unit });
                     }
                 } else if (current_tab == 3) {
                     // Thermal Box
@@ -313,23 +336,23 @@ pub fn main() !void {
                         cpu_box_width,
                         cpu_box_height,
                         "Sensors",
-                        .{ .fg = .bright_black },
-                        .{ .fg = .bright_red, .bold = true },
+                        .{ .fg = theme.border },
+                        .{ .fg = theme.sensor_title, .bold = true },
                     );
                     if (cpu_box_height >= 3) {
                         try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 1);
-                        try app_tui.printStyled(.{ .fg = .white, .dim = true }, "CPU Temp: ", .{});
+                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "CPU Temp: ", .{});
                         if (thermal.cpu_temp) |t| {
-                            try app_tui.printStyled(.{ .fg = .bright_white, .bold = true }, "{d:4.1} C", .{t});
+                            try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} C", .{t});
                         } else {
-                            try app_tui.printStyled(.{ .fg = .bright_black }, "N/A", .{});
+                            try app_tui.printStyled(.{ .fg = theme.muted }, "N/A", .{});
                         }
                         try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 2);
-                        try app_tui.printStyled(.{ .fg = .white, .dim = true }, "GPU Temp: ", .{});
+                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "GPU Temp: ", .{});
                         if (thermal.gpu_temp) |t| {
-                            try app_tui.printStyled(.{ .fg = .bright_white, .bold = true }, "{d:4.1} C", .{t});
+                            try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} C", .{t});
                         } else {
-                            try app_tui.printStyled(.{ .fg = .bright_black }, "N/A", .{});
+                            try app_tui.printStyled(.{ .fg = theme.muted }, "N/A", .{});
                         }
                     }
 
@@ -340,35 +363,35 @@ pub fn main() !void {
                         mem_box_width,
                         mem_box_height,
                         "Battery",
-                        .{ .fg = .bright_black },
-                        .{ .fg = .bright_green, .bold = true },
+                        .{ .fg = theme.border },
+                        .{ .fg = theme.battery_title, .bold = true },
                     );
                     if (mem_box_height >= 3) {
                         try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 1);
-                        try app_tui.printStyled(.{ .fg = .white, .dim = true }, "Charge: ", .{});
+                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Charge: ", .{});
                         if (battery.charge_percent) |c| {
-                            try app_tui.printStyled(.{ .fg = .bright_white, .bold = true }, "{d:4.1}%", .{c});
+                            try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1}%", .{c});
                         } else {
-                            try app_tui.printStyled(.{ .fg = .bright_black }, "N/A", .{});
+                            try app_tui.printStyled(.{ .fg = theme.muted }, "N/A", .{});
                         }
                         try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 2);
-                        try app_tui.printStyled(.{ .fg = .white, .dim = true }, "Power: ", .{});
+                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Power: ", .{});
                         if (battery.power_draw_w) |w| {
-                            try app_tui.printStyled(.{ .fg = .bright_white, .bold = true }, "{d:4.2} W", .{w});
+                            try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.2} W", .{w});
                         } else {
-                            try app_tui.printStyled(.{ .fg = .bright_black }, "N/A", .{});
+                            try app_tui.printStyled(.{ .fg = theme.muted }, "N/A", .{});
                         }
 
                         if (mem_box_height >= 4) {
                             try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 3);
-                            try app_tui.printStyled(.{ .fg = .white, .dim = true }, "Status: ", .{});
+                            try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Status: ", .{});
                             const status_str = switch (battery.status) {
                                 .charging => "Charging",
                                 .discharging => "Discharging",
                                 .full => "Full",
                                 .unknown => "Unknown",
                             };
-                            try app_tui.printStyled(.{ .fg = .bright_white }, "{s}", .{status_str});
+                            try app_tui.printStyled(.{ .fg = theme.text }, "{s}", .{status_str});
                         }
                     }
                 }
@@ -382,7 +405,14 @@ pub fn main() !void {
                         .pid => "PID",
                         .name => "NAME",
                     };
-                    const title = std.fmt.bufPrint(&title_buf, "Processes (Sort: {s})", .{sort_name}) catch "Processes";
+                    const title = if (show_zombie_parents)
+                        std.fmt.bufPrint(
+                            &title_buf,
+                            "Zombie Parents ({d} parents / {d} zombies)",
+                            .{ zombie_summary.parent_count, zombie_summary.zombie_count },
+                        ) catch "Zombie Parents"
+                    else
+                        std.fmt.bufPrint(&title_buf, "Processes (Sort: {s})", .{sort_name}) catch "Processes";
 
                     try app_tui.drawBoxStyled(
                         procs_box_x,
@@ -390,14 +420,18 @@ pub fn main() !void {
                         procs_box_width,
                         procs_box_height,
                         title,
-                        .{ .fg = .bright_black },
-                        .{ .fg = .bright_magenta, .bold = true },
+                        .{ .fg = theme.border },
+                        .{ .fg = theme.process_title, .bold = true },
                     );
 
                     // Filtering
                     filtered_count = 0;
                     const filter_str = filter_buf[0..filter_len];
                     for (cached_procs, 0..) |proc, i| {
+                        if (show_zombie_parents and !process_commands.containsParentPid(zombie_parents[0..zombie_summary.parent_count], proc.pid)) {
+                            continue;
+                        }
+
                         if (filter_len > 0) {
                             var pid_buf: [32]u8 = undefined;
                             const pid_str = std.fmt.bufPrint(&pid_buf, "{d}", .{proc.pid}) catch "";
@@ -446,34 +480,34 @@ pub fn main() !void {
                         try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1 + @as(u16, @intCast(row)));
 
                         if (is_selected) {
-                            try app_tui.setStyle(.{ .bg = .bright_black });
+                            try app_tui.setStyle(.{ .bg = theme.selection_bg });
                             for (0..procs_box_width - 4) |_| try app_tui.out.writeAll(" ");
                             try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1 + @as(u16, @intCast(row)));
                         }
 
-                        try app_tui.printStyled(if (is_selected) .{ .bg = .bright_black, .fg = .bright_white } else .{ .fg = .bright_black }, "{d:5} ", .{proc.pid});
+                        try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.muted }, "{d:5} ", .{proc.pid});
 
                         const name_width: usize = if (procs_box_width > 40) 16 else 8;
                         if (proc.name().len > name_width) {
-                            try app_tui.printStyled(if (is_selected) .{ .bg = .bright_black, .fg = .bright_white } else .{ .fg = .bright_white }, "{s}.. ", .{proc.name()[0 .. name_width - 2]});
+                            try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s}.. ", .{proc.name()[0 .. name_width - 2]});
                         } else {
-                            try app_tui.printStyled(if (is_selected) .{ .bg = .bright_black, .fg = .bright_white } else .{ .fg = .bright_white }, "{s} ", .{proc.name()});
-                            for (proc.name().len..name_width) |_| try app_tui.printStyled(if (is_selected) .{ .bg = .bright_black } else .{}, " ", .{});
+                            try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s} ", .{proc.name()});
+                            for (proc.name().len..name_width) |_| try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg } else .{}, " ", .{});
                         }
 
                         if (current_tab == 2) {
                             const dr = formatUnit(proc.disk_read_ps);
                             const dw = formatUnit(proc.disk_write_ps);
-                            try app_tui.printStyled(if (is_selected) .{ .bg = .bright_black, .fg = .bright_yellow } else .{ .fg = .bright_yellow }, "{d:5.1} {s}/s R ", .{ dr.value, dr.unit });
-                            try app_tui.printStyled(if (is_selected) .{ .bg = .bright_black, .fg = .bright_yellow } else .{ .fg = .bright_yellow }, "{d:5.1} {s}/s W ", .{ dw.value, dw.unit });
+                            try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.disk_title } else .{ .fg = theme.disk_title }, "{d:5.1} {s}/s R ", .{ dr.value, dr.unit });
+                            try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.disk_title } else .{ .fg = theme.disk_title }, "{d:5.1} {s}/s W ", .{ dw.value, dw.unit });
                         } else {
-                            const c_style: Tui.Style = if (is_selected) .{ .bg = .bright_black, .fg = usageColor(proc.cpu_percent), .bold = proc.cpu_percent >= 70 } else .{ .fg = usageColor(proc.cpu_percent), .bold = proc.cpu_percent >= 70 };
+                            const c_style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = usageColor(theme, proc.cpu_percent), .bold = proc.cpu_percent >= 70 } else .{ .fg = usageColor(theme, proc.cpu_percent), .bold = proc.cpu_percent >= 70 };
                             try app_tui.printStyled(c_style, "{d:5.1}% CPU ", .{proc.cpu_percent});
 
-                            const m_style: Tui.Style = if (is_selected) .{ .bg = .bright_black, .fg = memoryColor(proc.mem_percent), .bold = proc.mem_percent >= 10 } else .{ .fg = memoryColor(proc.mem_percent), .bold = proc.mem_percent >= 10 };
+                            const m_style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = memoryColor(theme, proc.mem_percent), .bold = proc.mem_percent >= 10 } else .{ .fg = memoryColor(theme, proc.mem_percent), .bold = proc.mem_percent >= 10 };
                             try app_tui.printStyled(m_style, "{d:5.1}% MEM ", .{proc.mem_percent});
 
-                            try app_tui.printStyled(if (is_selected) .{ .bg = .bright_black, .fg = .bright_cyan } else .{ .fg = .bright_cyan }, "{d:4} THR", .{proc.threads});
+                            try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.brand } else .{ .fg = theme.brand }, "{d:4} THR", .{proc.threads});
                         }
 
                         if (is_selected) {
@@ -495,62 +529,64 @@ pub fn main() !void {
                         for (0..help_width) |_| try app_tui.out.writeAll(" ");
                     }
 
-                    try app_tui.drawBoxStyled(h_x, h_y, help_width, help_height, "Help", .{ .fg = .bright_black }, .{ .fg = .bright_white, .bold = true });
+                    try app_tui.drawBoxStyled(h_x, h_y, help_width, help_height, "Help", .{ .fg = theme.border }, .{ .fg = theme.text, .bold = true });
                     try app_tui.moveCursor(h_x + 2, h_y + 2);
-                    try app_tui.printStyled(.{ .fg = .bright_white }, "j/k, Up/Down: ", .{});
-                    try app_tui.printStyled(.{ .fg = .bright_black }, "Navigate processes", .{});
+                    try app_tui.printStyled(.{ .fg = theme.text }, "j/k, Up/Down: ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Navigate processes", .{});
 
                     try app_tui.moveCursor(h_x + 2, h_y + 3);
-                    try app_tui.printStyled(.{ .fg = .bright_white }, "c, m, p, n:   ", .{});
-                    try app_tui.printStyled(.{ .fg = .bright_black }, "Sort by CPU/Mem/PID/Name", .{});
+                    try app_tui.printStyled(.{ .fg = theme.text }, "c, m, p, n:   ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Sort by CPU/Mem/PID/Name", .{});
 
                     try app_tui.moveCursor(h_x + 2, h_y + 4);
-                    try app_tui.printStyled(.{ .fg = .bright_white }, "/:            ", .{});
-                    try app_tui.printStyled(.{ .fg = .bright_black }, "Filter processes", .{});
+                    try app_tui.printStyled(.{ .fg = theme.text }, "/:            ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Filter processes", .{});
 
                     try app_tui.moveCursor(h_x + 2, h_y + 5);
-                    try app_tui.printStyled(.{ .fg = .bright_white }, "t:            ", .{});
-                    try app_tui.printStyled(.{ .fg = .bright_black }, "Send SIGTERM to selected", .{});
+                    try app_tui.printStyled(.{ .fg = theme.text }, "t:            ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Send SIGTERM to selected", .{});
 
                     try app_tui.moveCursor(h_x + 2, h_y + 6);
-                    try app_tui.printStyled(.{ .fg = .bright_white }, "K:            ", .{});
-                    try app_tui.printStyled(.{ .fg = .bright_black }, "Send SIGKILL to selected", .{});
+                    try app_tui.printStyled(.{ .fg = theme.text }, "K:            ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Send SIGKILL to selected", .{});
 
                     try app_tui.moveCursor(h_x + 2, h_y + 7);
-                    try app_tui.printStyled(.{ .fg = .bright_white }, "q:            ", .{});
-                    try app_tui.printStyled(.{ .fg = .bright_black }, "Quit", .{});
+                    try app_tui.printStyled(.{ .fg = theme.text }, "q:            ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Quit", .{});
 
                     try app_tui.moveCursor(h_x + 2, h_y + 8);
-                    try app_tui.printStyled(.{ .fg = .bright_white }, ":             ", .{});
-                    try app_tui.printStyled(.{ .fg = .bright_black }, "Command mode", .{});
+                    try app_tui.printStyled(.{ .fg = theme.text }, ":             ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Command mode (show zombie)", .{});
 
                     try app_tui.moveCursor(h_x + 2, h_y + 10);
-                    try app_tui.printStyled(.{ .fg = .bright_black }, "Press any key to close...", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Press any key to close...", .{});
                 }
 
                 // Footer
                 try app_tui.moveCursor(1, size.height);
                 if (is_cmd_mode) {
-                    try app_tui.printStyled(.{ .fg = .bright_green, .bold = true }, ":", .{});
-                    try app_tui.printStyled(.{ .fg = .bright_white }, "{s}", .{cmd_buf[0..cmd_len]});
-                    try app_tui.printStyled(.{ .fg = .bright_black }, " (Press Enter to execute, Esc to cancel)", .{});
+                    try app_tui.printStyled(.{ .fg = theme.command_prompt, .bold = true }, ":", .{});
+                    try app_tui.printStyled(.{ .fg = theme.text }, "{s}", .{cmd_buf[0..cmd_len]});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, " (Press Enter to execute, Esc to cancel)", .{});
                 } else if (is_filtering) {
-                    try app_tui.printStyled(.{ .fg = .bright_yellow, .bold = true }, "Filter: ", .{});
-                    try app_tui.printStyled(.{ .fg = .bright_white }, "{s}", .{filter_buf[0..filter_len]});
-                    try app_tui.printStyled(.{ .fg = .bright_black }, " (Press Enter to apply, Esc to cancel)", .{});
+                    try app_tui.printStyled(.{ .fg = theme.filter_prompt, .bold = true }, "Filter: ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.text }, "{s}", .{filter_buf[0..filter_len]});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, " (Press Enter to apply, Esc to cancel)", .{});
                 } else if (filter_len > 0) {
-                    try app_tui.printStyled(.{ .fg = .bright_yellow, .bold = true }, "Filter active: ", .{});
-                    try app_tui.printStyled(.{ .fg = .bright_white }, "{s}", .{filter_buf[0..filter_len]});
-                    try app_tui.printStyled(.{ .fg = .bright_black }, " (Press / to edit, Esc to clear) | ", .{});
-                    try app_tui.printStyled(.{ .fg = .bright_black }, "Press ", .{});
-                    try app_tui.printStyled(.{ .fg = .bright_white, .bold = true }, "'?'", .{});
-                    try app_tui.printStyled(.{ .fg = .bright_black }, " for help", .{});
+                    try app_tui.printStyled(.{ .fg = theme.filter_prompt, .bold = true }, "Filter active: ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.text }, "{s}", .{filter_buf[0..filter_len]});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, " (Press / to edit, Esc to clear) | ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Press ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "'?'", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, " for help", .{});
+                } else if (status_len > 0) {
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "{s}", .{status_buf[0..status_len]});
                 } else {
-                    try app_tui.printStyled(.{ .fg = .bright_black }, "Press ", .{});
-                    try app_tui.printStyled(.{ .fg = .bright_white, .bold = true }, "'?'", .{});
-                    try app_tui.printStyled(.{ .fg = .bright_black }, " for help, ", .{});
-                    try app_tui.printStyled(.{ .fg = .bright_white, .bold = true }, "'q'", .{});
-                    try app_tui.printStyled(.{ .fg = .bright_black }, " to quit", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Press ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "'?'", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, " for help, ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "'q'", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, " to quit", .{});
                 }
             }
         } // end force_redraw
@@ -572,20 +608,34 @@ pub fn main() !void {
                     show_help = false;
                     handled = true;
                 } else if (is_cmd_mode) {
-                    if (buf[0] == '\r' or buf[0] == '\n') {
-                        is_cmd_mode = false;
-                        const cmd = cmd_buf[0..cmd_len];
-                        if (std.mem.startsWith(u8, cmd, "killall ")) {
-                            const target = cmd[8..];
-                            if (std.mem.eql(u8, target, "defunct")) {
-                                for (cached_procs) |proc| {
-                                    if (proc.state == .zombie or proc.state == .dead) {
-                                        if (proc.ppid > 0) {
-                                            _ = posix.kill(@intCast(proc.ppid), posix.SIG.CHLD) catch {};
-                                        }
-                                    }
+                    switch (text_input.applyInputBytes(&cmd_buf, &cmd_len, buf[0..n])) {
+                        .submit => {
+                            is_cmd_mode = false;
+                            const cmd = cmd_buf[0..cmd_len];
+                            if (std.mem.eql(u8, cmd, "show zombie")) {
+                                zombie_summary = process_commands.collectZombieParents(cached_procs, zombie_parents[0..]);
+                                show_zombie_parents = true;
+                                filter_len = 0;
+                                selected_idx = 0;
+                                scroll_offset = 0;
+
+                                if (zombie_summary.zombie_count == 0) {
+                                    setStatus(&status_buf, &status_len, "No zombie processes found", .{});
+                                } else if (zombie_summary.parent_count == 0) {
+                                    setStatus(&status_buf, &status_len, "Found {d} zombies, but no visible parent processes", .{zombie_summary.zombie_count});
+                                } else {
+                                    const parent_label = if (zombie_summary.parent_count == 1) "parent process" else "parent processes";
+                                    const zombie_label = if (zombie_summary.zombie_count == 1) "zombie" else "zombies";
+                                    setStatus(
+                                        &status_buf,
+                                        &status_len,
+                                        "Showing {d} {s} for {d} {s}. Esc clears",
+                                        .{ zombie_summary.parent_count, parent_label, zombie_summary.zombie_count, zombie_label },
+                                    );
                                 }
-                            } else {
+                            } else if (std.mem.startsWith(u8, cmd, "killall ")) {
+                                const target = cmd[8..];
+                                var matches: usize = 0;
                                 for (cached_procs) |proc| {
                                     var l_name: [64]u8 = undefined;
                                     const name_len = proc.name().len;
@@ -601,46 +651,48 @@ pub fn main() !void {
 
                                     if (std.mem.indexOf(u8, n_str, t_str) != null) {
                                         _ = posix.kill(@intCast(proc.pid), posix.SIG.TERM) catch {};
+                                        matches += 1;
                                     }
                                 }
+
+                                if (matches == 0) {
+                                    setStatus(&status_buf, &status_len, "No processes matched '{s}'", .{target});
+                                } else {
+                                    setStatus(&status_buf, &status_len, "Sent SIGTERM to {d} matching processes", .{matches});
+                                }
+                            } else if (std.mem.startsWith(u8, cmd, "search ")) {
+                                const target = cmd[7..];
+                                is_filtering = true;
+                                filter_len = @min(target.len, filter_buf.len);
+                                @memcpy(filter_buf[0..filter_len], target[0..filter_len]);
+                                status_len = 0;
+                            } else if (std.mem.eql(u8, cmd, "q") or std.mem.eql(u8, cmd, "quit")) {
+                                quit_flag = true;
+                            } else if (cmd.len > 0) {
+                                setStatus(&status_buf, &status_len, "Unknown command: {s}", .{cmd});
                             }
-                        } else if (std.mem.startsWith(u8, cmd, "search ")) {
-                            const target = cmd[7..];
-                            is_filtering = true;
-                            filter_len = @min(target.len, filter_buf.len);
-                            @memcpy(filter_buf[0..filter_len], target[0..filter_len]);
-                        } else if (std.mem.eql(u8, cmd, "q") or std.mem.eql(u8, cmd, "quit")) {
-                            quit_flag = true;
-                        }
-                        cmd_len = 0;
-                        handled = true;
-                    } else if (buf[0] == '\x1b') {
-                        is_cmd_mode = false;
-                        cmd_len = 0;
-                        handled = true;
-                    } else if (buf[0] == 127 or buf[0] == '\x08') {
-                        if (cmd_len > 0) cmd_len -= 1;
-                        handled = true;
-                    } else if (buf[0] >= 32 and buf[0] <= 126 and cmd_len < cmd_buf.len) {
-                        cmd_buf[cmd_len] = buf[0];
-                        cmd_len += 1;
-                        handled = true;
+                            cmd_len = 0;
+                            handled = true;
+                        },
+                        .cancel => {
+                            is_cmd_mode = false;
+                            cmd_len = 0;
+                            handled = true;
+                        },
+                        .none => handled = true,
                     }
                 } else if (is_filtering) {
-                    if (buf[0] == '\r' or buf[0] == '\n') {
-                        is_filtering = false;
-                        handled = true;
-                    } else if (buf[0] == '\x1b') {
-                        is_filtering = false;
-                        filter_len = 0;
-                        handled = true;
-                    } else if (buf[0] == 127 or buf[0] == '\x08') {
-                        if (filter_len > 0) filter_len -= 1;
-                        handled = true;
-                    } else if (buf[0] >= 32 and buf[0] <= 126 and filter_len < filter_buf.len) {
-                        filter_buf[filter_len] = buf[0];
-                        filter_len += 1;
-                        handled = true;
+                    switch (text_input.applyInputBytes(&filter_buf, &filter_len, buf[0..n])) {
+                        .submit => {
+                            is_filtering = false;
+                            handled = true;
+                        },
+                        .cancel => {
+                            is_filtering = false;
+                            filter_len = 0;
+                            handled = true;
+                        },
+                        .none => handled = true,
                     }
                 } else {
                     if (n == 1) {
@@ -700,6 +752,9 @@ pub fn main() !void {
                             },
                             '\x1b' => {
                                 filter_len = 0;
+                                status_len = 0;
+                                zombie_summary = .{};
+                                show_zombie_parents = false;
                                 handled = true;
                             },
                             't' => {
