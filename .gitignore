@@ -9,3 +9,5 @@ testing
 *.so
 *.obj
 *.md
+!README.md
+!LICENSE.md
