@@ -9,8 +9,10 @@ pub const ThermalStats = common.ThermalStats;
 pub const BatteryStats = common.BatteryStats;
 pub const BatteryStatus = common.BatteryStatus;
 pub const ProcStats = common.ProcStats;
+pub const ThreadStats = common.ThreadStats;
 pub const SortBy = common.SortBy;
 pub const sortProcStats = common.sortProcStats;
+pub const sortThreadStats = common.sortThreadStats;
 
 pub const sys_linux = @import("sysinfo/linux.zig");
 pub const sys_darwin = @import("sysinfo/darwin.zig");

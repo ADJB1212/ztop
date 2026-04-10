@@ -75,6 +75,18 @@ pub const ProcStats = struct {
     }
 };
 
+pub const ThreadStats = struct {
+    tid: u64,
+    name_buf: [64]u8 = std.mem.zeroes([64]u8),
+    name_len: u8 = 0,
+    cpu_percent: f32 = 0,
+    state: ProcState = .unknown,
+
+    pub fn name(self: *const ThreadStats) []const u8 {
+        return self.name_buf[0..self.name_len];
+    }
+};
+
 pub const ProcCpuEntry = struct {
     pid: u32,
     cpu_total: u64,
@@ -82,8 +94,14 @@ pub const ProcCpuEntry = struct {
     disk_write: u64 = 0,
 };
 
+pub const ThreadCpuEntry = struct {
+    tid: u64,
+    cpu_total: u64,
+};
+
 pub const MAX_CORES = 256;
 pub const MAX_PROCS = 2048;
+pub const MAX_THREADS = 1024;
 
 pub const SortBy = enum {
     cpu,
@@ -109,4 +127,13 @@ pub fn sortProcStats(slice: []ProcStats, sort_by: SortBy) void {
         }
     };
     std.mem.sort(ProcStats, slice, Context{ .sort_by = sort_by }, Context.lessThan);
+}
+
+pub fn sortThreadStats(slice: []ThreadStats) void {
+    const Context = struct {
+        pub fn lessThan(_: @This(), a: ThreadStats, b: ThreadStats) bool {
+            return a.cpu_percent > b.cpu_percent;
+        }
+    };
+    std.mem.sort(ThreadStats, slice, Context{}, Context.lessThan);
 }

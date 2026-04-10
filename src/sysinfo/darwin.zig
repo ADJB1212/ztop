@@ -64,7 +64,9 @@ const CPU_STATE_IDLE = 2;
 const CPU_STATE_NICE = 3;
 const CPU_STATE_MAX = 4;
 
+const PROC_PIDTHREADINFO: c_int = 5;
 const PROC_PIDRUSAGE = 5;
+const PROC_PIDLISTTHREADS: c_int = 6;
 const PROC_PIDT_SHORTBSDINFO: c_int = 13;
 
 const SIDL = 1;
@@ -160,6 +162,28 @@ const ProcTaskInfo = extern struct {
     pti_numrunning: i32,
     pti_priority: i32,
 };
+
+const ProcThreadInfo = extern struct {
+    pth_user_time: u64,
+    pth_system_time: u64,
+    pth_cpu_usage: i32,
+    pth_policy: i32,
+    pth_run_state: i32,
+    pth_flags: i32,
+    pth_sleep_time: i32,
+    pth_curpri: i32,
+    pth_priority: i32,
+    pth_maxpri: i32,
+    pth_name: [64]u8,
+};
+
+const TH_STATE_RUNNING: i32 = 1;
+const TH_STATE_STOPPED: i32 = 2;
+const TH_STATE_WAITING: i32 = 3;
+const TH_STATE_UNINTERRUPTIBLE: i32 = 4;
+const TH_STATE_HALTED: i32 = 5;
+
+const MAX_THREADS = common.MAX_THREADS;
 
 pub const SysInfo = struct {
     prev_ticks: [4]u64 = .{ 0, 0, 0, 0 },
@@ -535,6 +559,72 @@ pub const SysInfo = struct {
         const slice = try result.toOwnedSlice(allocator);
         common.sortProcStats(slice, sort_by);
         return slice;
+    }
+
+    pub fn getThreadStats(self: *SysInfo, allocator: std.mem.Allocator, pid: u32) ![]common.ThreadStats {
+        _ = self;
+
+        // Get list of thread unique IDs
+        var tid_buf: [MAX_THREADS]u64 = undefined;
+        const tid_ret = proc_pidinfo(
+            @intCast(pid),
+            PROC_PIDLISTTHREADS,
+            0,
+            @ptrCast(&tid_buf),
+            @intCast(MAX_THREADS * @sizeOf(u64)),
+        );
+
+        if (tid_ret <= 0) return allocator.alloc(common.ThreadStats, 0);
+
+        const num_threads = @as(usize, @intCast(tid_ret)) / @sizeOf(u64);
+
+        var result: std.ArrayList(common.ThreadStats) = .empty;
+
+        for (tid_buf[0..num_threads]) |tid| {
+            var thread_info: ProcThreadInfo = undefined;
+            const info_ret = proc_pidinfo(
+                @intCast(pid),
+                PROC_PIDTHREADINFO,
+                tid,
+                @ptrCast(&thread_info),
+                @sizeOf(ProcThreadInfo),
+            );
+            if (info_ret <= 0) continue;
+
+            const state: common.ProcState = switch (thread_info.pth_run_state) {
+                TH_STATE_RUNNING => .running,
+                TH_STATE_STOPPED => .stopped,
+                TH_STATE_WAITING => .sleeping,
+                TH_STATE_UNINTERRUPTIBLE => .disk_sleep,
+                TH_STATE_HALTED => .dead,
+                else => .unknown,
+            };
+
+            // pth_cpu_usage is scaled: TH_USAGE_SCALE (1000) = 100%
+            const cpu_percent: f32 = if (thread_info.pth_cpu_usage > 0)
+                @as(f32, @floatFromInt(thread_info.pth_cpu_usage)) / 10.0
+            else
+                0;
+
+            const name_end = std.mem.indexOfScalar(u8, &thread_info.pth_name, 0) orelse 64;
+            const name_len: u8 = @intCast(@min(name_end, 63));
+
+            var thread_stat = common.ThreadStats{
+                .tid = tid,
+                .cpu_percent = cpu_percent,
+                .state = state,
+                .name_len = name_len,
+            };
+            if (name_len > 0) {
+                @memcpy(thread_stat.name_buf[0..name_len], thread_info.pth_name[0..name_len]);
+            }
+
+            try result.append(allocator, thread_stat);
+        }
+
+        const thread_slice = try result.toOwnedSlice(allocator);
+        common.sortThreadStats(thread_slice);
+        return thread_slice;
     }
 };
 

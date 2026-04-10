@@ -113,6 +113,13 @@ pub fn main() !void {
     var zombie_summary: process_commands.ZombieParentSummary = .{};
     var show_zombie_parents: bool = false;
 
+    var thread_view: bool = false;
+    var thread_view_pid: u32 = 0;
+    var thread_view_name_buf: [64]u8 = std.mem.zeroes([64]u8);
+    var thread_view_name_len: u8 = 0;
+    var cached_threads: []ztop.sysinfo.common.ThreadStats = &.{};
+    defer if (cached_threads.len > 0) allocator.free(cached_threads);
+
     var status_buf: [160]u8 = std.mem.zeroes([160]u8);
     var status_len: usize = 0;
 
@@ -151,6 +158,13 @@ pub fn main() !void {
                 allocator.free(cached_procs);
             }
             cached_procs = try sys_info.getProcStats(allocator, sort_by);
+
+            if (thread_view) {
+                if (cached_threads.len > 0) {
+                    allocator.free(cached_threads);
+                }
+                cached_threads = try sys_info.getThreadStats(allocator, thread_view_pid);
+            }
 
             last_fetch_time = current_time;
             force_redraw = true;
@@ -396,122 +410,213 @@ pub fn main() !void {
                     }
                 }
 
-                // Processes Box
+                // Processes / Threads Box
                 if (procs_box_height >= 3) {
-                    var title_buf: [64]u8 = undefined;
-                    const sort_name = switch (sort_by) {
-                        .cpu => "CPU%",
-                        .mem => "MEM%",
-                        .pid => "PID",
-                        .name => "NAME",
-                    };
-                    const title = if (show_zombie_parents)
-                        std.fmt.bufPrint(
+                    var title_buf: [96]u8 = undefined;
+
+                    if (thread_view) {
+                        const tv_name = thread_view_name_buf[0..thread_view_name_len];
+                        const title = std.fmt.bufPrint(
                             &title_buf,
-                            "Zombie Parents ({d} parents / {d} zombies)",
-                            .{ zombie_summary.parent_count, zombie_summary.zombie_count },
-                        ) catch "Zombie Parents"
-                    else
-                        std.fmt.bufPrint(&title_buf, "Processes (Sort: {s})", .{sort_name}) catch "Processes";
+                            "Threads of {s} (PID: {d}) - {d} threads",
+                            .{ tv_name, thread_view_pid, cached_threads.len },
+                        ) catch "Threads";
 
-                    try app_tui.drawBoxStyled(
-                        procs_box_x,
-                        procs_box_y,
-                        procs_box_width,
-                        procs_box_height,
-                        title,
-                        .{ .fg = theme.border },
-                        .{ .fg = theme.process_title, .bold = true },
-                    );
+                        try app_tui.drawBoxStyled(
+                            procs_box_x,
+                            procs_box_y,
+                            procs_box_width,
+                            procs_box_height,
+                            title,
+                            .{ .fg = theme.border },
+                            .{ .fg = theme.process_title, .bold = true },
+                        );
 
-                    // Filtering
-                    filtered_count = 0;
-                    const filter_str = filter_buf[0..filter_len];
-                    for (cached_procs, 0..) |proc, i| {
-                        if (show_zombie_parents and !process_commands.containsParentPid(zombie_parents[0..zombie_summary.parent_count], proc.pid)) {
-                            continue;
+                        const thread_count = cached_threads.len;
+                        if (thread_count == 0) {
+                            selected_idx = 0;
+                            scroll_offset = 0;
+                        } else {
+                            if (selected_idx >= thread_count) selected_idx = thread_count - 1;
                         }
 
-                        if (filter_len > 0) {
-                            var pid_buf: [32]u8 = undefined;
-                            const pid_str = std.fmt.bufPrint(&pid_buf, "{d}", .{proc.pid}) catch "";
-                            var l_name: [64]u8 = undefined;
-                            const name_len = proc.name().len;
-                            @memcpy(l_name[0..name_len], proc.name());
-                            const n_str = l_name[0..name_len];
-                            for (n_str) |*c| c.* = std.ascii.toLower(c.*);
-
-                            var l_filter: [32]u8 = undefined;
-                            @memcpy(l_filter[0..filter_len], filter_str);
-                            const f_str = l_filter[0..filter_len];
-                            for (f_str) |*c| c.* = std.ascii.toLower(c.*);
-
-                            const name_matches = std.mem.indexOf(u8, n_str, f_str) != null;
-                            const pid_matches = std.mem.indexOf(u8, pid_str, filter_str) != null;
-                            if (!name_matches and !pid_matches) continue;
+                        const visible_rows = procs_box_height - 2;
+                        if (selected_idx < scroll_offset) {
+                            scroll_offset = selected_idx;
+                        } else if (selected_idx >= scroll_offset + visible_rows) {
+                            scroll_offset = selected_idx - visible_rows + 1;
                         }
-                        filtered_indices[filtered_count] = i;
-                        filtered_count += 1;
-                        if (filtered_count >= filtered_indices.len) break;
-                    }
 
-                    if (filtered_count == 0) {
-                        selected_idx = 0;
-                        scroll_offset = 0;
-                    } else {
-                        if (selected_idx >= filtered_count) selected_idx = filtered_count - 1;
-                    }
+                        for (0..visible_rows) |row| {
+                            const idx = scroll_offset + row;
+                            if (idx >= thread_count) break;
+                            const thr = cached_threads[idx];
 
-                    const visible_rows = procs_box_height - 2;
-                    if (selected_idx < scroll_offset) {
-                        scroll_offset = selected_idx;
-                    } else if (selected_idx >= scroll_offset + visible_rows) {
-                        scroll_offset = selected_idx - visible_rows + 1;
-                    }
+                            const is_selected = (idx == selected_idx) and !show_help;
 
-                    for (0..visible_rows) |row| {
-                        const idx = scroll_offset + row;
-                        if (idx >= filtered_count) break;
-                        const proc_idx = filtered_indices[idx];
-                        const proc = cached_procs[proc_idx];
-
-                        const is_selected = (idx == selected_idx) and !show_help;
-
-                        try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1 + @as(u16, @intCast(row)));
-
-                        if (is_selected) {
-                            try app_tui.setStyle(.{ .bg = theme.selection_bg });
-                            for (0..procs_box_width - 4) |_| try app_tui.out.writeAll(" ");
                             try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1 + @as(u16, @intCast(row)));
+
+                            if (is_selected) {
+                                try app_tui.setStyle(.{ .bg = theme.selection_bg });
+                                for (0..procs_box_width - 4) |_| try app_tui.out.writeAll(" ");
+                                try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1 + @as(u16, @intCast(row)));
+                            }
+
+                            try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.muted }, "{d:7} ", .{thr.tid});
+
+                            const name_width: usize = if (procs_box_width > 40) 16 else 8;
+                            if (thr.name().len > name_width) {
+                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s}.. ", .{thr.name()[0 .. name_width - 2]});
+                            } else if (thr.name().len > 0) {
+                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s} ", .{thr.name()});
+                                for (thr.name().len..name_width) |_| try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg } else .{}, " ", .{});
+                            } else {
+                                for (0..name_width) |_| try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg } else .{}, " ", .{});
+                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg } else .{}, " ", .{});
+                            }
+
+                            const c_style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = usageColor(theme, thr.cpu_percent), .bold = thr.cpu_percent >= 70 } else .{ .fg = usageColor(theme, thr.cpu_percent), .bold = thr.cpu_percent >= 70 };
+                            try app_tui.printStyled(c_style, "{d:5.1}% CPU ", .{thr.cpu_percent});
+
+                            const state_str = switch (thr.state) {
+                                .running => "running",
+                                .sleeping => "sleeping",
+                                .disk_sleep => "disk_slp",
+                                .stopped => "stopped",
+                                .zombie => "zombie",
+                                .dead => "dead",
+                                .idle => "idle",
+                                else => "unknown",
+                            };
+                            const state_color: Tui.Color = switch (thr.state) {
+                                .running => theme.usage_good,
+                                .sleeping => theme.muted,
+                                .disk_sleep => theme.usage_warn,
+                                .stopped => theme.usage_critical,
+                                .zombie => theme.usage_critical,
+                                else => theme.muted,
+                            };
+                            try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = state_color } else .{ .fg = state_color }, "{s}", .{state_str});
+
+                            if (is_selected) {
+                                try app_tui.resetStyle();
+                            }
+                        }
+                    } else {
+                        const sort_name = switch (sort_by) {
+                            .cpu => "CPU%",
+                            .mem => "MEM%",
+                            .pid => "PID",
+                            .name => "NAME",
+                        };
+                        const title = if (show_zombie_parents)
+                            std.fmt.bufPrint(
+                                &title_buf,
+                                "Zombie Parents ({d} parents / {d} zombies)",
+                                .{ zombie_summary.parent_count, zombie_summary.zombie_count },
+                            ) catch "Zombie Parents"
+                        else
+                            std.fmt.bufPrint(&title_buf, "Processes (Sort: {s})", .{sort_name}) catch "Processes";
+
+                        try app_tui.drawBoxStyled(
+                            procs_box_x,
+                            procs_box_y,
+                            procs_box_width,
+                            procs_box_height,
+                            title,
+                            .{ .fg = theme.border },
+                            .{ .fg = theme.process_title, .bold = true },
+                        );
+
+                        // Filtering
+                        filtered_count = 0;
+                        const filter_str = filter_buf[0..filter_len];
+                        for (cached_procs, 0..) |proc, i| {
+                            if (show_zombie_parents and !process_commands.containsParentPid(zombie_parents[0..zombie_summary.parent_count], proc.pid)) {
+                                continue;
+                            }
+
+                            if (filter_len > 0) {
+                                var pid_buf2: [32]u8 = undefined;
+                                const pid_str = std.fmt.bufPrint(&pid_buf2, "{d}", .{proc.pid}) catch "";
+                                var l_name: [64]u8 = undefined;
+                                const name_len = proc.name().len;
+                                @memcpy(l_name[0..name_len], proc.name());
+                                const n_str = l_name[0..name_len];
+                                for (n_str) |*ch| ch.* = std.ascii.toLower(ch.*);
+
+                                var l_filter: [32]u8 = undefined;
+                                @memcpy(l_filter[0..filter_len], filter_str);
+                                const f_str = l_filter[0..filter_len];
+                                for (f_str) |*ch| ch.* = std.ascii.toLower(ch.*);
+
+                                const name_matches = std.mem.indexOf(u8, n_str, f_str) != null;
+                                const pid_matches = std.mem.indexOf(u8, pid_str, filter_str) != null;
+                                if (!name_matches and !pid_matches) continue;
+                            }
+                            filtered_indices[filtered_count] = i;
+                            filtered_count += 1;
+                            if (filtered_count >= filtered_indices.len) break;
                         }
 
-                        try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.muted }, "{d:5} ", .{proc.pid});
-
-                        const name_width: usize = if (procs_box_width > 40) 16 else 8;
-                        if (proc.name().len > name_width) {
-                            try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s}.. ", .{proc.name()[0 .. name_width - 2]});
+                        if (filtered_count == 0) {
+                            selected_idx = 0;
+                            scroll_offset = 0;
                         } else {
-                            try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s} ", .{proc.name()});
-                            for (proc.name().len..name_width) |_| try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg } else .{}, " ", .{});
+                            if (selected_idx >= filtered_count) selected_idx = filtered_count - 1;
                         }
 
-                        if (current_tab == 2) {
-                            const dr = formatUnit(proc.disk_read_ps);
-                            const dw = formatUnit(proc.disk_write_ps);
-                            try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.disk_title } else .{ .fg = theme.disk_title }, "{d:5.1} {s}/s R ", .{ dr.value, dr.unit });
-                            try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.disk_title } else .{ .fg = theme.disk_title }, "{d:5.1} {s}/s W ", .{ dw.value, dw.unit });
-                        } else {
-                            const c_style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = usageColor(theme, proc.cpu_percent), .bold = proc.cpu_percent >= 70 } else .{ .fg = usageColor(theme, proc.cpu_percent), .bold = proc.cpu_percent >= 70 };
-                            try app_tui.printStyled(c_style, "{d:5.1}% CPU ", .{proc.cpu_percent});
-
-                            const m_style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = memoryColor(theme, proc.mem_percent), .bold = proc.mem_percent >= 10 } else .{ .fg = memoryColor(theme, proc.mem_percent), .bold = proc.mem_percent >= 10 };
-                            try app_tui.printStyled(m_style, "{d:5.1}% MEM ", .{proc.mem_percent});
-
-                            try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.brand } else .{ .fg = theme.brand }, "{d:4} THR", .{proc.threads});
+                        const visible_rows = procs_box_height - 2;
+                        if (selected_idx < scroll_offset) {
+                            scroll_offset = selected_idx;
+                        } else if (selected_idx >= scroll_offset + visible_rows) {
+                            scroll_offset = selected_idx - visible_rows + 1;
                         }
 
-                        if (is_selected) {
-                            try app_tui.resetStyle();
+                        for (0..visible_rows) |row| {
+                            const idx = scroll_offset + row;
+                            if (idx >= filtered_count) break;
+                            const proc_idx = filtered_indices[idx];
+                            const proc = cached_procs[proc_idx];
+
+                            const is_selected = (idx == selected_idx) and !show_help;
+
+                            try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1 + @as(u16, @intCast(row)));
+
+                            if (is_selected) {
+                                try app_tui.setStyle(.{ .bg = theme.selection_bg });
+                                for (0..procs_box_width - 4) |_| try app_tui.out.writeAll(" ");
+                                try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1 + @as(u16, @intCast(row)));
+                            }
+
+                            try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.muted }, "{d:5} ", .{proc.pid});
+
+                            const name_width: usize = if (procs_box_width > 40) 16 else 8;
+                            if (proc.name().len > name_width) {
+                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s}.. ", .{proc.name()[0 .. name_width - 2]});
+                            } else {
+                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s} ", .{proc.name()});
+                                for (proc.name().len..name_width) |_| try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg } else .{}, " ", .{});
+                            }
+
+                            if (current_tab == 2) {
+                                const dr = formatUnit(proc.disk_read_ps);
+                                const dw = formatUnit(proc.disk_write_ps);
+                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.disk_title } else .{ .fg = theme.disk_title }, "{d:5.1} {s}/s R ", .{ dr.value, dr.unit });
+                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.disk_title } else .{ .fg = theme.disk_title }, "{d:5.1} {s}/s W ", .{ dw.value, dw.unit });
+                            } else {
+                                const c_style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = usageColor(theme, proc.cpu_percent), .bold = proc.cpu_percent >= 70 } else .{ .fg = usageColor(theme, proc.cpu_percent), .bold = proc.cpu_percent >= 70 };
+                                try app_tui.printStyled(c_style, "{d:5.1}% CPU ", .{proc.cpu_percent});
+
+                                const m_style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = memoryColor(theme, proc.mem_percent), .bold = proc.mem_percent >= 10 } else .{ .fg = memoryColor(theme, proc.mem_percent), .bold = proc.mem_percent >= 10 };
+                                try app_tui.printStyled(m_style, "{d:5.1}% MEM ", .{proc.mem_percent});
+
+                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.brand } else .{ .fg = theme.brand }, "{d:4} THR", .{proc.threads});
+                            }
+
+                            if (is_selected) {
+                                try app_tui.resetStyle();
+                            }
                         }
                     }
                 }
@@ -519,7 +624,7 @@ pub fn main() !void {
                 // Help Overlay
                 if (show_help) {
                     const help_width = 40;
-                    const help_height = 12;
+                    const help_height = 13;
                     const h_x = if (size.width > help_width) (size.width - help_width) / 2 else 1;
                     const h_y = if (size.height > help_height) (size.height - help_height) / 2 else 1;
 
@@ -543,22 +648,26 @@ pub fn main() !void {
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Filter processes", .{});
 
                     try app_tui.moveCursor(h_x + 2, h_y + 5);
+                    try app_tui.printStyled(.{ .fg = theme.text }, "Enter:        ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "View threads of selected", .{});
+
+                    try app_tui.moveCursor(h_x + 2, h_y + 6);
                     try app_tui.printStyled(.{ .fg = theme.text }, "t:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Send SIGTERM to selected", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 6);
+                    try app_tui.moveCursor(h_x + 2, h_y + 7);
                     try app_tui.printStyled(.{ .fg = theme.text }, "K:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Send SIGKILL to selected", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 7);
+                    try app_tui.moveCursor(h_x + 2, h_y + 8);
                     try app_tui.printStyled(.{ .fg = theme.text }, "q:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Quit", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 8);
+                    try app_tui.moveCursor(h_x + 2, h_y + 9);
                     try app_tui.printStyled(.{ .fg = theme.text }, ":             ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Command mode (show zombie)", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 10);
+                    try app_tui.moveCursor(h_x + 2, h_y + 11);
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Press any key to close...", .{});
                 }
 
@@ -579,6 +688,12 @@ pub fn main() !void {
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Press ", .{});
                     try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "'?'", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, " for help", .{});
+                } else if (thread_view) {
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Viewing threads of ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "{s}", .{thread_view_name_buf[0..thread_view_name_len]});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, " | Press ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "Esc", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, " to go back", .{});
                 } else if (status_len > 0) {
                     try app_tui.printStyled(.{ .fg = theme.muted }, "{s}", .{status_buf[0..status_len]});
                 } else {
@@ -695,6 +810,8 @@ pub fn main() !void {
                         .none => handled = true,
                     }
                 } else {
+                    const list_count = if (thread_view) cached_threads.len else filtered_count;
+
                     if (n == 1) {
                         switch (buf[0]) {
                             '1' => {
@@ -719,7 +836,7 @@ pub fn main() !void {
                                 handled = true;
                             },
                             'j' => {
-                                if (selected_idx + 1 < filtered_count) selected_idx += 1;
+                                if (selected_idx + 1 < list_count) selected_idx += 1;
                                 handled = true;
                             },
                             'k' => {
@@ -727,45 +844,84 @@ pub fn main() !void {
                                 handled = true;
                             },
                             'c' => {
-                                sort_by = .cpu;
+                                if (!thread_view) {
+                                    sort_by = .cpu;
+                                }
                                 handled = true;
                             },
                             'm' => {
-                                sort_by = .mem;
+                                if (!thread_view) {
+                                    sort_by = .mem;
+                                }
                                 handled = true;
                             },
                             'p' => {
-                                sort_by = .pid;
+                                if (!thread_view) {
+                                    sort_by = .pid;
+                                }
                                 handled = true;
                             },
                             'n' => {
-                                sort_by = .name;
+                                if (!thread_view) {
+                                    sort_by = .name;
+                                }
                                 handled = true;
                             },
                             '/' => {
-                                is_filtering = true;
+                                if (!thread_view) {
+                                    is_filtering = true;
+                                }
                                 handled = true;
                             },
                             ':' => {
-                                is_cmd_mode = true;
+                                if (!thread_view) {
+                                    is_cmd_mode = true;
+                                }
+                                handled = true;
+                            },
+                            '\r', '\n' => {
+                                if (!thread_view and filtered_count > 0 and selected_idx < filtered_count) {
+                                    const proc = cached_procs[filtered_indices[selected_idx]];
+                                    thread_view_pid = proc.pid;
+                                    thread_view_name_len = proc.name_len;
+                                    @memcpy(thread_view_name_buf[0..proc.name_len], proc.name());
+                                    thread_view = true;
+                                    selected_idx = 0;
+                                    scroll_offset = 0;
+
+                                    if (cached_threads.len > 0) {
+                                        allocator.free(cached_threads);
+                                    }
+                                    cached_threads = sys_info.getThreadStats(allocator, thread_view_pid) catch &.{};
+                                }
                                 handled = true;
                             },
                             '\x1b' => {
-                                filter_len = 0;
-                                status_len = 0;
-                                zombie_summary = .{};
-                                show_zombie_parents = false;
+                                if (thread_view) {
+                                    thread_view = false;
+                                    if (cached_threads.len > 0) {
+                                        allocator.free(cached_threads);
+                                        cached_threads = &.{};
+                                    }
+                                    selected_idx = 0;
+                                    scroll_offset = 0;
+                                } else {
+                                    filter_len = 0;
+                                    status_len = 0;
+                                    zombie_summary = .{};
+                                    show_zombie_parents = false;
+                                }
                                 handled = true;
                             },
                             't' => {
-                                if (filtered_count > 0 and selected_idx < filtered_count) {
+                                if (!thread_view and filtered_count > 0 and selected_idx < filtered_count) {
                                     const pid = cached_procs[filtered_indices[selected_idx]].pid;
                                     _ = posix.kill(@intCast(pid), posix.SIG.TERM) catch {};
                                 }
                                 handled = true;
                             },
                             'K' => {
-                                if (filtered_count > 0 and selected_idx < filtered_count) {
+                                if (!thread_view and filtered_count > 0 and selected_idx < filtered_count) {
                                     const pid = cached_procs[filtered_indices[selected_idx]].pid;
                                     _ = posix.kill(@intCast(pid), posix.SIG.KILL) catch {};
                                 }
@@ -780,7 +936,7 @@ pub fn main() !void {
                                 handled = true;
                             },
                             'B' => {
-                                if (selected_idx + 1 < filtered_count) selected_idx += 1;
+                                if (selected_idx + 1 < list_count) selected_idx += 1;
                                 handled = true;
                             },
                             else => {},

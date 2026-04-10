@@ -32,6 +32,8 @@ pub const ParsedProcStat = struct {
     num_threads: u32,
 };
 
+const MAX_THREADS = common.MAX_THREADS;
+
 pub const SysInfo = struct {
     prev_cpu_tick: CpuTick = .{},
     prev_core_ticks: [MAX_CORES]CpuTick = std.mem.zeroes([MAX_CORES]CpuTick),
@@ -42,6 +44,10 @@ pub const SysInfo = struct {
     prev_procs: [MAX_PROCS]ProcCpuEntry = undefined,
     prev_proc_count: usize = 0,
     prev_proc_total_ticks: u64 = 0,
+    prev_threads: [MAX_THREADS]common.ThreadCpuEntry = undefined,
+    prev_thread_count: usize = 0,
+    prev_thread_total_ticks: u64 = 0,
+    thread_view_pid: u32 = 0,
     prev_disk_read: u64 = 0,
     prev_disk_write: u64 = 0,
     prev_net_rx: u64 = 0,
@@ -303,6 +309,89 @@ pub const SysInfo = struct {
         const slice = try result.toOwnedSlice(allocator);
         common.sortProcStats(slice, sort_by);
         return slice;
+    }
+
+    pub fn getThreadStats(self: *SysInfo, allocator: std.mem.Allocator, pid: u32) ![]common.ThreadStats {
+        if (self.thread_view_pid != pid) {
+            self.thread_view_pid = pid;
+            self.prev_thread_count = 0;
+        }
+
+        const snapshot = readCpuSnapshot() catch CpuSnapshot{};
+        const total_tick_delta = if (self.prev_thread_total_ticks > 0) snapshot.overall.total -| self.prev_thread_total_ticks else 0;
+
+        var path_buf: [64]u8 = undefined;
+        const task_path = std.fmt.bufPrint(&path_buf, "/proc/{d}/task", .{pid}) catch
+            return allocator.alloc(common.ThreadStats, 0);
+
+        var task_dir = std.fs.openDirAbsolute(task_path, .{ .iterate = true }) catch
+            return allocator.alloc(common.ThreadStats, 0);
+        defer task_dir.close();
+
+        var iter = task_dir.iterate();
+        var result: std.ArrayList(common.ThreadStats) = .empty;
+        var new_threads: [MAX_THREADS]common.ThreadCpuEntry = undefined;
+        var new_thread_count: usize = 0;
+
+        while (try iter.next()) |entry| {
+            if (entry.kind != .directory) continue;
+            const tid = std.fmt.parseInt(u64, entry.name, 10) catch continue;
+
+            var tid_dir = task_dir.openDir(entry.name, .{}) catch continue;
+            defer tid_dir.close();
+
+            var stat_buf: [4096]u8 = undefined;
+            const stat_contents = readDirFile(&tid_dir, "stat", &stat_buf) catch continue;
+            const parsed = parseProcStat(stat_contents) orelse continue;
+
+            // Read comm for thread name
+            var comm_buf: [128]u8 = undefined;
+            var name_buf_local: [64]u8 = std.mem.zeroes([64]u8);
+            var name_len: u8 = 0;
+            if (readDirFile(&tid_dir, "comm", &comm_buf)) |comm| {
+                const trimmed = std.mem.trimRight(u8, comm, "\n");
+                name_len = @intCast(@min(trimmed.len, 63));
+                @memcpy(name_buf_local[0..name_len], trimmed[0..name_len]);
+            } else |_| {
+                const n = if (parsed.name.len > 63) parsed.name[0..63] else parsed.name;
+                name_len = @intCast(n.len);
+                @memcpy(name_buf_local[0..name_len], n);
+            }
+
+            if (new_thread_count < MAX_THREADS) {
+                new_threads[new_thread_count] = .{ .tid = tid, .cpu_total = parsed.cpu_total };
+                new_thread_count += 1;
+            }
+
+            var cpu_percent: f32 = 0;
+            for (self.prev_threads[0..self.prev_thread_count]) |prev| {
+                if (prev.tid == tid) {
+                    if (total_tick_delta > 0 and parsed.cpu_total >= prev.cpu_total) {
+                        const delta_cpu = parsed.cpu_total - prev.cpu_total;
+                        cpu_percent = @as(f32, @floatFromInt(delta_cpu * self.ncpu)) / @as(f32, @floatFromInt(total_tick_delta)) * 100.0;
+                    }
+                    break;
+                }
+            }
+
+            var thread_stat = common.ThreadStats{
+                .tid = tid,
+                .cpu_percent = cpu_percent,
+                .state = parsed.state,
+                .name_len = name_len,
+            };
+            @memcpy(thread_stat.name_buf[0..name_len], name_buf_local[0..name_len]);
+
+            try result.append(allocator, thread_stat);
+        }
+
+        @memcpy(self.prev_threads[0..new_thread_count], new_threads[0..new_thread_count]);
+        self.prev_thread_count = new_thread_count;
+        self.prev_thread_total_ticks = snapshot.overall.total;
+
+        const thread_slice = try result.toOwnedSlice(allocator);
+        common.sortThreadStats(thread_slice);
+        return thread_slice;
     }
 };
 
