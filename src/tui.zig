@@ -26,11 +26,70 @@ pub const Tui = struct {
         bg: ?Color = null,
         bold: bool = false,
         dim: bool = false,
+        underline: bool = false,
+    };
+
+    pub const CursorStyle = enum(u8) {
+        blinking_block = 1,
+        steady_block = 2,
+        blinking_underline = 3,
+        steady_underline = 4,
+        blinking_bar = 5,
+        steady_bar = 6,
+    };
+
+    pub const TerminalFeatures = struct {
+        synchronized_output: bool,
     };
 
     original_termios: posix.termios,
     in: std.fs.File,
     out: std.fs.File,
+    features: TerminalFeatures,
+    cursor_visible: bool,
+    cursor_style: CursorStyle,
+    frame_active: bool,
+
+    pub fn shouldEnableSynchronizedOutput(term_program: ?[]const u8) bool {
+        if (term_program) |name| {
+            return !std.mem.eql(u8, name, "Apple_Terminal");
+        }
+        return true;
+    }
+
+    pub fn cursorStyleSequence(style: CursorStyle) []const u8 {
+        return switch (style) {
+            .blinking_block => "\x1b[1 q",
+            .steady_block => "\x1b[2 q",
+            .blinking_underline => "\x1b[3 q",
+            .steady_underline => "\x1b[4 q",
+            .blinking_bar => "\x1b[5 q",
+            .steady_bar => "\x1b[6 q",
+        };
+    }
+
+    pub fn styleSequence(buf: []u8, style: Style) ![]const u8 {
+        var stream = std.io.fixedBufferStream(buf);
+        const writer = stream.writer();
+
+        try writer.writeAll("\x1b[0");
+        if (style.bold) try writer.writeAll(";1");
+        if (style.dim) try writer.writeAll(";2");
+        if (style.underline) try writer.writeAll(";4");
+        if (style.fg) |fg| try writer.print(";{d}", .{@intFromEnum(fg)});
+        if (style.bg) |bg| try writer.print(";{d}", .{@intFromEnum(bg) + 10});
+        try writer.writeAll("m");
+
+        return stream.getWritten();
+    }
+
+    pub fn writeHyperlinkTo(writer: anytype, uri: []const u8, label: []const u8) !void {
+        try writer.writeAll("\x1b]8;;");
+        try writer.writeAll(uri);
+        try writer.writeAll("\x1b\\");
+        try writer.writeAll(label);
+        try writer.writeAll("\x1b]8;;\x1b\\");
+    }
 
     pub fn init() !Tui {
         const in = std.fs.File.stdin();
@@ -54,24 +113,49 @@ pub const Tui = struct {
 
         try posix.tcsetattr(in.handle, .FLUSH, raw);
 
+        const features = TerminalFeatures{
+            .synchronized_output = shouldEnableSynchronizedOutput(if (posix.getenv("TERM_PROGRAM")) |term_program| term_program else null),
+        };
+
         // Enter alternate buffer and hide cursor
-        _ = try out.write("\x1b[?1049h\x1b[?25l");
+        try out.writeAll("\x1b[?1049h\x1b[?25l");
 
         return Tui{
             .original_termios = original_termios,
             .in = in,
             .out = out,
+            .features = features,
+            .cursor_visible = false,
+            .cursor_style = .steady_block,
+            .frame_active = false,
         };
     }
 
     pub fn deinit(self: *Tui) void {
-        // Show cursor and exit alternate buffer
-        _ = self.out.write("\x1b[?25h\x1b[?1049l") catch {};
+        self.endFrame() catch {};
+        self.resetStyle() catch {};
+        self.setCursorStyle(.steady_block) catch {};
+        self.setCursorVisible(true) catch {};
+        self.out.writeAll("\x1b[?1049l") catch {};
         posix.tcsetattr(self.in.handle, .FLUSH, self.original_termios) catch {};
     }
 
+    pub fn beginFrame(self: *Tui) !void {
+        if (!self.features.synchronized_output or self.frame_active) return;
+
+        try self.out.writeAll("\x1b[?2026h");
+        self.frame_active = true;
+    }
+
+    pub fn endFrame(self: *Tui) !void {
+        if (!self.frame_active) return;
+
+        try self.out.writeAll("\x1b[?2026l");
+        self.frame_active = false;
+    }
+
     pub fn clear(self: *Tui) !void {
-        _ = try self.out.write("\x1b[0m\x1b[2J\x1b[H");
+        try self.out.writeAll("\x1b[0m\x1b[2J\x1b[H");
     }
 
     pub fn moveCursor(self: *Tui, x: u16, y: u16) !void {
@@ -80,23 +164,28 @@ pub const Tui = struct {
         _ = try self.out.write(seq);
     }
 
+    pub fn setCursorVisible(self: *Tui, visible: bool) !void {
+        if (self.cursor_visible == visible) return;
+
+        try self.out.writeAll(if (visible) "\x1b[?25h" else "\x1b[?25l");
+        self.cursor_visible = visible;
+    }
+
+    pub fn setCursorStyle(self: *Tui, style: CursorStyle) !void {
+        if (self.cursor_style == style) return;
+
+        try self.out.writeAll(cursorStyleSequence(style));
+        self.cursor_style = style;
+    }
+
     pub fn print(self: *Tui, comptime fmt: []const u8, args: anytype) !void {
         try self.out.deprecatedWriter().print(fmt, args);
     }
 
     pub fn setStyle(self: *Tui, style: Style) !void {
         var buf: [32]u8 = undefined;
-        var stream = std.io.fixedBufferStream(&buf);
-        const writer = stream.writer();
-
-        try writer.writeAll("\x1b[0");
-        if (style.bold) try writer.writeAll(";1");
-        if (style.dim) try writer.writeAll(";2");
-        if (style.fg) |fg| try writer.print(";{d}", .{@intFromEnum(fg)});
-        if (style.bg) |bg| try writer.print(";{d}", .{@intFromEnum(bg) + 10});
-        try writer.writeAll("m");
-
-        try self.out.writeAll(stream.getWritten());
+        const seq = try styleSequence(&buf, style);
+        try self.out.writeAll(seq);
     }
 
     pub fn resetStyle(self: *Tui) !void {
@@ -115,20 +204,21 @@ pub const Tui = struct {
         try self.print(fmt, args);
     }
 
+    pub fn writeHyperlink(self: *Tui, uri: []const u8, label: []const u8) !void {
+        try writeHyperlinkTo(self.out.deprecatedWriter(), uri, label);
+    }
+
+    pub fn writeStyledHyperlink(self: *Tui, style: Style, uri: []const u8, label: []const u8) !void {
+        try self.setStyle(style);
+        defer self.resetStyle() catch {};
+        try self.writeHyperlink(uri, label);
+    }
+
     pub fn drawBox(self: *Tui, x: u16, y: u16, width: u16, height: u16, title: []const u8) !void {
         try self.drawBoxStyled(x, y, width, height, title, .{}, .{ .bold = true });
     }
 
-    pub fn drawBoxStyled(
-        self: *Tui,
-        x: u16,
-        y: u16,
-        width: u16,
-        height: u16,
-        title: []const u8,
-        border_style: Style,
-        title_style: Style,
-    ) !void {
+    pub fn drawBoxStyled(self: *Tui, x: u16, y: u16, width: u16, height: u16, title: []const u8, border_style: Style, title_style: Style) !void {
         try self.setStyle(border_style);
 
         // Draw top border

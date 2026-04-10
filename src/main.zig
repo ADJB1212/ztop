@@ -5,6 +5,8 @@ const text_input = ztop.text_input;
 const Tui = ztop.tui.Tui;
 const SysInfo = ztop.sysinfo.SysInfo;
 const posix = std.posix;
+const repo_url = "https://github.com/ADJB1212/ztop";
+const repo_label = "github.com/ADJB1212/ztop";
 
 var quit_flag = false;
 var sigwinch_flag = false;
@@ -57,6 +59,28 @@ fn setStatus(status_buf: *[160]u8, status_len: *usize, comptime fmt: []const u8,
         return;
     };
     status_len.* = msg.len;
+}
+
+fn footerCursorColumn(prompt_len: usize, input_len: usize, width: u16) u16 {
+    if (width == 0) return 1;
+
+    const col = prompt_len + input_len + 1;
+    return @as(u16, @intCast(@min(col, @as(usize, width))));
+}
+
+fn updateFooterCursor(app_tui: *Tui, width: u16, height: u16, is_cmd_mode: bool, cmd_len: usize, is_filtering: bool, filter_len: usize) !void {
+    if (is_cmd_mode) {
+        try app_tui.setCursorStyle(.steady_bar);
+        try app_tui.setCursorVisible(true);
+        try app_tui.moveCursor(footerCursorColumn(1, cmd_len, width), height);
+    } else if (is_filtering) {
+        try app_tui.setCursorStyle(.steady_bar);
+        try app_tui.setCursorVisible(true);
+        try app_tui.moveCursor(footerCursorColumn("Filter: ".len, filter_len, width), height);
+    } else {
+        try app_tui.setCursorStyle(.steady_block);
+        try app_tui.setCursorVisible(false);
+    }
 }
 
 pub fn main() !void {
@@ -137,6 +161,8 @@ pub fn main() !void {
     var force_redraw = true;
     var current_tab: u8 = 1;
 
+    try app_tui.out.writeAll("\x1b]2;ztop\x1b\\");
+
     while (!quit_flag) {
         if (sigwinch_flag) {
             sigwinch_flag = false;
@@ -173,6 +199,8 @@ pub fn main() !void {
         if (force_redraw) {
             force_redraw = false;
             const size = try app_tui.getWinSize();
+            try app_tui.beginFrame();
+            defer app_tui.endFrame() catch {};
             try app_tui.clear();
 
             if (size.width < 40 or size.height < 15) {
@@ -181,6 +209,8 @@ pub fn main() !void {
                 const y = size.height / 2;
                 try app_tui.moveCursor(x, y);
                 try app_tui.printStyled(.{ .fg = theme.usage_critical, .bold = true }, "{s}", .{msg});
+                try app_tui.setCursorStyle(.steady_block);
+                try app_tui.setCursorVisible(false);
             } else {
                 // Status Bar
                 const uname = posix.uname();
@@ -623,7 +653,7 @@ pub fn main() !void {
 
                 // Help Overlay
                 if (show_help) {
-                    const help_width = 40;
+                    const help_width = 48;
                     const help_height = 13;
                     const h_x = if (size.width > help_width) (size.width - help_width) / 2 else 1;
                     const h_y = if (size.height > help_height) (size.height - help_height) / 2 else 1;
@@ -667,6 +697,10 @@ pub fn main() !void {
                     try app_tui.printStyled(.{ .fg = theme.text }, ":             ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Command mode (show zombie)", .{});
 
+                    try app_tui.moveCursor(h_x + 2, h_y + 10);
+                    try app_tui.printStyled(.{ .fg = theme.text }, "Repo: ", .{});
+                    try app_tui.writeStyledHyperlink(.{ .fg = theme.tab_active, .underline = true }, repo_url, repo_label);
+
                     try app_tui.moveCursor(h_x + 2, h_y + 11);
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Press any key to close...", .{});
                 }
@@ -703,6 +737,8 @@ pub fn main() !void {
                     try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "'q'", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, " to quit", .{});
                 }
+
+                try updateFooterCursor(&app_tui, size.width, size.height, is_cmd_mode, cmd_len, is_filtering, filter_len);
             }
         } // end force_redraw
 
