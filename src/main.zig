@@ -61,6 +61,18 @@ fn setStatus(status_buf: *[160]u8, status_len: *usize, comptime fmt: []const u8,
     status_len.* = msg.len;
 }
 
+fn refreshConnections(
+    allocator: std.mem.Allocator,
+    sys_info: *SysInfo,
+    cached_connections: *[]ztop.sysinfo.common.NetConnection,
+) !void {
+    const next = try sys_info.getNetConnections(allocator);
+    if (cached_connections.*.len > 0) {
+        allocator.free(cached_connections.*);
+    }
+    cached_connections.* = next;
+}
+
 fn footerCursorColumn(prompt_len: usize, input_len: usize, width: u16) u16 {
     if (width == 0) return 1;
 
@@ -144,6 +156,9 @@ pub fn main() !void {
     var cached_threads: []ztop.sysinfo.common.ThreadStats = &.{};
     defer if (cached_threads.len > 0) allocator.free(cached_threads);
 
+    var cached_connections: []ztop.sysinfo.common.NetConnection = &.{};
+    defer if (cached_connections.len > 0) allocator.free(cached_connections);
+
     var status_buf: [160]u8 = std.mem.zeroes([160]u8);
     var status_len: usize = 0;
 
@@ -185,6 +200,10 @@ pub fn main() !void {
             }
             cached_procs = try sys_info.getProcStats(allocator, sort_by);
 
+            if (current_tab == 4) {
+                try refreshConnections(allocator, &sys_info, &cached_connections);
+            }
+
             if (thread_view) {
                 if (cached_threads.len > 0) {
                     allocator.free(cached_threads);
@@ -223,7 +242,7 @@ pub fn main() !void {
                 try app_tui.printStyled(.{ .fg = theme.brand, .bold = true }, " ztop ", .{});
                 try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "- {s} {s} {s} - {s}", .{ sysname, release, machine, nodename });
 
-                const tabs_str = "[1] Main  [2] I/O  [3] Sensors";
+                const tabs_str = "[1] Main  [2] I/O  [3] Sensors  [4] Network";
                 if (size.width > tabs_str.len + 30) {
                     try app_tui.moveCursor(size.width - @as(u16, @intCast(tabs_str.len)) - 2, 1);
                     if (current_tab == 1) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "[1] Main", .{}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "[1] Main", .{});
@@ -231,6 +250,8 @@ pub fn main() !void {
                     if (current_tab == 2) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "[2] I/O", .{}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "[2] I/O", .{});
                     try app_tui.out.writeAll("  ");
                     if (current_tab == 3) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "[3] Sensors", .{}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "[3] Sensors", .{});
+                    try app_tui.out.writeAll("  ");
+                    if (current_tab == 4) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "[4] Network", .{}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "[4] Network", .{});
                 }
 
                 const available_height = size.height -| 2;
@@ -438,10 +459,110 @@ pub fn main() !void {
                             try app_tui.printStyled(.{ .fg = theme.text }, "{s}", .{status_str});
                         }
                     }
+                } else if (current_tab == 4) {
+                    // Network Totals Box
+                    try app_tui.drawBoxStyled(
+                        cpu_box_x,
+                        cpu_box_y,
+                        size.width, // Full width for top box
+                        cpu_box_height,
+                        "Network Overview",
+                        .{ .fg = theme.border },
+                        .{ .fg = theme.sensor_title, .bold = true },
+                    );
+                    if (cpu_box_height >= 3) {
+                        try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 1);
+                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Rx: ", .{});
+                        const rx_ps = formatUnit(net.rx_bytes_ps);
+                        try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} {s}/s", .{ rx_ps.value, rx_ps.unit });
+
+                        try app_tui.moveCursor(cpu_box_x + 22, cpu_box_y + 1);
+                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Tx: ", .{});
+                        const tx_ps = formatUnit(net.tx_bytes_ps);
+                        try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} {s}/s", .{ tx_ps.value, tx_ps.unit });
+                    }
                 }
 
-                // Processes / Threads Box
-                if (procs_box_height >= 3) {
+                // Bottom Box: Processes, Threads, or Connections
+                if (current_tab == 4) {
+                    // Connections Box
+                    if (procs_box_height >= 3) {
+                        try app_tui.drawBoxStyled(
+                            procs_box_x,
+                            procs_box_y,
+                            procs_box_width,
+                            procs_box_height,
+                            "Network Connections",
+                            .{ .fg = theme.border },
+                            .{ .fg = theme.process_title, .bold = true },
+                        );
+                        const visible_rows = procs_box_height - 2;
+                        const conn_count = cached_connections.len;
+                        if (conn_count == 0) {
+                            selected_idx = 0;
+                            scroll_offset = 0;
+                        } else {
+                            if (selected_idx >= conn_count) selected_idx = conn_count - 1;
+                        }
+
+                        if (selected_idx < scroll_offset) {
+                            scroll_offset = selected_idx;
+                        } else if (selected_idx >= scroll_offset + visible_rows) {
+                            scroll_offset = selected_idx - visible_rows + 1;
+                        }
+
+                        if (conn_count == 0) {
+                            try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1);
+                            try app_tui.printStyled(.{ .fg = theme.muted }, "No active connections detected", .{});
+                        }
+
+                        for (0..visible_rows) |row| {
+                            const idx = scroll_offset + row;
+                            if (idx >= conn_count) break;
+                            const conn = cached_connections[idx];
+
+                            const is_selected = (idx == selected_idx) and !show_help;
+
+                            try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1 + @as(u16, @intCast(row)));
+
+                            if (is_selected) {
+                                try app_tui.setStyle(.{ .bg = theme.selection_bg });
+                                for (0..procs_box_width - 4) |_| try app_tui.out.writeAll(" ");
+                                try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1 + @as(u16, @intCast(row)));
+                            }
+
+                            try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s:4} ", .{@tagName(conn.protocol)});
+
+                            const local_str = std.mem.sliceTo(&conn.local_addr, 0);
+                            if (conn.local_port > 0) {
+                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s}:{d:<5} ", .{ local_str, conn.local_port });
+                            } else {
+                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s:<11} ", .{local_str});
+                            }
+
+                            try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.muted } else .{ .fg = theme.muted }, "-> ", .{});
+
+                            const remote_str = std.mem.sliceTo(&conn.remote_addr, 0);
+                            if (conn.remote_port > 0) {
+                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s}:{d:<5} ", .{ remote_str, conn.remote_port });
+                            } else {
+                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s:<11} ", .{remote_str});
+                            }
+
+                            if (conn.protocol == .tcp or conn.protocol == .tcp6) {
+                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.muted } else .{ .fg = theme.muted }, "[{s:<11}] ", .{@tagName(conn.state)});
+                            } else {
+                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.muted } else .{ .fg = theme.muted }, "[{s:<11}] ", .{"-"});
+                            }
+
+                            try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.process_title } else .{ .fg = theme.process_title }, "{s} (PID: {d})", .{ conn.name(), conn.pid });
+
+                            if (is_selected) {
+                                try app_tui.resetStyle();
+                            }
+                        }
+                    }
+                } else if (procs_box_height >= 3) {
                     var title_buf: [96]u8 = undefined;
 
                     if (thread_view) {
@@ -654,7 +775,7 @@ pub fn main() !void {
                 // Help Overlay
                 if (show_help) {
                     const help_width = 48;
-                    const help_height = 13;
+                    const help_height = 14;
                     const h_x = if (size.width > help_width) (size.width - help_width) / 2 else 1;
                     const h_y = if (size.height > help_height) (size.height - help_height) / 2 else 1;
 
@@ -666,42 +787,46 @@ pub fn main() !void {
 
                     try app_tui.drawBoxStyled(h_x, h_y, help_width, help_height, "Help", .{ .fg = theme.border }, .{ .fg = theme.text, .bold = true });
                     try app_tui.moveCursor(h_x + 2, h_y + 2);
+                    try app_tui.printStyled(.{ .fg = theme.text }, "1, 2, 3, 4:   ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Switch Tabs", .{});
+
+                    try app_tui.moveCursor(h_x + 2, h_y + 3);
                     try app_tui.printStyled(.{ .fg = theme.text }, "j/k, Up/Down: ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Navigate processes", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 3);
+                    try app_tui.moveCursor(h_x + 2, h_y + 4);
                     try app_tui.printStyled(.{ .fg = theme.text }, "c, m, p, n:   ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Sort by CPU/Mem/PID/Name", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 4);
+                    try app_tui.moveCursor(h_x + 2, h_y + 5);
                     try app_tui.printStyled(.{ .fg = theme.text }, "/:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Filter processes", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 5);
+                    try app_tui.moveCursor(h_x + 2, h_y + 6);
                     try app_tui.printStyled(.{ .fg = theme.text }, "Enter:        ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "View threads of selected", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 6);
+                    try app_tui.moveCursor(h_x + 2, h_y + 7);
                     try app_tui.printStyled(.{ .fg = theme.text }, "t:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Send SIGTERM to selected", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 7);
+                    try app_tui.moveCursor(h_x + 2, h_y + 8);
                     try app_tui.printStyled(.{ .fg = theme.text }, "K:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Send SIGKILL to selected", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 8);
+                    try app_tui.moveCursor(h_x + 2, h_y + 9);
                     try app_tui.printStyled(.{ .fg = theme.text }, "q:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Quit", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 9);
+                    try app_tui.moveCursor(h_x + 2, h_y + 10);
                     try app_tui.printStyled(.{ .fg = theme.text }, ":             ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Command mode (show zombie)", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 10);
+                    try app_tui.moveCursor(h_x + 2, h_y + 11);
                     try app_tui.printStyled(.{ .fg = theme.text }, "Repo: ", .{});
                     try app_tui.writeStyledHyperlink(.{ .fg = theme.tab_active, .underline = true }, repo_url, repo_label);
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 11);
+                    try app_tui.moveCursor(h_x + 2, h_y + 12);
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Press any key to close...", .{});
                 }
 
@@ -846,7 +971,12 @@ pub fn main() !void {
                         .none => handled = true,
                     }
                 } else {
-                    const list_count = if (thread_view) cached_threads.len else filtered_count;
+                    const list_count = if (current_tab == 4)
+                        cached_connections.len
+                    else if (thread_view)
+                        cached_threads.len
+                    else
+                        filtered_count;
 
                     if (n == 1) {
                         switch (buf[0]) {
@@ -860,6 +990,13 @@ pub fn main() !void {
                             },
                             '3' => {
                                 current_tab = 3;
+                                handled = true;
+                            },
+                            '4' => {
+                                current_tab = 4;
+                                try refreshConnections(allocator, &sys_info, &cached_connections);
+                                selected_idx = 0;
+                                scroll_offset = 0;
                                 handled = true;
                             },
                             'q' => quit_flag = true,
@@ -916,7 +1053,7 @@ pub fn main() !void {
                                 handled = true;
                             },
                             '\r', '\n' => {
-                                if (!thread_view and filtered_count > 0 and selected_idx < filtered_count) {
+                                if (current_tab != 4 and !thread_view and filtered_count > 0 and selected_idx < filtered_count) {
                                     const proc = cached_procs[filtered_indices[selected_idx]];
                                     thread_view_pid = proc.pid;
                                     thread_view_name_len = proc.name_len;
@@ -950,14 +1087,14 @@ pub fn main() !void {
                                 handled = true;
                             },
                             't' => {
-                                if (!thread_view and filtered_count > 0 and selected_idx < filtered_count) {
+                                if (current_tab != 4 and !thread_view and filtered_count > 0 and selected_idx < filtered_count) {
                                     const pid = cached_procs[filtered_indices[selected_idx]].pid;
                                     _ = posix.kill(@intCast(pid), posix.SIG.TERM) catch {};
                                 }
                                 handled = true;
                             },
                             'K' => {
-                                if (!thread_view and filtered_count > 0 and selected_idx < filtered_count) {
+                                if (current_tab != 4 and !thread_view and filtered_count > 0 and selected_idx < filtered_count) {
                                     const pid = cached_procs[filtered_indices[selected_idx]].pid;
                                     _ = posix.kill(@intCast(pid), posix.SIG.KILL) catch {};
                                 }

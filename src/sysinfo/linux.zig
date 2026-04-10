@@ -393,6 +393,12 @@ pub const SysInfo = struct {
         common.sortThreadStats(thread_slice);
         return thread_slice;
     }
+    pub fn getNetConnections(self: *SysInfo, allocator: std.mem.Allocator) ![]common.NetConnection {
+        _ = self;
+        var result: std.ArrayList(common.NetConnection) = .empty;
+        defer result.deinit(allocator);
+        return result.toOwnedSlice(allocator);
+    }
 };
 
 fn readDirFile(dir: *std.fs.Dir, sub_path: []const u8, buf: []u8) ![]const u8 {

@@ -75,6 +75,45 @@ pub const ProcStats = struct {
     }
 };
 
+pub const NetConnState = enum {
+    established,
+    syn_sent,
+    syn_recv,
+    fin_wait1,
+    fin_wait2,
+    time_wait,
+    closed,
+    close_wait,
+    last_ack,
+    listen,
+    closing,
+    unknown,
+};
+
+pub const NetProtocol = enum {
+    tcp,
+    udp,
+    tcp6,
+    udp6,
+    unknown,
+};
+
+pub const NetConnection = struct {
+    protocol: NetProtocol,
+    local_addr: [46]u8 = std.mem.zeroes([46]u8),
+    local_port: u16 = 0,
+    remote_addr: [46]u8 = std.mem.zeroes([46]u8),
+    remote_port: u16 = 0,
+    state: NetConnState = .unknown,
+    pid: u32 = 0,
+    process_name: [64]u8 = std.mem.zeroes([64]u8),
+    process_name_len: u8 = 0,
+
+    pub fn name(self: *const NetConnection) []const u8 {
+        return self.process_name[0..self.process_name_len];
+    }
+};
+
 pub const ThreadStats = struct {
     tid: u64,
     name_buf: [64]u8 = std.mem.zeroes([64]u8),

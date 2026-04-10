@@ -120,3 +120,28 @@ test "sortProcStats by name" {
     try std.testing.expectEqual(@as(u32, 3), procs[1].pid);
     try std.testing.expectEqual(@as(u32, 1), procs[2].pid);
 }
+
+test "NetConnection name slice" {
+    var conn = common.NetConnection{
+        .protocol = .tcp,
+        .process_name_len = 4,
+        .process_name = std.mem.zeroes([64]u8),
+    };
+    @memcpy(conn.process_name[0..4], "curl");
+
+    try std.testing.expectEqualStrings("curl", conn.name());
+}
+
+test "NetConnection defaults" {
+    const conn = common.NetConnection{
+        .protocol = .udp,
+    };
+
+    try std.testing.expectEqual(common.NetProtocol.udp, conn.protocol);
+    try std.testing.expectEqual(@as(u16, 0), conn.local_port);
+    try std.testing.expectEqual(@as(u16, 0), conn.remote_port);
+    try std.testing.expectEqual(common.NetConnState.unknown, conn.state);
+    try std.testing.expectEqual(@as(u32, 0), conn.pid);
+    try std.testing.expectEqual(@as(u8, 0), conn.process_name_len);
+    try std.testing.expectEqualStrings("", conn.name());
+}
