@@ -439,7 +439,10 @@ pub fn main() !void {
     var is_cmd_mode: bool = false;
 
     var filtered_indices: [2048]usize = undefined;
+    var filtered_depths: [2048]u8 = std.mem.zeroes([2048]u8);
+    var filtered_is_lasts: [2048]u16 = std.mem.zeroes([2048]u16);
     var filtered_count: usize = 0;
+    var tree_view: bool = false;
 
     var zombie_parents: [ztop.sysinfo.common.MAX_PROCS]process_commands.ZombieParentEntry = undefined;
     var zombie_summary: process_commands.ZombieParentSummary = .{};
@@ -952,32 +955,45 @@ pub fn main() !void {
                         // Filtering
                         filtered_count = 0;
                         const filter_str = filter_buf[0..filter_len];
-                        for (cached_procs, 0..) |proc, i| {
-                            if (show_zombie_parents and !process_commands.containsParentPid(zombie_parents[0..zombie_summary.parent_count], proc.pid)) {
-                                continue;
+
+                        if (tree_view and filter_len == 0 and !show_zombie_parents) {
+                            filtered_count = process_commands.buildTreeView(
+                                allocator,
+                                cached_procs,
+                                &filtered_indices,
+                                &filtered_depths,
+                                &filtered_is_lasts,
+                            );
+                        } else {
+                            for (cached_procs, 0..) |proc, i| {
+                                if (show_zombie_parents and !process_commands.containsParentPid(zombie_parents[0..zombie_summary.parent_count], proc.pid)) {
+                                    continue;
+                                }
+
+                                if (filter_len > 0) {
+                                    var pid_buf2: [32]u8 = undefined;
+                                    const pid_str = std.fmt.bufPrint(&pid_buf2, "{d}", .{proc.pid}) catch "";
+                                    var l_name: [64]u8 = undefined;
+                                    const name_len = proc.name().len;
+                                    @memcpy(l_name[0..name_len], proc.name());
+                                    const n_str = l_name[0..name_len];
+                                    for (n_str) |*ch| ch.* = std.ascii.toLower(ch.*);
+
+                                    var l_filter: [32]u8 = undefined;
+                                    @memcpy(l_filter[0..filter_len], filter_str);
+                                    const f_str = l_filter[0..filter_len];
+                                    for (f_str) |*ch| ch.* = std.ascii.toLower(ch.*);
+
+                                    const name_matches = std.mem.indexOf(u8, n_str, f_str) != null;
+                                    const pid_matches = std.mem.indexOf(u8, pid_str, filter_str) != null;
+                                    if (!name_matches and !pid_matches) continue;
+                                }
+                                filtered_indices[filtered_count] = i;
+                                filtered_depths[filtered_count] = 0;
+                                filtered_is_lasts[filtered_count] = 0;
+                                filtered_count += 1;
+                                if (filtered_count >= filtered_indices.len) break;
                             }
-
-                            if (filter_len > 0) {
-                                var pid_buf2: [32]u8 = undefined;
-                                const pid_str = std.fmt.bufPrint(&pid_buf2, "{d}", .{proc.pid}) catch "";
-                                var l_name: [64]u8 = undefined;
-                                const name_len = proc.name().len;
-                                @memcpy(l_name[0..name_len], proc.name());
-                                const n_str = l_name[0..name_len];
-                                for (n_str) |*ch| ch.* = std.ascii.toLower(ch.*);
-
-                                var l_filter: [32]u8 = undefined;
-                                @memcpy(l_filter[0..filter_len], filter_str);
-                                const f_str = l_filter[0..filter_len];
-                                for (f_str) |*ch| ch.* = std.ascii.toLower(ch.*);
-
-                                const name_matches = std.mem.indexOf(u8, n_str, f_str) != null;
-                                const pid_matches = std.mem.indexOf(u8, pid_str, filter_str) != null;
-                                if (!name_matches and !pid_matches) continue;
-                            }
-                            filtered_indices[filtered_count] = i;
-                            filtered_count += 1;
-                            if (filtered_count >= filtered_indices.len) break;
                         }
 
                         if (filtered_count == 0) {
@@ -1013,11 +1029,40 @@ pub fn main() !void {
                             try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.muted }, "{d:5} ", .{proc.pid});
 
                             const name_width: usize = if (procs_box_width > 40) 16 else 8;
-                            if (proc.name().len > name_width) {
-                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s}.. ", .{proc.name()[0 .. name_width - 2]});
+
+                            var prefix_buf: [256]u8 = undefined;
+                            var prefix_len: usize = 0;
+                            var prefix_width: usize = 0;
+                            if (tree_view and filter_len == 0 and !show_zombie_parents) {
+                                const depth = filtered_depths[idx];
+                                const is_last_mask = filtered_is_lasts[idx];
+                                for (0..depth) |d| {
+                                    const d_is_last = (is_last_mask & (@as(u16, 1) << @as(u4, @intCast(d)))) != 0;
+                                    if (d == depth - 1) {
+                                        const branch = if (d_is_last) "└─ " else "├─ ";
+                                        @memcpy(prefix_buf[prefix_len .. prefix_len + branch.len], branch);
+                                        prefix_len += branch.len;
+                                        prefix_width += 3;
+                                    } else {
+                                        const branch = if (d_is_last) "   " else "│  ";
+                                        @memcpy(prefix_buf[prefix_len .. prefix_len + branch.len], branch);
+                                        prefix_len += branch.len;
+                                        prefix_width += 3;
+                                    }
+                                }
+                            }
+
+                            const total_name_width = prefix_width + proc.name().len;
+                            if (total_name_width > name_width) {
+                                const max_proc_len = if (name_width > prefix_width + 2) name_width - prefix_width - 2 else 0;
+                                if (max_proc_len > 0) {
+                                    try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s}{s}.. ", .{ prefix_buf[0..prefix_len], proc.name()[0..max_proc_len] });
+                                } else {
+                                    try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s}.. ", .{proc.name()[0..@min(proc.name().len, name_width - 2)]});
+                                }
                             } else {
-                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s} ", .{proc.name()});
-                                for (proc.name().len..name_width) |_| try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg } else .{}, " ", .{});
+                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s}{s} ", .{ prefix_buf[0..prefix_len], proc.name() });
+                                for (total_name_width..name_width) |_| try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg } else .{}, " ", .{});
                             }
 
                             if (current_tab == 2) {
@@ -1045,7 +1090,7 @@ pub fn main() !void {
                 // Help Overlay
                 if (show_help) {
                     const help_width = 48;
-                    const help_height = 14;
+                    const help_height = 15;
                     const h_x = if (size.width > help_width) (size.width - help_width) / 2 else 1;
                     const h_y = if (size.height > help_height) (size.height - help_height) / 2 else 1;
 
@@ -1069,34 +1114,38 @@ pub fn main() !void {
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Sort by CPU/Mem/PID/Name", .{});
 
                     try app_tui.moveCursor(h_x + 2, h_y + 5);
+                    try app_tui.printStyled(.{ .fg = theme.text }, "v:            ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Toggle Tree View", .{});
+
+                    try app_tui.moveCursor(h_x + 2, h_y + 6);
                     try app_tui.printStyled(.{ .fg = theme.text }, "/:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Filter processes", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 6);
+                    try app_tui.moveCursor(h_x + 2, h_y + 7);
                     try app_tui.printStyled(.{ .fg = theme.text }, "Enter:        ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "View threads of selected", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 7);
+                    try app_tui.moveCursor(h_x + 2, h_y + 8);
                     try app_tui.printStyled(.{ .fg = theme.text }, "t:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Send SIGTERM to selected", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 8);
+                    try app_tui.moveCursor(h_x + 2, h_y + 9);
                     try app_tui.printStyled(.{ .fg = theme.text }, "K:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Send SIGKILL to selected", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 9);
+                    try app_tui.moveCursor(h_x + 2, h_y + 10);
                     try app_tui.printStyled(.{ .fg = theme.text }, "q:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Quit", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 10);
+                    try app_tui.moveCursor(h_x + 2, h_y + 11);
                     try app_tui.printStyled(.{ .fg = theme.text }, ":             ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Command mode (show zombie)", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 11);
+                    try app_tui.moveCursor(h_x + 2, h_y + 12);
                     try app_tui.printStyled(.{ .fg = theme.text }, "Repo: ", .{});
                     try app_tui.writeStyledHyperlink(.{ .fg = theme.tab_active, .underline = true }, repo_url, repo_label);
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 12);
+                    try app_tui.moveCursor(h_x + 2, h_y + 13);
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Press any key to close...", .{});
                 }
 
@@ -1307,6 +1356,12 @@ pub fn main() !void {
                             'n' => {
                                 if (!thread_view) {
                                     sort_by = .name;
+                                }
+                                handled = true;
+                            },
+                            'v' => {
+                                if (!thread_view) {
+                                    tree_view = !tree_view;
                                 }
                                 handled = true;
                             },
