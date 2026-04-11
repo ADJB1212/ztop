@@ -4,8 +4,12 @@ const SysInfo = @import("ztop").sysinfo.SysInfo;
 test "SysInfo initializes and fetches CPU stats" {
     var sys_info = SysInfo.init();
     const cpu = sys_info.getCpuStats();
+    const topology = sys_info.getCpuTopology();
     try std.testing.expect(cpu.cores > 0);
     try std.testing.expect(cpu.usage_percent >= 0.0);
+    try std.testing.expect(topology.logical_cores.len > 0);
+    try std.testing.expect(topology.physical_cores > 0);
+    try std.testing.expect(topology.logical_cores.len >= topology.physical_cores);
 }
 
 test "SysInfo fetches Mem stats" {

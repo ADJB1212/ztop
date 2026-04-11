@@ -12,12 +12,15 @@ const c = @cImport({
 });
 
 const CpuStats = common.CpuStats;
+const CpuTopology = common.CpuTopology;
+const CpuLogicalCore = common.CpuLogicalCore;
 const MemStats = common.MemStats;
 const DiskStats = common.DiskStats;
 const NetStats = common.NetStats;
 const ThermalStats = common.ThermalStats;
 const BatteryStats = common.BatteryStats;
 const BatteryStatus = common.BatteryStatus;
+const CpuEfficiencyClass = common.CpuEfficiencyClass;
 const ProcStats = common.ProcStats;
 const ProcCpuEntry = common.ProcCpuEntry;
 const MAX_CORES = common.MAX_CORES;
@@ -44,6 +47,7 @@ extern "c" fn proc_listallpids(buffer: ?[*]c_int, bufsize: c_int) c_int;
 extern "c" fn proc_pidinfo(pid: c_int, flavor: c_int, arg: u64, buffer: ?*anyopaque, bufsize: c_int) c_int;
 extern "c" fn proc_pidfdinfo(pid: c_int, fd: c_int, flavor: c_int, buffer: ?*anyopaque, bufsize: c_int) c_int;
 extern "c" fn proc_name(pid: c_int, buffer: [*]u8, bufsize: u32) c_int;
+extern "c" fn proc_pidpath(pid: c_int, buffer: [*]u8, bufsize: u32) c_int;
 extern "c" fn mach_absolute_time() u64;
 extern "c" fn mach_timebase_info(info: *MachTimebaseInfo) kern_return_t;
 extern "c" fn host_processor_info(host: mach_port_t, flavor: c_int, out_count: *u32, out_info: *[*]c_int, out_info_cnt: *u32) kern_return_t;
@@ -192,6 +196,13 @@ pub const SysInfo = struct {
     prev_core_ticks: [MAX_CORES][4]u64 = std.mem.zeroes([MAX_CORES][4]u64),
     core_usage: [MAX_CORES]f32 = [_]f32{0} ** MAX_CORES,
     ncpu: u32,
+    topology_cores: [MAX_CORES]CpuLogicalCore = undefined,
+    topology_count: usize = 0,
+    topology_physical_cores: u16 = 0,
+    topology_package_count: u16 = 1,
+    topology_numa_count: u16 = 0,
+    topology_has_cache_groups: bool = false,
+    topology_has_efficiency_classes: bool = false,
     total_mem: u64,
     page_size: usize,
     host_port: mach_port_t,
@@ -226,7 +237,7 @@ pub const SysInfo = struct {
 
         const now = std.time.milliTimestamp();
 
-        return .{
+        var self: SysInfo = .{
             .ncpu = if (ncpu > 0) @min(ncpu, @as(u32, MAX_CORES)) else 1,
             .total_mem = total_mem,
             .page_size = if (pg_size > 0) pg_size else 4096,
@@ -236,6 +247,49 @@ pub const SysInfo = struct {
             .prev_disk_ms = now,
             .prev_net_ms = now,
         };
+        self.loadTopology();
+        return self;
+    }
+
+    fn loadTopology(self: *SysInfo) void {
+        readCpuTopology(self) catch self.synthesizeTopology(@intCast(self.ncpu));
+    }
+
+    fn synthesizeTopology(self: *SysInfo, logical_count: usize) void {
+        const total_logical = @min(logical_count, MAX_CORES);
+        const total_physical = @min(@as(usize, @intCast(readSysctlNumber(u32, "hw.physicalcpu") orelse @as(u32, @intCast(total_logical)))), total_logical);
+        const package_count = @max(readSysctlNumber(u16, "hw.packages") orelse 1, 1);
+        const threads_per_core: usize = if (total_physical > 0) @max(std.math.divCeil(usize, total_logical, total_physical) catch 1, 1) else 1;
+        const physical_per_package: usize = if (package_count > 0) @max(std.math.divCeil(usize, total_physical, package_count) catch total_physical, 1) else total_physical;
+
+        self.topology_count = total_logical;
+        self.topology_physical_cores = @intCast(@max(total_physical, 1));
+        self.topology_package_count = package_count;
+        self.topology_numa_count = 0;
+        self.topology_has_cache_groups = package_count > 1;
+        self.topology_has_efficiency_classes = false;
+
+        for (0..total_logical) |logical_id| {
+            const physical_id: usize = if (total_physical > 0) logical_id % total_physical else logical_id;
+            const package_id: u16 = if (total_physical > 0 and package_count > 1)
+                @intCast(@min(physical_id / physical_per_package, package_count - 1))
+            else
+                0;
+            const thread_index: usize = if (total_physical > 0) logical_id / total_physical else 0;
+
+            self.topology_cores[logical_id] = .{
+                .logical_id = @intCast(logical_id),
+                .physical_id = @intCast(physical_id),
+                .package_id = package_id,
+                .numa_node_id = -1,
+                .thread_index = @intCast(thread_index),
+                .threads_per_core = @intCast(threads_per_core),
+                .shared_cache_group_id = if (package_count > 1) @intCast(package_id) else -1,
+                .shared_cache_level = if (package_count > 1) 3 else 0,
+                .shared_cache_logical_count = if (package_count > 1 and total_logical > 0) @intCast(total_logical / package_count) else 0,
+                .efficiency_class = .unknown,
+            };
+        }
     }
 
     fn usageFromTicks(prev_ticks: *[4]u64, user: u64, system: u64, idle: u64, nice: u64) f32 {
@@ -270,6 +324,9 @@ pub const SysInfo = struct {
         const nice: u64 = cpu_load.ticks[3];
 
         const usage = usageFromTicks(&self.prev_ticks, user, system, idle, nice);
+        if (self.topology_count == 0 or self.topology_count != self.ncpu) {
+            self.loadTopology();
+        }
 
         var processor_count: u32 = 0;
         var processor_info: [*]c_int = undefined;
@@ -313,6 +370,19 @@ pub const SysInfo = struct {
             .usage_percent = usage,
             .cores = @intCast(core_count),
             .per_core_usage = self.core_usage[0..core_count],
+        };
+    }
+
+    pub fn getCpuTopology(self: *const SysInfo) CpuTopology {
+        return .{
+            .logical_cores = self.topology_cores[0..self.topology_count],
+            .physical_cores = self.topology_physical_cores,
+            .package_count = self.topology_package_count,
+            .numa_node_count = self.topology_numa_count,
+            .has_numa = false,
+            .has_smt = self.topology_physical_cores > 0 and self.topology_count > self.topology_physical_cores,
+            .has_cache_groups = self.topology_has_cache_groups,
+            .has_efficiency_classes = self.topology_has_efficiency_classes,
         };
     }
 
@@ -549,6 +619,8 @@ pub const SysInfo = struct {
                 .state = state,
             };
             @memcpy(proc_stat.name_buf[0..name_len], nbuf[0..name_len]);
+            const launch_cmd = try readLaunchCommand(raw_pid, &proc_stat.launch_cmd_buf);
+            proc_stat.launch_cmd_len = @intCast(launch_cmd.len);
 
             try result.append(allocator, proc_stat);
         }
@@ -677,6 +749,180 @@ pub const SysInfo = struct {
         return result.toOwnedSlice(allocator);
     }
 };
+
+fn readCpuTopology(self: *SysInfo) !void {
+    const total_logical = @min(@as(usize, @intCast(readSysctlNumber(u32, "hw.logicalcpu") orelse return error.UnexpectedCpuTopology)), MAX_CORES);
+    const total_physical = @min(@as(usize, @intCast(readSysctlNumber(u32, "hw.physicalcpu") orelse return error.UnexpectedCpuTopology)), total_logical);
+    const perflevel_count = readSysctlNumber(u32, "hw.nperflevels") orelse 0;
+    if (perflevel_count == 0 or total_logical == 0 or total_physical == 0) {
+        return error.UnexpectedCpuTopology;
+    }
+
+    const package_count = @max(readSysctlNumber(u16, "hw.packages") orelse 1, 1);
+
+    var logical_offset: usize = 0;
+    var physical_offset: usize = 0;
+    var saw_perf = false;
+    var saw_eff = false;
+    var saw_balanced = false;
+    var saw_unknown = false;
+
+    for (0..perflevel_count) |perflevel| {
+        var name_buf: [64]u8 = undefined;
+        const perf_logical = @as(usize, @intCast(readPerfLevelNumber(u32, perflevel, "logicalcpu") orelse 0));
+        const perf_physical = @as(usize, @intCast(readPerfLevelNumber(u32, perflevel, "physicalcpu") orelse 0));
+        if (perf_logical == 0 or perf_physical == 0) continue;
+
+        if (logical_offset + perf_logical > total_logical or physical_offset + perf_physical > total_physical) {
+            return error.UnexpectedCpuTopology;
+        }
+
+        const perf_class = efficiencyClassFromName(readPerfLevelString(perflevel, "name", &name_buf) orelse "");
+        markEfficiencyClass(perf_class, &saw_perf, &saw_eff, &saw_balanced, &saw_unknown);
+
+        const threads_per_core = @max(std.math.divCeil(usize, perf_logical, perf_physical) catch 1, 1);
+        const cpus_per_l2 = @as(usize, @intCast(readPerfLevelNumber(u32, perflevel, "cpusperl2") orelse @as(u32, @intCast(perf_physical))));
+        const cores_per_cache = @max(@min(cpus_per_l2, perf_physical), 1);
+
+        for (0..perf_physical) |physical_local| {
+            const cluster_core_start = (physical_local / cores_per_cache) * cores_per_cache;
+            const cluster_core_count = @min(cores_per_cache, perf_physical - cluster_core_start);
+            const cluster_first_logical = logical_offset + cluster_core_start * threads_per_core;
+            const shared_count = cluster_core_count * threads_per_core;
+
+            for (0..threads_per_core) |thread_index| {
+                const logical_local = physical_local + thread_index * perf_physical;
+                if (logical_local >= perf_logical) break;
+
+                const global_logical = logical_offset + logical_local;
+                self.topology_cores[global_logical] = .{
+                    .logical_id = @intCast(global_logical),
+                    .physical_id = @intCast(physical_offset + physical_local),
+                    .package_id = 0,
+                    .numa_node_id = -1,
+                    .thread_index = @intCast(thread_index),
+                    .threads_per_core = @intCast(threads_per_core),
+                    .shared_cache_group_id = @intCast(cluster_first_logical),
+                    .shared_cache_level = 2,
+                    .shared_cache_logical_count = @intCast(shared_count),
+                    .efficiency_class = perf_class,
+                };
+            }
+        }
+
+        logical_offset += perf_logical;
+        physical_offset += perf_physical;
+    }
+
+    if (logical_offset != total_logical or physical_offset != total_physical) {
+        return error.UnexpectedCpuTopology;
+    }
+
+    assignPackagesEvenly(self.topology_cores[0..logical_offset], total_physical, package_count);
+
+    self.topology_count = logical_offset;
+    self.topology_physical_cores = @intCast(total_physical);
+    self.topology_package_count = package_count;
+    self.topology_numa_count = 0;
+    self.topology_has_cache_groups = countUniqueCacheGroups(self.topology_cores[0..logical_offset]) > 1;
+    self.topology_has_efficiency_classes = countSeenClasses(saw_perf, saw_eff, saw_balanced, saw_unknown) > 1;
+}
+
+fn assignPackagesEvenly(logical_cores: []CpuLogicalCore, total_physical: usize, package_count: u16) void {
+    if (package_count <= 1 or total_physical == 0) return;
+
+    const physical_per_package = @max(std.math.divCeil(usize, total_physical, package_count) catch total_physical, 1);
+    for (logical_cores) |*logical_core| {
+        logical_core.package_id = @intCast(@min(@as(usize, logical_core.physical_id) / physical_per_package, package_count - 1));
+    }
+}
+
+fn countUniqueCacheGroups(logical_cores: []const CpuLogicalCore) usize {
+    var groups: [MAX_CORES]struct { level: u8, group_id: i16 } = undefined;
+    var group_count: usize = 0;
+
+    for (logical_cores) |logical_core| {
+        if (logical_core.shared_cache_group_id < 0 or logical_core.shared_cache_level == 0) continue;
+
+        var found = false;
+        for (groups[0..group_count]) |group| {
+            if (group.level == logical_core.shared_cache_level and group.group_id == logical_core.shared_cache_group_id) {
+                found = true;
+                break;
+            }
+        }
+        if (!found and group_count < groups.len) {
+            groups[group_count] = .{
+                .level = logical_core.shared_cache_level,
+                .group_id = logical_core.shared_cache_group_id,
+            };
+            group_count += 1;
+        }
+    }
+
+    return group_count;
+}
+
+fn countSeenClasses(saw_perf: bool, saw_eff: bool, saw_balanced: bool, saw_unknown: bool) usize {
+    var count: usize = 0;
+    if (saw_perf) count += 1;
+    if (saw_eff) count += 1;
+    if (saw_balanced) count += 1;
+    if (saw_unknown) count += 1;
+    return count;
+}
+
+fn markEfficiencyClass(class: CpuEfficiencyClass, saw_perf: *bool, saw_eff: *bool, saw_balanced: *bool, saw_unknown: *bool) void {
+    switch (class) {
+        .performance => saw_perf.* = true,
+        .efficiency => saw_eff.* = true,
+        .balanced => saw_balanced.* = true,
+        .unknown => saw_unknown.* = true,
+    }
+}
+
+fn efficiencyClassFromName(name: []const u8) CpuEfficiencyClass {
+    var lowered_buf: [64]u8 = undefined;
+    const lower_len = @min(name.len, lowered_buf.len);
+    for (name[0..lower_len], 0..) |ch, idx| {
+        lowered_buf[idx] = std.ascii.toLower(ch);
+    }
+    const lowered = lowered_buf[0..lower_len];
+
+    if (std.mem.indexOf(u8, lowered, "performance") != null) return .performance;
+    if (std.mem.indexOf(u8, lowered, "efficiency") != null) return .efficiency;
+    if (std.mem.indexOf(u8, lowered, "balanced") != null) return .balanced;
+    return .unknown;
+}
+
+fn readPerfLevelNumber(comptime T: type, perflevel: usize, field: []const u8) ?T {
+    var name_buf: [64]u8 = undefined;
+    const sysctl_name = std.fmt.bufPrintZ(&name_buf, "hw.perflevel{d}.{s}", .{ perflevel, field }) catch return null;
+    return readSysctlNumber(T, sysctl_name);
+}
+
+fn readPerfLevelString(perflevel: usize, field: []const u8, buf: []u8) ?[]const u8 {
+    var name_buf: [64]u8 = undefined;
+    const sysctl_name = std.fmt.bufPrintZ(&name_buf, "hw.perflevel{d}.{s}", .{ perflevel, field }) catch return null;
+    return readSysctlString(sysctl_name, buf);
+}
+
+fn readSysctlNumber(comptime T: type, name: [:0]const u8) ?T {
+    var value: T = 0;
+    var size: usize = @sizeOf(T);
+    if (sysctlbyname(name.ptr, @ptrCast(&value), &size, null, 0) != 0) return null;
+    if (size < @sizeOf(T)) return null;
+    return value;
+}
+
+fn readSysctlString(name: [:0]const u8, buf: []u8) ?[]const u8 {
+    var size = buf.len;
+    if (sysctlbyname(name.ptr, @ptrCast(buf.ptr), &size, null, 0) != 0) return null;
+    if (size == 0) return null;
+
+    const used = if (size > 0 and buf[@min(size, buf.len) - 1] == 0) @min(size, buf.len) - 1 else @min(size, buf.len);
+    return buf[0..used];
+}
 
 fn parseSocketFdInfo(pid: u32, process_name: [64]u8, name_len: u8, socket_info: *const c.struct_socket_fdinfo) ?common.NetConnection {
     const kind = socket_info.psi.soi_kind;
@@ -856,6 +1102,69 @@ fn readNetTotals() !NetTotals {
     }
 
     return .{ .rx_bytes = rx, .tx_bytes = tx };
+}
+
+fn readLaunchCommand(pid: c_int, dest: []u8) ![]const u8 {
+    var argmax: usize = 0;
+    var argmax_len: usize = @sizeOf(usize);
+    if (sysctlbyname("kern.argmax", &argmax, &argmax_len, null, 0) == 0 and argmax > @sizeOf(c_int) and argmax <= 64 * 1024) {
+        const buf = try std.heap.page_allocator.alloc(u8, argmax);
+        defer std.heap.page_allocator.free(buf);
+
+        var mib = [_]c_int{ c.CTL_KERN, c.KERN_PROCARGS2, pid };
+        var len = buf.len;
+        if (c.sysctl(&mib, mib.len, buf.ptr, &len, null, 0) == 0) {
+            if (parseKernProcArgs(buf[0..len], dest)) |cmd| return cmd;
+        }
+    }
+
+    var path_buf: [std.fs.max_path_bytes]u8 = std.mem.zeroes([std.fs.max_path_bytes]u8);
+    const path_len = proc_pidpath(pid, &path_buf, @intCast(path_buf.len));
+    if (path_len > 0) {
+        const bounded_len: usize = @intCast(@min(path_len, dest.len));
+        @memcpy(dest[0..bounded_len], path_buf[0..bounded_len]);
+        return dest[0..bounded_len];
+    }
+
+    return dest[0..0];
+}
+
+fn parseKernProcArgs(raw: []const u8, dest: []u8) ?[]const u8 {
+    if (raw.len <= @sizeOf(c_int)) return null;
+
+    const argc = std.mem.readInt(c_int, raw[0..@sizeOf(c_int)], @import("builtin").cpu.arch.endian());
+    if (argc <= 0) return null;
+
+    var offset: usize = @sizeOf(c_int);
+    while (offset < raw.len and raw[offset] != 0) : (offset += 1) {}
+    while (offset < raw.len and raw[offset] == 0) : (offset += 1) {}
+
+    var write_idx: usize = 0;
+    var args_seen: c_int = 0;
+    while (offset < raw.len and args_seen < argc) : (args_seen += 1) {
+        const arg_start = offset;
+        while (offset < raw.len and raw[offset] != 0) : (offset += 1) {}
+        const arg = raw[arg_start..offset];
+        if (arg.len > 0) {
+            if (write_idx > 0 and write_idx < dest.len) {
+                dest[write_idx] = ' ';
+                write_idx += 1;
+            }
+
+            const available = dest.len -| write_idx;
+            if (available == 0) break;
+
+            const copy_len = @min(arg.len, available);
+            @memcpy(dest[write_idx .. write_idx + copy_len], arg[0..copy_len]);
+            write_idx += copy_len;
+            if (copy_len < arg.len) break;
+        }
+
+        while (offset < raw.len and raw[offset] == 0) : (offset += 1) {}
+    }
+
+    if (write_idx == 0) return null;
+    return dest[0..write_idx];
 }
 
 fn readDiskTotals() !DiskTotals {

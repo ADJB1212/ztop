@@ -2,12 +2,15 @@ const std = @import("std");
 const common = @import("common.zig");
 
 const CpuStats = common.CpuStats;
+const CpuTopology = common.CpuTopology;
+const CpuLogicalCore = common.CpuLogicalCore;
 const MemStats = common.MemStats;
 const DiskStats = common.DiskStats;
 const NetStats = common.NetStats;
 const ThermalStats = common.ThermalStats;
 const BatteryStats = common.BatteryStats;
 const BatteryStatus = common.BatteryStatus;
+const CpuEfficiencyClass = common.CpuEfficiencyClass;
 const ProcStats = common.ProcStats;
 const ProcCpuEntry = common.ProcCpuEntry;
 const MAX_CORES = common.MAX_CORES;
@@ -32,6 +35,12 @@ pub const ParsedProcStat = struct {
     num_threads: u32,
 };
 
+pub const CpuListInfo = struct {
+    count: usize = 0,
+    first: ?u16 = null,
+    target_index: ?usize = null,
+};
+
 const MAX_THREADS = common.MAX_THREADS;
 
 pub const SysInfo = struct {
@@ -39,6 +48,13 @@ pub const SysInfo = struct {
     prev_core_ticks: [MAX_CORES]CpuTick = std.mem.zeroes([MAX_CORES]CpuTick),
     core_usage: [MAX_CORES]f32 = [_]f32{0} ** MAX_CORES,
     ncpu: u32,
+    topology_cores: [MAX_CORES]CpuLogicalCore = undefined,
+    topology_count: usize = 0,
+    topology_physical_cores: u16 = 0,
+    topology_package_count: u16 = 1,
+    topology_numa_count: u16 = 0,
+    topology_has_numa: bool = false,
+    topology_has_cache_groups: bool = false,
     total_mem: u64,
     page_size: usize,
     prev_procs: [MAX_PROCS]ProcCpuEntry = undefined,
@@ -59,7 +75,7 @@ pub const SysInfo = struct {
     pub fn init() SysInfo {
         const initial_cores = @min(std.Thread.getCpuCount() catch 1, MAX_CORES);
         const now = std.time.milliTimestamp();
-        return .{
+        var self: SysInfo = .{
             .ncpu = @intCast(initial_cores),
             .total_mem = readMemInfoTotal() catch 0,
             .page_size = std.heap.pageSize(),
@@ -67,6 +83,37 @@ pub const SysInfo = struct {
             .prev_disk_ms = now,
             .prev_net_ms = now,
         };
+        self.loadTopology();
+        return self;
+    }
+
+    fn loadTopology(self: *SysInfo) void {
+        readCpuTopology(self) catch self.synthesizeTopology(@intCast(self.ncpu));
+    }
+
+    fn synthesizeTopology(self: *SysInfo, logical_count: usize) void {
+        const bounded_logical = @min(logical_count, MAX_CORES);
+        self.topology_count = bounded_logical;
+        self.topology_physical_cores = @intCast(bounded_logical);
+        self.topology_package_count = 1;
+        self.topology_numa_count = 0;
+        self.topology_has_numa = false;
+        self.topology_has_cache_groups = false;
+
+        for (0..bounded_logical) |logical_id| {
+            self.topology_cores[logical_id] = .{
+                .logical_id = @intCast(logical_id),
+                .physical_id = @intCast(logical_id),
+                .package_id = 0,
+                .numa_node_id = -1,
+                .thread_index = 0,
+                .threads_per_core = 1,
+                .shared_cache_group_id = -1,
+                .shared_cache_level = 0,
+                .shared_cache_logical_count = 0,
+                .efficiency_class = .unknown,
+            };
+        }
     }
 
     fn usageFromTick(prev_tick: *CpuTick, current_tick: CpuTick) f32 {
@@ -89,6 +136,9 @@ pub const SysInfo = struct {
         const usage = usageFromTick(&self.prev_cpu_tick, snapshot.overall);
         const core_count = if (snapshot.core_count > 0) snapshot.core_count else @as(usize, self.ncpu);
         self.ncpu = @intCast(core_count);
+        if (self.topology_count == 0 or self.topology_count != core_count) {
+            self.loadTopology();
+        }
 
         for (0..snapshot.core_count) |i| {
             self.core_usage[i] = usageFromTick(&self.prev_core_ticks[i], snapshot.cores[i]);
@@ -98,6 +148,19 @@ pub const SysInfo = struct {
             .usage_percent = usage,
             .cores = self.ncpu,
             .per_core_usage = self.core_usage[0..snapshot.core_count],
+        };
+    }
+
+    pub fn getCpuTopology(self: *const SysInfo) CpuTopology {
+        return .{
+            .logical_cores = self.topology_cores[0..self.topology_count],
+            .physical_cores = self.topology_physical_cores,
+            .package_count = self.topology_package_count,
+            .numa_node_count = self.topology_numa_count,
+            .has_numa = self.topology_has_numa,
+            .has_smt = self.topology_physical_cores > 0 and self.topology_count > self.topology_physical_cores,
+            .has_cache_groups = self.topology_has_cache_groups,
+            .has_efficiency_classes = false,
         };
     }
 
@@ -298,6 +361,13 @@ pub const SysInfo = struct {
                 .state = proc_info.state,
             };
             @memcpy(proc_stat.name_buf[0..name.len], name);
+
+            var cmdline_buf: [4096]u8 = undefined;
+            if (readDirFile(&pid_dir, "cmdline", &cmdline_buf)) |cmdline_contents| {
+                const launch_cmd = compactLinuxCmdline(cmdline_contents, &proc_stat.launch_cmd_buf);
+                proc_stat.launch_cmd_len = @intCast(launch_cmd.len);
+            } else |_| {}
+
             try result.append(allocator, proc_stat);
         }
 
@@ -401,6 +471,257 @@ pub const SysInfo = struct {
     }
 };
 
+const LinuxSharedCacheInfo = struct {
+    level: u8 = 0,
+    group_id: i16 = -1,
+    shared_logical_count: u16 = 0,
+};
+
+const PhysicalCoreKey = struct {
+    package_id: u16,
+    core_id: i32,
+};
+
+const CacheGroupKey = struct {
+    level: u8,
+    group_id: i16,
+};
+
+fn readCpuTopology(self: *SysInfo) !void {
+    var sys_cpu_dir = try std.fs.openDirAbsolute("/sys/devices/system/cpu", .{ .iterate = true });
+    defer sys_cpu_dir.close();
+
+    var logical_ids: [MAX_CORES]u16 = undefined;
+    var logical_count: usize = 0;
+
+    var iter = sys_cpu_dir.iterate();
+    while (try iter.next()) |entry| {
+        if (logical_count >= MAX_CORES) break;
+        if (!std.mem.startsWith(u8, entry.name, "cpu")) continue;
+
+        const suffix = entry.name[3..];
+        if (suffix.len == 0 or !std.ascii.isDigit(suffix[0])) continue;
+
+        logical_ids[logical_count] = std.fmt.parseInt(u16, suffix, 10) catch continue;
+        logical_count += 1;
+    }
+
+    if (logical_count == 0) return error.UnexpectedCpuTopology;
+
+    std.mem.sort(u16, logical_ids[0..logical_count], {}, struct {
+        fn lessThan(_: void, a: u16, b: u16) bool {
+            return a < b;
+        }
+    }.lessThan);
+
+    var physical_keys: [MAX_CORES]PhysicalCoreKey = undefined;
+    var physical_count: usize = 0;
+
+    var package_ids: [MAX_CORES]u16 = undefined;
+    var package_count: usize = 0;
+
+    var numa_ids: [MAX_CORES]i16 = undefined;
+    var numa_count: usize = 0;
+
+    var cache_keys: [MAX_CORES]CacheGroupKey = undefined;
+    var cache_count: usize = 0;
+
+    var resolved_count: usize = 0;
+    for (logical_ids[0..logical_count]) |logical_id| {
+        var cpu_name_buf: [16]u8 = undefined;
+        const cpu_name = std.fmt.bufPrint(&cpu_name_buf, "cpu{d}", .{logical_id}) catch continue;
+
+        var cpu_dir = sys_cpu_dir.openDir(cpu_name, .{ .iterate = true }) catch continue;
+        defer cpu_dir.close();
+
+        var topo_dir = cpu_dir.openDir("topology", .{}) catch continue;
+        defer topo_dir.close();
+
+        const core_id = readIntFromDir(&topo_dir, i32, "core_id") catch @as(i32, @intCast(logical_id));
+        const package_id = readIntFromDir(&topo_dir, u16, "physical_package_id") catch 0;
+
+        var siblings_buf: [128]u8 = undefined;
+        const siblings_info = if (readDirFile(&topo_dir, "thread_siblings_list", &siblings_buf)) |contents|
+            parseCpuListInfo(std.mem.trim(u8, contents, " \t\r\n"), logical_id)
+        else |_|
+            CpuListInfo{ .count = 1, .first = logical_id, .target_index = 0 };
+
+        const cache_info = readLinuxSharedCache(&cpu_dir) catch .{};
+        const numa_node_id = readCpuNumaNode(&cpu_dir) catch -1;
+        const physical_id = findOrAppendPhysicalId(&physical_keys, &physical_count, package_id, core_id);
+
+        self.topology_cores[resolved_count] = .{
+            .logical_id = logical_id,
+            .physical_id = physical_id,
+            .package_id = package_id,
+            .numa_node_id = numa_node_id,
+            .thread_index = @intCast(siblings_info.target_index orelse 0),
+            .threads_per_core = @intCast(@max(siblings_info.count, 1)),
+            .shared_cache_group_id = cache_info.group_id,
+            .shared_cache_level = cache_info.level,
+            .shared_cache_logical_count = cache_info.shared_logical_count,
+            .efficiency_class = .unknown,
+        };
+        resolved_count += 1;
+
+        appendUniqueU16(&package_ids, &package_count, package_id);
+        if (numa_node_id >= 0) appendUniqueI16(&numa_ids, &numa_count, numa_node_id);
+        if (cache_info.group_id >= 0 and cache_info.level > 0) {
+            appendUniqueCacheGroup(&cache_keys, &cache_count, .{
+                .level = cache_info.level,
+                .group_id = cache_info.group_id,
+            });
+        }
+    }
+
+    if (resolved_count == 0) return error.UnexpectedCpuTopology;
+
+    self.topology_count = resolved_count;
+    self.topology_physical_cores = @intCast(@max(physical_count, 1));
+    self.topology_package_count = @intCast(@max(package_count, 1));
+    self.topology_numa_count = @intCast(numa_count);
+    self.topology_has_numa = numa_count > 1;
+    self.topology_has_cache_groups = cache_count > 1;
+}
+
+fn readLinuxSharedCache(cpu_dir: *std.fs.Dir) !LinuxSharedCacheInfo {
+    var cache_dir = try cpu_dir.openDir("cache", .{ .iterate = true });
+    defer cache_dir.close();
+
+    var best = LinuxSharedCacheInfo{};
+    var iter = cache_dir.iterate();
+    while (try iter.next()) |entry| {
+        if (entry.kind != .directory) continue;
+        if (!std.mem.startsWith(u8, entry.name, "index")) continue;
+
+        var index_dir = cache_dir.openDir(entry.name, .{}) catch continue;
+        defer index_dir.close();
+
+        const level = readIntFromDir(&index_dir, u8, "level") catch continue;
+
+        var type_buf: [32]u8 = undefined;
+        const type_str = std.mem.trim(u8, readDirFile(&index_dir, "type", &type_buf) catch continue, " \t\r\n");
+        if (!std.mem.eql(u8, type_str, "Unified") and !std.mem.eql(u8, type_str, "Data")) continue;
+
+        var shared_buf: [128]u8 = undefined;
+        const shared_list = std.mem.trim(u8, readDirFile(&index_dir, "shared_cpu_list", &shared_buf) catch continue, " \t\r\n");
+        const shared_info = parseCpuListInfo(shared_list, null);
+        if (shared_info.count == 0 or shared_info.first == null) continue;
+
+        if (level > best.level or (level == best.level and shared_info.count >= best.shared_logical_count)) {
+            best = .{
+                .level = level,
+                .group_id = @intCast(shared_info.first.?),
+                .shared_logical_count = @intCast(shared_info.count),
+            };
+        }
+    }
+
+    if (best.level == 0) return error.SharedCacheUnavailable;
+    return best;
+}
+
+fn readCpuNumaNode(cpu_dir: *std.fs.Dir) !i16 {
+    var iter = cpu_dir.iterate();
+    while (try iter.next()) |entry| {
+        if (!std.mem.startsWith(u8, entry.name, "node")) continue;
+        const suffix = entry.name[4..];
+        if (suffix.len == 0) continue;
+        return std.fmt.parseInt(i16, suffix, 10);
+    }
+    return error.NumaNodeUnavailable;
+}
+
+fn readIntFromDir(dir: *std.fs.Dir, comptime T: type, sub_path: []const u8) !T {
+    var buf: [64]u8 = undefined;
+    const contents = try readDirFile(dir, sub_path, &buf);
+    return std.fmt.parseInt(T, std.mem.trim(u8, contents, " \t\r\n"), 10);
+}
+
+fn appendUniqueU16(items: *[MAX_CORES]u16, count: *usize, value: u16) void {
+    for (items[0..count.*]) |existing| {
+        if (existing == value) return;
+    }
+    if (count.* < items.len) {
+        items[count.*] = value;
+        count.* += 1;
+    }
+}
+
+fn appendUniqueI16(items: *[MAX_CORES]i16, count: *usize, value: i16) void {
+    for (items[0..count.*]) |existing| {
+        if (existing == value) return;
+    }
+    if (count.* < items.len) {
+        items[count.*] = value;
+        count.* += 1;
+    }
+}
+
+fn appendUniqueCacheGroup(items: *[MAX_CORES]CacheGroupKey, count: *usize, value: CacheGroupKey) void {
+    for (items[0..count.*]) |existing| {
+        if (existing.level == value.level and existing.group_id == value.group_id) return;
+    }
+    if (count.* < items.len) {
+        items[count.*] = value;
+        count.* += 1;
+    }
+}
+
+fn findOrAppendPhysicalId(keys: *[MAX_CORES]PhysicalCoreKey, count: *usize, package_id: u16, core_id: i32) u16 {
+    for (keys[0..count.*], 0..) |existing, idx| {
+        if (existing.package_id == package_id and existing.core_id == core_id) {
+            return @intCast(idx);
+        }
+    }
+
+    if (count.* < keys.len) {
+        keys[count.*] = .{ .package_id = package_id, .core_id = core_id };
+        count.* += 1;
+        return @intCast(count.* - 1);
+    }
+
+    return 0;
+}
+
+pub fn parseCpuListInfo(list: []const u8, target: ?u16) CpuListInfo {
+    var info = CpuListInfo{};
+    var parts = std.mem.splitScalar(u8, std.mem.trim(u8, list, " \t\r\n"), ',');
+
+    while (parts.next()) |part_raw| {
+        const part = std.mem.trim(u8, part_raw, " \t\r\n");
+        if (part.len == 0) continue;
+
+        if (std.mem.indexOfScalar(u8, part, '-')) |dash| {
+            const start = std.fmt.parseInt(u16, std.mem.trim(u8, part[0..dash], " \t"), 10) catch continue;
+            const end = std.fmt.parseInt(u16, std.mem.trim(u8, part[dash + 1 ..], " \t"), 10) catch continue;
+            if (end < start) continue;
+
+            var value = start;
+            while (true) {
+                recordCpuListValue(&info, value, target);
+                if (value == end) break;
+                value += 1;
+            }
+        } else {
+            const value = std.fmt.parseInt(u16, part, 10) catch continue;
+            recordCpuListValue(&info, value, target);
+        }
+    }
+
+    return info;
+}
+
+fn recordCpuListValue(info: *CpuListInfo, value: u16, target: ?u16) void {
+    if (info.first == null) info.first = value;
+    if (target) |target_value| {
+        if (info.target_index == null and value == target_value) {
+            info.target_index = info.count;
+        }
+    }
+    info.count += 1;
+}
+
 fn readDirFile(dir: *std.fs.Dir, sub_path: []const u8, buf: []u8) ![]const u8 {
     var file = try dir.openFile(sub_path, .{});
     defer file.close();
@@ -413,6 +734,30 @@ fn readAbsoluteFile(path: []const u8, buf: []u8) ![]const u8 {
     defer file.close();
     const len = try file.readAll(buf);
     return buf[0..len];
+}
+
+fn compactLinuxCmdline(raw: []const u8, dest: []u8) []const u8 {
+    var write_idx: usize = 0;
+    var needs_space = false;
+
+    for (raw) |byte| {
+        if (byte == 0) {
+            if (write_idx > 0) needs_space = true;
+            continue;
+        }
+
+        if (needs_space and write_idx < dest.len) {
+            dest[write_idx] = ' ';
+            write_idx += 1;
+            needs_space = false;
+        }
+        if (write_idx >= dest.len) break;
+
+        dest[write_idx] = byte;
+        write_idx += 1;
+    }
+
+    return std.mem.trimRight(u8, dest[0..write_idx], " ");
 }
 
 fn parseCpuStatLine(line: []const u8) ?struct { label: []const u8, tick: CpuTick } {

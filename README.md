@@ -7,6 +7,7 @@ It is built for people who want a focused dashboard in the terminal: quick enoug
 ## What ztop is useful for
 
 - Spot CPU spikes and per-core imbalance at a glance
+- See how logical CPUs map onto physical cores, shared cache groups, and heterogeneous core clusters
 - See memory pressure, swap use, cache, and buffers without opening multiple tools
 - Watch disk and network throughput in real time
 - Check thermal and battery data from the same screen
@@ -21,6 +22,7 @@ It is built for people who want a focused dashboard in the terminal: quick enoug
   - `I/O` for disk and network throughput plus per-process disk rates
   - `Sensors` for thermal and battery information
 - Live process table with sorting by CPU, memory, PID, or name
+- Main view CPU topology map that groups logical threads by physical core and cache/cluster domain when the platform exposes it
 - Keyboard-first navigation with fast filtering and command mode
 - Built-in process actions:
   - Send `SIGTERM` or `SIGKILL` to the selected process

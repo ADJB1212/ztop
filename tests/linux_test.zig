@@ -45,3 +45,17 @@ test "parseProcStat returns null on invalid input" {
     const invalid_contents = "invalid stat string without parens";
     try std.testing.expectEqual(null, linux.parseProcStat(invalid_contents));
 }
+
+test "parseCpuListInfo counts sibling ranges and target position" {
+    const parsed = linux.parseCpuListInfo("0-3,8-11", 9);
+    try std.testing.expectEqual(@as(usize, 8), parsed.count);
+    try std.testing.expectEqual(@as(?u16, 0), parsed.first);
+    try std.testing.expectEqual(@as(?usize, 5), parsed.target_index);
+}
+
+test "parseCpuListInfo handles a single cpu entry" {
+    const parsed = linux.parseCpuListInfo("7", 7);
+    try std.testing.expectEqual(@as(usize, 1), parsed.count);
+    try std.testing.expectEqual(@as(?u16, 7), parsed.first);
+    try std.testing.expectEqual(@as(?usize, 0), parsed.target_index);
+}

@@ -2,6 +2,9 @@ const builtin = @import("builtin");
 pub const common = @import("sysinfo/common.zig");
 
 pub const CpuStats = common.CpuStats;
+pub const CpuTopology = common.CpuTopology;
+pub const CpuLogicalCore = common.CpuLogicalCore;
+pub const CpuEfficiencyClass = common.CpuEfficiencyClass;
 pub const MemStats = common.MemStats;
 pub const DiskStats = common.DiskStats;
 pub const NetStats = common.NetStats;

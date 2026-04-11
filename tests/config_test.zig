@@ -32,6 +32,14 @@ test "config parse supports aliases and quoted values" {
     try std.testing.expectEqual(tui.Tui.Color.bright_magenta, parsed.theme.process_title);
 }
 
+test "config parse supports launch command ignore substring list" {
+    const parsed = try config.parse(
+        \\ignore_launch_cmd_substr = "Google Chrome, Chrome Helper, /Applications/Slack.app"
+    );
+
+    try std.testing.expectEqualStrings("Google Chrome, Chrome Helper, /Applications/Slack.app", parsed.ignoredLaunchCommandSubstr());
+}
+
 test "config parse rejects invalid options" {
     try std.testing.expectError(error.UnknownConfigKey, config.parse("not_real = value\n"));
     try std.testing.expectError(error.UnknownTheme, config.parse("theme = vaporwave\n"));

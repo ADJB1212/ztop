@@ -90,6 +90,8 @@ pub const Config = struct {
     theme_overrides: ThemeOverrides,
     default_sort: sysinfo.SortBy,
     update_interval_ms: u32,
+    ignore_launch_cmd_substr_buf: [256]u8,
+    ignore_launch_cmd_substr_len: u16,
 
     pub fn defaults() Config {
         return .{
@@ -98,7 +100,13 @@ pub const Config = struct {
             .theme_overrides = .{},
             .default_sort = .cpu,
             .update_interval_ms = 500,
+            .ignore_launch_cmd_substr_buf = std.mem.zeroes([256]u8),
+            .ignore_launch_cmd_substr_len = 0,
         };
+    }
+
+    pub fn ignoredLaunchCommandSubstr(self: *const Config) []const u8 {
+        return self.ignore_launch_cmd_substr_buf[0..self.ignore_launch_cmd_substr_len];
     }
 };
 
@@ -291,7 +299,7 @@ fn parseInto(text: []const u8, config: *Config) !void {
 
 fn applyEntry(config: *Config, raw_key: []const u8, raw_value: []const u8) !void {
     var key_buf: [64]u8 = undefined;
-    var value_buf: [64]u8 = undefined;
+    var value_buf: [256]u8 = undefined;
 
     const key = try normalize(&key_buf, raw_key);
     const value = try normalize(&value_buf, raw_value);
@@ -312,6 +320,17 @@ fn applyEntry(config: *Config, raw_key: []const u8, raw_value: []const u8) !void
         const interval_ms = try std.fmt.parseInt(u32, raw_value, 10);
         if (interval_ms < 100 or interval_ms > 10_000) return error.InvalidUpdateInterval;
         config.update_interval_ms = interval_ms;
+        return;
+    }
+
+    if (std.mem.eql(u8, key, "ignore_launch_cmd_substr") or
+        std.mem.eql(u8, key, "ignore_launch_command_substr") or
+        std.mem.eql(u8, key, "ignore_process_substr"))
+    {
+        if (raw_value.len > config.ignore_launch_cmd_substr_buf.len) return error.ConfigValueTooLong;
+        @memset(&config.ignore_launch_cmd_substr_buf, 0);
+        @memcpy(config.ignore_launch_cmd_substr_buf[0..raw_value.len], raw_value);
+        config.ignore_launch_cmd_substr_len = @intCast(raw_value.len);
         return;
     }
 

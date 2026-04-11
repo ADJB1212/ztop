@@ -27,6 +27,38 @@ test "ProcStats defaults" {
     try std.testing.expectEqual(common.ProcState.unknown, proc.state);
 }
 
+test "ProcStats launch command slice" {
+    var proc = common.ProcStats{
+        .pid = 4321,
+        .launch_cmd_len = 13,
+        .launch_cmd_buf = std.mem.zeroes([256]u8),
+    };
+    std.mem.copyForwards(u8, proc.launch_cmd_buf[0..13], "google-chrome");
+
+    try std.testing.expectEqualStrings("google-chrome", proc.launchCommand());
+}
+
+test "CpuTopology defaults" {
+    const topology = common.CpuTopology{};
+    try std.testing.expectEqual(@as(usize, 0), topology.logical_cores.len);
+    try std.testing.expectEqual(@as(u16, 0), topology.physical_cores);
+    try std.testing.expectEqual(@as(u16, 1), topology.package_count);
+    try std.testing.expect(!topology.has_numa);
+    try std.testing.expect(!topology.has_smt);
+}
+
+test "CpuLogicalCore defaults" {
+    const logical = common.CpuLogicalCore{
+        .logical_id = 3,
+        .physical_id = 1,
+    };
+    try std.testing.expectEqual(@as(u16, 3), logical.logical_id);
+    try std.testing.expectEqual(@as(u16, 1), logical.physical_id);
+    try std.testing.expectEqual(@as(i16, -1), logical.numa_node_id);
+    try std.testing.expectEqual(@as(u8, 1), logical.threads_per_core);
+    try std.testing.expectEqual(common.CpuEfficiencyClass.unknown, logical.efficiency_class);
+}
+
 test "sortProcStats by cpu" {
     var procs = [_]common.ProcStats{
         .{ .pid = 1, .cpu_percent = 5.0 },
@@ -119,6 +151,38 @@ test "sortProcStats by name" {
     try std.testing.expectEqual(@as(u32, 2), procs[0].pid);
     try std.testing.expectEqual(@as(u32, 3), procs[1].pid);
     try std.testing.expectEqual(@as(u32, 1), procs[2].pid);
+}
+
+test "filterProcStatsByLaunchCommandSubstring removes matches in place" {
+    var procs = [_]common.ProcStats{
+        .{ .pid = 1, .launch_cmd_len = 22 },
+        .{ .pid = 2, .launch_cmd_len = 13 },
+        .{ .pid = 3, .launch_cmd_len = 12 },
+    };
+    std.mem.copyForwards(u8, procs[0].launch_cmd_buf[0..22], "/usr/bin/google-chrome");
+    std.mem.copyForwards(u8, procs[1].launch_cmd_buf[0..13], "/usr/bin/zsh");
+    std.mem.copyForwards(u8, procs[2].launch_cmd_buf[0..12], "chrome_crash");
+
+    const filtered = common.filterProcStatsByLaunchCommandSubstring(&procs, "chrome");
+
+    try std.testing.expectEqual(@as(usize, 1), filtered.len);
+    try std.testing.expectEqual(@as(u32, 2), filtered[0].pid);
+}
+
+test "filterProcStatsByLaunchCommandSubstring supports comma separated list" {
+    var procs = [_]common.ProcStats{
+        .{ .pid = 1, .launch_cmd_len = 22 },
+        .{ .pid = 2, .launch_cmd_len = 19 },
+        .{ .pid = 3, .launch_cmd_len = 13 },
+    };
+    std.mem.copyForwards(u8, procs[0].launch_cmd_buf[0..22], "/usr/bin/google-chrome");
+    std.mem.copyForwards(u8, procs[1].launch_cmd_buf[0..19], "/Applications/Slack");
+    std.mem.copyForwards(u8, procs[2].launch_cmd_buf[0..13], "/usr/bin/zsh");
+
+    const filtered = common.filterProcStatsByLaunchCommandSubstring(&procs, "chrome, Slack");
+
+    try std.testing.expectEqual(@as(usize, 1), filtered.len);
+    try std.testing.expectEqual(@as(u32, 3), filtered[0].pid);
 }
 
 test "NetConnection name slice" {

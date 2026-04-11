@@ -6,6 +6,37 @@ pub const CpuStats = struct {
     per_core_usage: []const f32 = &.{},
 };
 
+pub const CpuEfficiencyClass = enum {
+    performance,
+    efficiency,
+    balanced,
+    unknown,
+};
+
+pub const CpuLogicalCore = struct {
+    logical_id: u16,
+    physical_id: u16,
+    package_id: u16 = 0,
+    numa_node_id: i16 = -1,
+    thread_index: u8 = 0,
+    threads_per_core: u8 = 1,
+    shared_cache_group_id: i16 = -1,
+    shared_cache_level: u8 = 0,
+    shared_cache_logical_count: u16 = 0,
+    efficiency_class: CpuEfficiencyClass = .unknown,
+};
+
+pub const CpuTopology = struct {
+    logical_cores: []const CpuLogicalCore = &.{},
+    physical_cores: u16 = 0,
+    package_count: u16 = 1,
+    numa_node_count: u16 = 0,
+    has_numa: bool = false,
+    has_smt: bool = false,
+    has_cache_groups: bool = false,
+    has_efficiency_classes: bool = false,
+};
+
 pub const MemStats = struct {
     total: u64,
     used: u64,
@@ -63,6 +94,8 @@ pub const ProcStats = struct {
     ppid: u32 = 0,
     name_buf: [64]u8 = std.mem.zeroes([64]u8),
     name_len: u8 = 0,
+    launch_cmd_buf: [256]u8 = std.mem.zeroes([256]u8),
+    launch_cmd_len: u16 = 0,
     state: ProcState = .unknown,
     cpu_percent: f32 = 0,
     mem_percent: f32 = 0,
@@ -72,6 +105,10 @@ pub const ProcStats = struct {
 
     pub fn name(self: *const ProcStats) []const u8 {
         return self.name_buf[0..self.name_len];
+    }
+
+    pub fn launchCommand(self: *const ProcStats) []const u8 {
+        return self.launch_cmd_buf[0..self.launch_cmd_len];
     }
 };
 
@@ -166,6 +203,37 @@ pub fn sortProcStats(slice: []ProcStats, sort_by: SortBy) void {
         }
     };
     std.mem.sort(ProcStats, slice, Context{ .sort_by = sort_by }, Context.lessThan);
+}
+
+pub fn filterProcStatsByLaunchCommandSubstring(slice: []ProcStats, needle_list: []const u8) []ProcStats {
+    if (needleListEmpty(needle_list)) return slice;
+
+    var write_idx: usize = 0;
+    for (slice) |proc| {
+        if (matchesAnyLaunchCommandSubstring(proc.launchCommand(), needle_list)) continue;
+        slice[write_idx] = proc;
+        write_idx += 1;
+    }
+
+    return slice[0..write_idx];
+}
+
+fn needleListEmpty(needle_list: []const u8) bool {
+    var needles = std.mem.splitScalar(u8, needle_list, ',');
+    while (needles.next()) |needle_raw| {
+        if (std.mem.trim(u8, needle_raw, " \t").len > 0) return false;
+    }
+    return true;
+}
+
+fn matchesAnyLaunchCommandSubstring(command: []const u8, needle_list: []const u8) bool {
+    var needles = std.mem.splitScalar(u8, needle_list, ',');
+    while (needles.next()) |needle_raw| {
+        const needle = std.mem.trim(u8, needle_raw, " \t");
+        if (needle.len == 0) continue;
+        if (std.mem.indexOf(u8, command, needle) != null) return true;
+    }
+    return false;
 }
 
 pub fn sortThreadStats(slice: []ThreadStats) void {
