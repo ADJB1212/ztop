@@ -49,6 +49,7 @@ pub const Tui = struct {
     cursor_visible: bool,
     cursor_style: CursorStyle,
     frame_active: bool,
+    nerd_fonts: bool,
 
     pub fn shouldEnableSynchronizedOutput(term_program: ?[]const u8) bool {
         if (term_program) |name| {
@@ -91,7 +92,7 @@ pub const Tui = struct {
         try writer.writeAll("\x1b]8;;\x1b\\");
     }
 
-    pub fn init() !Tui {
+    pub fn init(nerd_fonts: bool) !Tui {
         const in = std.fs.File.stdin();
         const out = std.fs.File.stdout();
         const original_termios = try posix.tcgetattr(in.handle);
@@ -128,6 +129,7 @@ pub const Tui = struct {
             .cursor_visible = false,
             .cursor_style = .steady_block,
             .frame_active = false,
+            .nerd_fonts = nerd_fonts,
         };
     }
 
@@ -245,7 +247,29 @@ pub const Tui = struct {
         // Draw title
         if (title.len > 0) {
             try self.moveCursor(x + 2, y);
-            try self.printStyled(title_style, "┤ {s} ├", .{title});
+            if (self.nerd_fonts) {
+                if (std.mem.startsWith(u8, title, "CPU")) {
+                    try self.printStyled(title_style, "┤  {s} ├", .{title});
+                } else if (std.mem.startsWith(u8, title, "Memory")) {
+                    try self.printStyled(title_style, "┤  {s} ├", .{title});
+                } else if (std.mem.startsWith(u8, title, "Disk")) {
+                    try self.printStyled(title_style, "┤ 󰋊 {s} ├", .{title});
+                } else if (std.mem.startsWith(u8, title, "Network") or std.mem.startsWith(u8, title, "Connections")) {
+                    try self.printStyled(title_style, "┤ 󰈀 {s} ├", .{title});
+                } else if (std.mem.startsWith(u8, title, "Sensors") or std.mem.startsWith(u8, title, "Thermal")) {
+                    try self.printStyled(title_style, "┤  {s} ├", .{title});
+                } else if (std.mem.startsWith(u8, title, "Battery")) {
+                    try self.printStyled(title_style, "┤ 󰁹 {s} ├", .{title});
+                } else if (std.mem.startsWith(u8, title, "Processes") or std.mem.startsWith(u8, title, "Threads")) {
+                    try self.printStyled(title_style, "┤ 󰒋 {s} ├", .{title});
+                } else if (std.mem.startsWith(u8, title, "Help")) {
+                    try self.printStyled(title_style, "┤ 󰋖 {s} ├", .{title});
+                } else {
+                    try self.printStyled(title_style, "┤ {s} ├", .{title});
+                }
+            } else {
+                try self.printStyled(title_style, "┤ {s} ├", .{title});
+            }
         }
     }
 

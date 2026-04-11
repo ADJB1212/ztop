@@ -417,7 +417,7 @@ pub fn main() !void {
     };
     posix.sigaction(posix.SIG.WINCH, &act_winch, null);
 
-    var app_tui = try Tui.init();
+    var app_tui = try Tui.init(app_config.nerd_fonts);
     defer app_tui.deinit();
 
     var sys_info = SysInfo.init();

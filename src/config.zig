@@ -92,6 +92,7 @@ pub const Config = struct {
     update_interval_ms: u32,
     ignore_launch_cmd_substr_buf: [256]u8,
     ignore_launch_cmd_substr_len: u16,
+    nerd_fonts: bool,
 
     pub fn defaults() Config {
         return .{
@@ -102,6 +103,7 @@ pub const Config = struct {
             .update_interval_ms = 500,
             .ignore_launch_cmd_substr_buf = std.mem.zeroes([256]u8),
             .ignore_launch_cmd_substr_len = 0,
+            .nerd_fonts = false,
         };
     }
 
@@ -320,6 +322,17 @@ fn applyEntry(config: *Config, raw_key: []const u8, raw_value: []const u8) !void
         const interval_ms = try std.fmt.parseInt(u32, raw_value, 10);
         if (interval_ms < 100 or interval_ms > 10_000) return error.InvalidUpdateInterval;
         config.update_interval_ms = interval_ms;
+        return;
+    }
+
+    if (std.mem.eql(u8, key, "nerd_fonts") or std.mem.eql(u8, key, "nerd_font")) {
+        if (std.mem.eql(u8, value, "true") or std.mem.eql(u8, value, "1") or std.mem.eql(u8, value, "yes")) {
+            config.nerd_fonts = true;
+        } else if (std.mem.eql(u8, value, "false") or std.mem.eql(u8, value, "0") or std.mem.eql(u8, value, "no")) {
+            config.nerd_fonts = false;
+        } else {
+            return error.InvalidBooleanValue;
+        }
         return;
     }
 
