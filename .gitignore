@@ -11,3 +11,4 @@ testing
 *.md
 !README.md
 !LICENSE.md
+scripts

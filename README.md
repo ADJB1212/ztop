@@ -1,5 +1,9 @@
 # ztop
 
+<p align="center">
+    <img src="./assets/screenshot.png" width="800"/>
+</p>
+
 `ztop` is a terminal system monitor for macOS and Linux. It gives you a fast, keyboard-driven view of CPU load, memory pressure, disk and network throughput, hardware sensors, battery status, and the busiest processes without leaving the shell.
 
 It is built for people who want a focused dashboard in the terminal: quick enough to keep open all day, detailed enough to answer "what is using this machine right now?", and interactive enough to act on what you find.
@@ -58,18 +62,18 @@ zig build test
 
 Common keys:
 
-| Key | Action |
-| --- | --- |
-| `1`, `2`, `3` | Switch between `Main`, `I/O`, and `Sensors` |
-| `j` / `k` or arrow keys | Move through the process list |
-| `c`, `m`, `p`, `n` | Sort by CPU, memory, PID, or name |
-| `/` | Filter processes by name or PID |
-| `:` | Open command mode |
-| `t` | Send `SIGTERM` to the selected process |
-| `K` | Send `SIGKILL` to the selected process |
-| `Esc` | Clear filters, status messages, and zombie-parent view |
-| `?` | Open help |
-| `q` | Quit |
+| Key                     | Action                                                 |
+| ----------------------- | ------------------------------------------------------ |
+| `1`, `2`, `3`           | Switch between `Main`, `I/O`, and `Sensors`            |
+| `j` / `k` or arrow keys | Move through the process list                          |
+| `c`, `m`, `p`, `n`      | Sort by CPU, memory, PID, or name                      |
+| `/`                     | Filter processes by name or PID                        |
+| `:`                     | Open command mode                                      |
+| `t`                     | Send `SIGTERM` to the selected process                 |
+| `K`                     | Send `SIGKILL` to the selected process                 |
+| `Esc`                   | Clear filters, status messages, and zombie-parent view |
+| `?`                     | Open help                                              |
+| `q`                     | Quit                                                   |
 
 Command mode examples:
 
