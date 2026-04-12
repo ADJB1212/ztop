@@ -8,7 +8,5 @@ testing
 *.dylib
 *.so
 *.obj
-*.md
-!README.md
-!LICENSE.md
+ROADMAP.md
 scripts
