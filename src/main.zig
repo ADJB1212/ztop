@@ -22,6 +22,11 @@ fn handleSigWinch(sig: c_int) callconv(.c) void {
     sigwinch_flag = true;
 }
 
+fn memoryUsagePercent(mem: ztop.sysinfo.MemStats) f32 {
+    if (mem.total == 0) return 0;
+    return @as(f32, @floatFromInt(mem.used)) / @as(f32, @floatFromInt(mem.total)) * 100.0;
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -92,6 +97,9 @@ pub fn main() !void {
     var status_buf: [160]u8 = std.mem.zeroes([160]u8);
     var status_len: usize = 0;
 
+    var cpu_history: ztop.history.MetricHistory = .{};
+    var mem_history: ztop.history.MetricHistory = .{};
+
     var cpu = sys_info.getCpuStats();
     var cpu_topology = sys_info.getCpuTopology();
     var mem = sys_info.getMemStats();
@@ -101,6 +109,8 @@ pub fn main() !void {
     var battery = sys_info.getBatteryStats();
     cached_procs = try sys_info.getProcStats(allocator, sort_by);
     cached_procs = ztop.sysinfo.common.filterProcStatsByLaunchCommandSubstring(cached_procs, app_config.ignoredLaunchCommandSubstr());
+    cpu_history.append(cpu.usage_percent);
+    mem_history.append(memoryUsagePercent(mem));
 
     var last_fetch_time = std.time.milliTimestamp();
     const fetch_interval_ms: i64 = @intCast(app_config.update_interval_ms);
@@ -127,6 +137,8 @@ pub fn main() !void {
             net = sys_info.getNetStats();
             thermal = sys_info.getThermalStats();
             battery = sys_info.getBatteryStats();
+            cpu_history.append(cpu.usage_percent);
+            mem_history.append(memoryUsagePercent(mem));
 
             if (cached_procs.len > 0) {
                 allocator.free(cached_procs);
@@ -213,7 +225,7 @@ pub fn main() !void {
                 const procs_box_height: u16 = size.height -| procs_box_y -| 1;
 
                 if (current_tab == 1) {
-                    try render.renderCpuTopologyBox(&app_tui, theme, cpu_box_x, cpu_box_y, cpu_box_width, cpu_box_height, cpu, cpu_topology);
+                    try render.renderCpuTopologyBox(&app_tui, theme, cpu_box_x, cpu_box_y, cpu_box_width, cpu_box_height, cpu, cpu_topology, &cpu_history);
 
                     // Memory Box
                     try app_tui.drawBoxStyled(
@@ -227,10 +239,7 @@ pub fn main() !void {
                     );
 
                     if (mem_box_height >= 3) {
-                        const mem_used_percent: f32 = if (mem.total > 0)
-                            @as(f32, @floatFromInt(mem.used)) / @as(f32, @floatFromInt(mem.total)) * 100.0
-                        else
-                            0;
+                        const mem_used_percent = memoryUsagePercent(mem);
                         try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 1);
                         try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Used: ", .{});
                         try app_tui.printStyled(.{ .fg = render.memoryColor(theme, mem_used_percent), .bold = true }, "{d} GB", .{mem.used / 1024 / 1024 / 1024});
@@ -242,6 +251,24 @@ pub fn main() !void {
                             try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 3);
                             try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Swap: ", .{});
                             try app_tui.printStyled(.{ .fg = theme.memory_mid }, "{d} MB / {d} MB", .{ mem.swap_used / 1024 / 1024, mem.swap_total / 1024 / 1024 });
+                        }
+
+                        const stats_rows: u16 = if (mem.swap_total > 0 and mem_box_height >= 4) 3 else 2;
+                        const graph_height = @min(
+                            render.suggestedHistoryGraphRows(mem_box_height),
+                            mem_box_height -| (stats_rows + 2),
+                        );
+                        if (graph_height > 0 and mem_box_width > 10 and mem_history.len() > 1) {
+                            try render.renderHistoryGraph(
+                                &app_tui,
+                                theme,
+                                mem_box_x + 2,
+                                mem_box_y + 1 + stats_rows,
+                                mem_box_width -| 4,
+                                graph_height,
+                                &mem_history,
+                                .memory,
+                            );
                         }
                     }
                 } else if (current_tab == 2) {

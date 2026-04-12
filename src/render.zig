@@ -4,6 +4,7 @@ const Tui = ztop.tui.Tui;
 const SysInfo = ztop.sysinfo.SysInfo;
 const CpuTopology = ztop.sysinfo.CpuTopology;
 const CpuEfficiencyClass = ztop.sysinfo.CpuEfficiencyClass;
+const MetricHistory = ztop.history.MetricHistory;
 
 pub fn usageColor(theme: ztop.config.Theme, percent: f32) Tui.Color {
     if (percent >= 90) return theme.usage_critical;
@@ -35,6 +36,75 @@ pub fn memoryColor(theme: ztop.config.Theme, percent: f32) Tui.Color {
     if (percent >= 60) return theme.memory_warn;
     if (percent >= 35) return theme.memory_mid;
     return theme.memory_low;
+}
+
+pub const MetricColorMode = enum {
+    cpu,
+    memory,
+};
+
+const graph_blocks = [_][]const u8{ " ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" };
+
+fn metricGraphColor(theme: ztop.config.Theme, mode: MetricColorMode, percent: f32) Tui.Color {
+    return switch (mode) {
+        .cpu => usageColor(theme, percent),
+        .memory => memoryColor(theme, percent),
+    };
+}
+
+fn historyGraphRows(box_height: u16) u16 {
+    if (box_height >= 16) return 4;
+    if (box_height >= 11) return 3;
+    if (box_height >= 8) return 2;
+    return 0;
+}
+
+pub fn suggestedHistoryGraphRows(box_height: u16) u16 {
+    return historyGraphRows(box_height);
+}
+
+fn historyGraphLevel(percent: f32, rows: usize) usize {
+    if (rows == 0 or percent <= 0) return 0;
+
+    const total_levels = rows * 8;
+    const clamped = @max(0.0, @min(percent, 100.0));
+    return @max(1, @min(total_levels, @as(usize, @intFromFloat(@ceil((clamped / 100.0) * @as(f32, @floatFromInt(total_levels)))))));
+}
+
+pub fn renderHistoryGraph(
+    app_tui: *Tui,
+    theme: ztop.config.Theme,
+    x: u16,
+    y: u16,
+    width: u16,
+    height: u16,
+    history: *const MetricHistory,
+    mode: MetricColorMode,
+) !void {
+    if (width == 0 or height == 0 or history.len() == 0) return;
+
+    const graph_width: usize = width;
+    const graph_height: usize = height;
+
+    for (0..graph_height) |row| {
+        try app_tui.moveCursor(x, y + @as(u16, @intCast(row)));
+
+        for (0..graph_width) |column| {
+            if (history.valueForColumn(column, graph_width)) |value| {
+                const total_level = historyGraphLevel(value, graph_height);
+                const rows_below = graph_height - row - 1;
+                const row_base = rows_below * 8;
+                const cell_level = if (total_level > row_base)
+                    @min(total_level - row_base, 8)
+                else
+                    0;
+
+                try app_tui.writeStyled(.{ .fg = metricGraphColor(theme, mode, value) }, graph_blocks[cell_level]);
+            } else {
+                try app_tui.out.writeAll(" ");
+            }
+        }
+    }
 }
 
 const TopologyPhysicalRow = struct {
@@ -204,27 +274,37 @@ fn buildTopologyRowText(buf: []u8, row: TopologyPhysicalRow, cpu: ztop.sysinfo.C
     };
 }
 
-fn renderPerCoreUsageBody(app_tui: *Tui, theme: ztop.config.Theme, box_x: u16, box_y: u16, box_width: u16, box_height: u16, cpu: ztop.sysinfo.CpuStats) !void {
-    if (box_height <= 3 or cpu.per_core_usage.len == 0) return;
+fn renderPerCoreUsageArea(app_tui: *Tui, theme: ztop.config.Theme, x: u16, y: u16, width: u16, height: u16, cpu: ztop.sysinfo.CpuStats) !void {
+    if (height == 0 or cpu.per_core_usage.len == 0) return;
 
-    const rows_available: usize = box_height - 3;
-    const columns: usize = if (box_width >= 40 and cpu.per_core_usage.len > rows_available) 2 else 1;
+    const rows_available: usize = height;
+    const columns: usize = if (width >= 36 and cpu.per_core_usage.len > rows_available) 2 else 1;
     const entries_per_column = rows_available;
     const visible_cores = @min(cpu.per_core_usage.len, entries_per_column * columns);
-    const column_width: u16 = if (columns == 1) box_width - 4 else box_width / 2;
+    const column_width: u16 = if (columns == 1) width else width / 2;
 
     for (0..visible_cores) |i| {
         const row = i % entries_per_column;
         const column = i / entries_per_column;
-        const x = box_x + 2 + @as(u16, @intCast(column)) * column_width;
-        const y = box_y + 2 + @as(u16, @intCast(row));
-        try app_tui.moveCursor(x, y);
+        const col_x = x + @as(u16, @intCast(column)) * column_width;
+        const row_y = y + @as(u16, @intCast(row));
+        try app_tui.moveCursor(col_x, row_y);
         try app_tui.printStyled(.{ .fg = theme.muted }, "CPU{d:>2}: ", .{i});
         try app_tui.printStyled(.{ .fg = usageColor(theme, cpu.per_core_usage[i]), .bold = cpu.per_core_usage[i] >= 70 }, "{d:5.1}%", .{cpu.per_core_usage[i]});
     }
 }
 
-pub fn renderCpuTopologyBox(app_tui: *Tui, theme: ztop.config.Theme, box_x: u16, box_y: u16, box_width: u16, box_height: u16, cpu: ztop.sysinfo.CpuStats, topology: CpuTopology) !void {
+pub fn renderCpuTopologyBox(
+    app_tui: *Tui,
+    theme: ztop.config.Theme,
+    box_x: u16,
+    box_y: u16,
+    box_width: u16,
+    box_height: u16,
+    cpu: ztop.sysinfo.CpuStats,
+    topology: CpuTopology,
+    history: *const MetricHistory,
+) !void {
     const title = if (topology.logical_cores.len > 0) "CPU Topology" else "CPU";
     try app_tui.drawBoxStyled(
         box_x,
@@ -247,21 +327,39 @@ pub fn renderCpuTopologyBox(app_tui: *Tui, theme: ztop.config.Theme, box_x: u16,
         try app_tui.printStyled(.{ .fg = theme.muted }, " ({d} cores)", .{cpu.cores});
     }
 
-    if (box_height <= 3 or topology.logical_cores.len == 0 or topology.physical_cores == 0) {
-        try renderPerCoreUsageBody(app_tui, theme, box_x, box_y, box_width, box_height, cpu);
+    const content_x = box_x + 2;
+    const content_width: u16 = box_width -| 4;
+    const base_body_y = box_y + 2;
+    const base_body_height: u16 = box_height -| 3;
+    const graph_height = if (content_width >= 10 and history.len() > 1) historyGraphRows(box_height) else 0;
+    const topology_height: u16 = base_body_height -| graph_height;
+
+    if (graph_height > 0 and box_width >= 40) {
+        try app_tui.printStyled(.{ .fg = theme.muted }, " | history", .{});
+    }
+
+    if (topology_height == 0 or content_width == 0) {
+        if (graph_height > 0) {
+            try renderHistoryGraph(app_tui, theme, content_x, base_body_y, content_width, graph_height, history, .cpu);
+        }
         return;
     }
 
-    const body_height: usize = box_height - 3;
-    const content_width: usize = box_width - 4;
-    if (body_height == 0 or content_width == 0) {
+    if (topology.logical_cores.len == 0 or topology.physical_cores == 0) {
+        try renderPerCoreUsageArea(app_tui, theme, content_x, base_body_y, content_width, topology_height, cpu);
+        if (graph_height > 0) {
+            try renderHistoryGraph(app_tui, theme, content_x, base_body_y + topology_height, content_width, graph_height, history, .cpu);
+        }
         return;
     }
 
     var rows: [ztop.sysinfo.common.MAX_CORES]TopologyPhysicalRow = undefined;
     const row_count = collectTopologyRows(topology, &rows);
     if (row_count == 0) {
-        try renderPerCoreUsageBody(app_tui, theme, box_x, box_y, box_width, box_height, cpu);
+        try renderPerCoreUsageArea(app_tui, theme, content_x, base_body_y, content_width, topology_height, cpu);
+        if (graph_height > 0) {
+            try renderHistoryGraph(app_tui, theme, content_x, base_body_y + topology_height, content_width, graph_height, history, .cpu);
+        }
         return;
     }
 
@@ -276,10 +374,15 @@ pub fn renderCpuTopologyBox(app_tui: *Tui, theme: ztop.config.Theme, box_x: u16,
         line_count += 1;
     }
 
+    const body_height: usize = topology_height;
+    const usable_width: usize = content_width;
     const columns = @max(std.math.divCeil(usize, line_count, body_height) catch 1, 1);
-    const column_width = if (columns > 0) content_width / columns else content_width;
+    const column_width = if (columns > 0) usable_width / columns else usable_width;
     if (column_width == 0) {
-        try renderPerCoreUsageBody(app_tui, theme, box_x, box_y, box_width, box_height, cpu);
+        try renderPerCoreUsageArea(app_tui, theme, content_x, base_body_y, content_width, topology_height, cpu);
+        if (graph_height > 0) {
+            try renderHistoryGraph(app_tui, theme, content_x, base_body_y + topology_height, content_width, graph_height, history, .cpu);
+        }
         return;
     }
 
@@ -300,34 +403,37 @@ pub fn renderCpuTopologyBox(app_tui: *Tui, theme: ztop.config.Theme, box_x: u16,
     }
 
     if (column_width < max_row_width) {
-        try renderPerCoreUsageBody(app_tui, theme, box_x, box_y, box_width, box_height, cpu);
-        return;
+        try renderPerCoreUsageArea(app_tui, theme, content_x, base_body_y, content_width, topology_height, cpu);
+    } else {
+        for (lines[0..line_count], 0..) |line, idx| {
+            const column = idx / body_height;
+            const row = idx % body_height;
+            const x = content_x + @as(u16, @intCast(column * column_width));
+            const y = base_body_y + @as(u16, @intCast(row));
+            try app_tui.moveCursor(x, y);
+
+            switch (line) {
+                .header => |header_row| {
+                    const label = buildTopologyHeaderText(&header_buf, header_row, topology);
+                    const visible = label[0..@min(label.len, column_width)];
+                    try app_tui.printStyled(.{ .fg = theme.cpu_title, .bold = true }, "{s}", .{visible});
+                },
+                .row => |physical_row| {
+                    var row_buf: [256]u8 = undefined;
+                    const row_text = buildTopologyRowText(&row_buf, physical_row, cpu, topology);
+                    const visible = row_text.text[0..@min(row_text.text.len, column_width)];
+                    const row_style: Tui.Style = if (row_text.hot)
+                        .{ .fg = theme.text, .bold = true }
+                    else
+                        .{ .fg = theme.text };
+                    try app_tui.printStyled(row_style, "{s}", .{visible});
+                },
+            }
+        }
     }
 
-    for (lines[0..line_count], 0..) |line, idx| {
-        const column = idx / body_height;
-        const row = idx % body_height;
-        const x = box_x + 2 + @as(u16, @intCast(column * column_width));
-        const y = box_y + 2 + @as(u16, @intCast(row));
-        try app_tui.moveCursor(x, y);
-
-        switch (line) {
-            .header => |header_row| {
-                const label = buildTopologyHeaderText(&header_buf, header_row, topology);
-                const visible = label[0..@min(label.len, column_width)];
-                try app_tui.printStyled(.{ .fg = theme.cpu_title, .bold = true }, "{s}", .{visible});
-            },
-            .row => |physical_row| {
-                var row_buf: [256]u8 = undefined;
-                const row_text = buildTopologyRowText(&row_buf, physical_row, cpu, topology);
-                const visible = row_text.text[0..@min(row_text.text.len, column_width)];
-                const row_style: Tui.Style = if (row_text.hot)
-                    .{ .fg = theme.text, .bold = true }
-                else
-                    .{ .fg = theme.text };
-                try app_tui.printStyled(row_style, "{s}", .{visible});
-            },
-        }
+    if (graph_height > 0) {
+        try renderHistoryGraph(app_tui, theme, content_x, base_body_y + topology_height, content_width, graph_height, history, .cpu);
     }
 }
 
