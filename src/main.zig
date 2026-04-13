@@ -27,6 +27,89 @@ fn memoryUsagePercent(mem: ztop.sysinfo.MemStats) f32 {
     return @as(f32, @floatFromInt(mem.used)) / @as(f32, @floatFromInt(mem.total)) * 100.0;
 }
 
+const Rect = struct {
+    x: u16 = 0,
+    y: u16 = 0,
+    width: u16 = 0,
+    height: u16 = 0,
+
+    fn contains(self: Rect, x: u16, y: u16) bool {
+        return self.width > 0 and self.height > 0 and
+            x >= self.x and y >= self.y and
+            x - self.x < self.width and
+            y - self.y < self.height;
+    }
+};
+
+const TabRegion = struct {
+    tab: u8,
+    rect: Rect,
+};
+
+const MouseRegions = struct {
+    tabs: [4]TabRegion = undefined,
+    tab_count: usize = 0,
+    list_rect: Rect = .{},
+
+    fn reset(self: *MouseRegions) void {
+        self.tab_count = 0;
+        self.list_rect = .{};
+    }
+
+    fn addTab(self: *MouseRegions, tab: u8, rect: Rect) void {
+        if (self.tab_count >= self.tabs.len) return;
+        self.tabs[self.tab_count] = .{ .tab = tab, .rect = rect };
+        self.tab_count += 1;
+    }
+
+    fn tabAt(self: *const MouseRegions, x: u16, y: u16) ?u8 {
+        for (self.tabs[0..self.tab_count]) |tab| {
+            if (tab.rect.contains(x, y)) return tab.tab;
+        }
+        return null;
+    }
+};
+
+fn setCurrentTab(
+    allocator: std.mem.Allocator,
+    sys_info: *SysInfo,
+    cached_connections: *[]ztop.sysinfo.common.NetConnection,
+    current_tab: *u8,
+    selected_idx: *usize,
+    scroll_offset: *usize,
+    tab: u8,
+) !void {
+    if (current_tab.* == tab) return;
+
+    current_tab.* = tab;
+    if (tab == 4) {
+        try render.refreshConnections(allocator, sys_info, cached_connections);
+    }
+    selected_idx.* = 0;
+    scroll_offset.* = 0;
+}
+
+fn moveSelection(selected_idx: *usize, list_count: usize, delta: i32) void {
+    if (list_count == 0 or delta == 0) return;
+
+    if (delta < 0) {
+        const amount: usize = @intCast(-delta);
+        selected_idx.* = selected_idx.* -| amount;
+    } else {
+        const amount: usize = @intCast(delta);
+        selected_idx.* = @min(selected_idx.* + amount, list_count - 1);
+    }
+}
+
+fn listIndexAt(regions: MouseRegions, x: u16, y: u16, scroll_offset: usize, list_count: usize) ?usize {
+    if (!regions.list_rect.contains(x, y)) return null;
+
+    const row: usize = y - regions.list_rect.y;
+    const idx = scroll_offset + row;
+    if (idx >= list_count) return null;
+    return idx;
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -117,6 +200,9 @@ pub fn main() !void {
 
     var force_redraw = true;
     var current_tab: u8 = 1;
+    var mouse_regions: MouseRegions = .{};
+    var input_buf: [128]u8 = undefined;
+    var input_len: usize = 0;
 
     try app_tui.out.writeAll("\x1b]2;ztop\x1b\\");
 
@@ -164,6 +250,7 @@ pub fn main() !void {
         if (force_redraw) {
             force_redraw = false;
             const size = try app_tui.getWinSize();
+            mouse_regions.reset();
             try app_tui.beginFrame();
             defer app_tui.endFrame() catch {};
             try app_tui.clear();
@@ -190,14 +277,29 @@ pub fn main() !void {
 
                 const tabs_str = "[1] Main  [2] I/O  [3] Sensors  [4] Network";
                 if (size.width > tabs_str.len + 30) {
-                    try app_tui.moveCursor(size.width - @as(u16, @intCast(tabs_str.len)) - 2, 1);
-                    if (current_tab == 1) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "[1] Main", .{}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "[1] Main", .{});
+                    const tabs_x = size.width - @as(u16, @intCast(tabs_str.len)) - 2;
+                    const tab1_label = "[1] Main";
+                    const tab2_label = "[2] I/O";
+                    const tab3_label = "[3] Sensors";
+                    const tab4_label = "[4] Network";
+                    const gap: u16 = 2;
+                    const tab2_x = tabs_x + @as(u16, @intCast(tab1_label.len)) + gap;
+                    const tab3_x = tab2_x + @as(u16, @intCast(tab2_label.len)) + gap;
+                    const tab4_x = tab3_x + @as(u16, @intCast(tab3_label.len)) + gap;
+
+                    mouse_regions.addTab(1, .{ .x = tabs_x, .y = 1, .width = tab1_label.len, .height = 1 });
+                    mouse_regions.addTab(2, .{ .x = tab2_x, .y = 1, .width = tab2_label.len, .height = 1 });
+                    mouse_regions.addTab(3, .{ .x = tab3_x, .y = 1, .width = tab3_label.len, .height = 1 });
+                    mouse_regions.addTab(4, .{ .x = tab4_x, .y = 1, .width = tab4_label.len, .height = 1 });
+
+                    try app_tui.moveCursor(tabs_x, 1);
+                    if (current_tab == 1) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab1_label}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab1_label});
                     try app_tui.out.writeAll("  ");
-                    if (current_tab == 2) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "[2] I/O", .{}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "[2] I/O", .{});
+                    if (current_tab == 2) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab2_label}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab2_label});
                     try app_tui.out.writeAll("  ");
-                    if (current_tab == 3) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "[3] Sensors", .{}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "[3] Sensors", .{});
+                    if (current_tab == 3) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab3_label}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab3_label});
                     try app_tui.out.writeAll("  ");
-                    if (current_tab == 4) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "[4] Network", .{}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "[4] Network", .{});
+                    if (current_tab == 4) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab4_label}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab4_label});
                 }
 
                 const available_height = size.height -| 2;
@@ -428,6 +530,12 @@ pub fn main() !void {
                             .{ .fg = theme.process_title, .bold = true },
                         );
                         const visible_rows = procs_box_height - 2;
+                        mouse_regions.list_rect = .{
+                            .x = procs_box_x + 1,
+                            .y = procs_box_y + 1,
+                            .width = procs_box_width -| 2,
+                            .height = visible_rows,
+                        };
                         const conn_count = cached_connections.len;
                         if (conn_count == 0) {
                             selected_idx = 0;
@@ -522,6 +630,12 @@ pub fn main() !void {
                         }
 
                         const visible_rows = procs_box_height - 2;
+                        mouse_regions.list_rect = .{
+                            .x = procs_box_x + 1,
+                            .y = procs_box_y + 1,
+                            .width = procs_box_width -| 2,
+                            .height = visible_rows,
+                        };
                         if (selected_idx < scroll_offset) {
                             scroll_offset = selected_idx;
                         } else if (selected_idx >= scroll_offset + visible_rows) {
@@ -661,6 +775,12 @@ pub fn main() !void {
                         }
 
                         const visible_rows = procs_box_height - 2;
+                        mouse_regions.list_rect = .{
+                            .x = procs_box_x + 1,
+                            .y = procs_box_y + 1,
+                            .width = procs_box_width -| 2,
+                            .height = visible_rows,
+                        };
                         if (selected_idx < scroll_offset) {
                             scroll_offset = selected_idx;
                         } else if (selected_idx >= scroll_offset + visible_rows) {
@@ -854,187 +974,181 @@ pub fn main() !void {
             var buf: [16]u8 = undefined;
             const n = app_tui.in.read(&buf) catch 0;
             if (n > 0) {
-                var handled = false;
+                if (input_len + n > input_buf.len) {
+                    input_len = 0;
+                }
 
-                if (show_help) {
-                    show_help = false;
-                    handled = true;
-                } else if (is_cmd_mode) {
-                    switch (text_input.applyInputBytes(&cmd_buf, &cmd_len, buf[0..n])) {
-                        .submit => {
-                            is_cmd_mode = false;
-                            const cmd = cmd_buf[0..cmd_len];
-                            if (std.mem.eql(u8, cmd, "show zombie")) {
-                                zombie_summary = process_commands.collectZombieParents(cached_procs, zombie_parents[0..]);
-                                show_zombie_parents = true;
-                                filter_len = 0;
-                                selected_idx = 0;
-                                scroll_offset = 0;
+                const write_len = @min(n, input_buf.len - input_len);
+                @memcpy(input_buf[input_len .. input_len + write_len], buf[0..write_len]);
+                input_len += write_len;
 
-                                if (zombie_summary.zombie_count == 0) {
-                                    render.setStatus(&status_buf, &status_len, "No zombie processes found", .{});
-                                } else if (zombie_summary.parent_count == 0) {
-                                    render.setStatus(&status_buf, &status_len, "Found {d} zombies, but no visible parent processes", .{zombie_summary.zombie_count});
-                                } else {
-                                    const parent_label = if (zombie_summary.parent_count == 1) "parent process" else "parent processes";
-                                    const zombie_label = if (zombie_summary.zombie_count == 1) "zombie" else "zombies";
-                                    render.setStatus(
-                                        &status_buf,
-                                        &status_len,
-                                        "Showing {d} {s} for {d} {s}. Esc clears",
-                                        .{ zombie_summary.parent_count, parent_label, zombie_summary.zombie_count, zombie_label },
-                                    );
-                                }
-                            } else if (std.mem.startsWith(u8, cmd, "killall ")) {
-                                const target = cmd[8..];
-                                var matches: usize = 0;
-                                for (cached_procs) |proc| {
-                                    var l_name: [64]u8 = undefined;
-                                    const name_len = proc.name().len;
-                                    @memcpy(l_name[0..name_len], proc.name());
-                                    const n_str = l_name[0..name_len];
-                                    for (n_str) |*c| c.* = std.ascii.toLower(c.*);
+                var handled_any = false;
+                var sort_dirty = false;
 
-                                    var l_target: [64]u8 = undefined;
-                                    const target_len = @min(target.len, 64);
-                                    @memcpy(l_target[0..target_len], target[0..target_len]);
-                                    const t_str = l_target[0..target_len];
-                                    for (t_str) |*c| c.* = std.ascii.toLower(c.*);
+                while (input_len > 0) {
+                    const parsed = switch (Tui.parseInputToken(input_buf[0..input_len])) {
+                        .parsed => |token| token,
+                        .incomplete => break,
+                        .invalid => |used| {
+                            const consume = @max(@as(usize, 1), used);
+                            std.mem.copyForwards(u8, input_buf[0 .. input_len - consume], input_buf[consume..input_len]);
+                            input_len -= consume;
+                            continue;
+                        },
+                    };
 
-                                    if (std.mem.indexOf(u8, n_str, t_str) != null) {
-                                        _ = posix.kill(@intCast(proc.pid), posix.SIG.TERM) catch {};
-                                        matches += 1;
+                    std.mem.copyForwards(u8, input_buf[0 .. input_len - parsed.used], input_buf[parsed.used..input_len]);
+                    input_len -= parsed.used;
+
+                    var handled = false;
+                    const token = parsed.token;
+
+                    if (show_help) {
+                        show_help = false;
+                        handled = true;
+                    } else if (is_cmd_mode) {
+                        switch (token) {
+                            .mouse, .arrow_up, .arrow_down => handled = true,
+                            .enter => {
+                                is_cmd_mode = false;
+                                const cmd = cmd_buf[0..cmd_len];
+                                if (std.mem.eql(u8, cmd, "show zombie")) {
+                                    zombie_summary = process_commands.collectZombieParents(cached_procs, zombie_parents[0..]);
+                                    show_zombie_parents = true;
+                                    filter_len = 0;
+                                    selected_idx = 0;
+                                    scroll_offset = 0;
+
+                                    if (zombie_summary.zombie_count == 0) {
+                                        render.setStatus(&status_buf, &status_len, "No zombie processes found", .{});
+                                    } else if (zombie_summary.parent_count == 0) {
+                                        render.setStatus(&status_buf, &status_len, "Found {d} zombies, but no visible parent processes", .{zombie_summary.zombie_count});
+                                    } else {
+                                        const parent_label = if (zombie_summary.parent_count == 1) "parent process" else "parent processes";
+                                        const zombie_label = if (zombie_summary.zombie_count == 1) "zombie" else "zombies";
+                                        render.setStatus(
+                                            &status_buf,
+                                            &status_len,
+                                            "Showing {d} {s} for {d} {s}. Esc clears",
+                                            .{ zombie_summary.parent_count, parent_label, zombie_summary.zombie_count, zombie_label },
+                                        );
                                     }
-                                }
+                                } else if (std.mem.startsWith(u8, cmd, "killall ")) {
+                                    const target = cmd[8..];
+                                    var matches: usize = 0;
+                                    for (cached_procs) |proc| {
+                                        var l_name: [64]u8 = undefined;
+                                        const name_len = proc.name().len;
+                                        @memcpy(l_name[0..name_len], proc.name());
+                                        const n_str = l_name[0..name_len];
+                                        for (n_str) |*c| c.* = std.ascii.toLower(c.*);
 
-                                if (matches == 0) {
-                                    render.setStatus(&status_buf, &status_len, "No processes matched '{s}'", .{target});
-                                } else {
-                                    render.setStatus(&status_buf, &status_len, "Sent SIGTERM to {d} matching processes", .{matches});
-                                }
-                            } else if (std.mem.startsWith(u8, cmd, "search ")) {
-                                const target = cmd[7..];
-                                is_filtering = true;
-                                filter_len = @min(target.len, filter_buf.len);
-                                @memcpy(filter_buf[0..filter_len], target[0..filter_len]);
-                                status_len = 0;
-                            } else if (std.mem.eql(u8, cmd, "q") or std.mem.eql(u8, cmd, "quit")) {
-                                quit_flag = true;
-                            } else if (cmd.len > 0) {
-                                render.setStatus(&status_buf, &status_len, "Unknown command: {s}", .{cmd});
-                            }
-                            cmd_len = 0;
-                            handled = true;
-                        },
-                        .cancel => {
-                            is_cmd_mode = false;
-                            cmd_len = 0;
-                            handled = true;
-                        },
-                        .none => handled = true,
-                    }
-                } else if (is_filtering) {
-                    switch (text_input.applyInputBytes(&filter_buf, &filter_len, buf[0..n])) {
-                        .submit => {
-                            is_filtering = false;
-                            handled = true;
-                        },
-                        .cancel => {
-                            is_filtering = false;
-                            filter_len = 0;
-                            handled = true;
-                        },
-                        .none => handled = true,
-                    }
-                } else {
-                    const list_count = if (current_tab == 4)
-                        cached_connections.len
-                    else if (thread_view)
-                        cached_threads.len
-                    else
-                        filtered_count;
+                                        var l_target: [64]u8 = undefined;
+                                        const target_len = @min(target.len, 64);
+                                        @memcpy(l_target[0..target_len], target[0..target_len]);
+                                        const t_str = l_target[0..target_len];
+                                        for (t_str) |*c| c.* = std.ascii.toLower(c.*);
 
-                    if (n == 1) {
-                        switch (buf[0]) {
-                            '1' => {
-                                current_tab = 1;
-                                handled = true;
-                            },
-                            '2' => {
-                                current_tab = 2;
-                                handled = true;
-                            },
-                            '3' => {
-                                current_tab = 3;
-                                handled = true;
-                            },
-                            '4' => {
-                                current_tab = 4;
-                                try render.refreshConnections(allocator, &sys_info, &cached_connections);
-                                selected_idx = 0;
-                                scroll_offset = 0;
-                                handled = true;
-                            },
-                            'q' => quit_flag = true,
-                            '?' => {
-                                show_help = true;
-                                handled = true;
-                            },
-                            'h' => {
-                                show_help = true;
-                                handled = true;
-                            },
-                            'j' => {
-                                if (selected_idx + 1 < list_count) selected_idx += 1;
-                                handled = true;
-                            },
-                            'k' => {
-                                if (selected_idx > 0) selected_idx -= 1;
-                                handled = true;
-                            },
-                            'c' => {
-                                if (!thread_view) {
-                                    sort_by = .cpu;
-                                }
-                                handled = true;
-                            },
-                            'm' => {
-                                if (!thread_view) {
-                                    sort_by = .mem;
-                                }
-                                handled = true;
-                            },
-                            'p' => {
-                                if (!thread_view) {
-                                    sort_by = .pid;
-                                }
-                                handled = true;
-                            },
-                            'n' => {
-                                if (!thread_view) {
-                                    sort_by = .name;
-                                }
-                                handled = true;
-                            },
-                            'v' => {
-                                if (!thread_view) {
-                                    tree_view = !tree_view;
-                                }
-                                handled = true;
-                            },
-                            '/' => {
-                                if (!thread_view) {
+                                        if (std.mem.indexOf(u8, n_str, t_str) != null) {
+                                            _ = posix.kill(@intCast(proc.pid), posix.SIG.TERM) catch {};
+                                            matches += 1;
+                                        }
+                                    }
+
+                                    if (matches == 0) {
+                                        render.setStatus(&status_buf, &status_len, "No processes matched '{s}'", .{target});
+                                    } else {
+                                        render.setStatus(&status_buf, &status_len, "Sent SIGTERM to {d} matching processes", .{matches});
+                                    }
+                                } else if (std.mem.startsWith(u8, cmd, "search ")) {
+                                    const target = cmd[7..];
                                     is_filtering = true;
+                                    filter_len = @min(target.len, filter_buf.len);
+                                    @memcpy(filter_buf[0..filter_len], target[0..filter_len]);
+                                    status_len = 0;
+                                } else if (std.mem.eql(u8, cmd, "q") or std.mem.eql(u8, cmd, "quit")) {
+                                    quit_flag = true;
+                                } else if (cmd.len > 0) {
+                                    render.setStatus(&status_buf, &status_len, "Unknown command: {s}", .{cmd});
                                 }
+                                cmd_len = 0;
                                 handled = true;
                             },
-                            ':' => {
-                                if (!thread_view) {
-                                    is_cmd_mode = true;
-                                }
+                            .escape => {
+                                is_cmd_mode = false;
+                                cmd_len = 0;
                                 handled = true;
                             },
-                            '\r', '\n' => {
+                            .byte => |ch| {
+                                const input_byte = [1]u8{ch};
+                                _ = text_input.applyInputBytes(&cmd_buf, &cmd_len, input_byte[0..]);
+                                handled = true;
+                            },
+                        }
+                    } else if (is_filtering) {
+                        switch (token) {
+                            .mouse, .arrow_up, .arrow_down => handled = true,
+                            .enter => {
+                                is_filtering = false;
+                                handled = true;
+                            },
+                            .escape => {
+                                is_filtering = false;
+                                filter_len = 0;
+                                handled = true;
+                            },
+                            .byte => |ch| {
+                                const input_byte = [1]u8{ch};
+                                _ = text_input.applyInputBytes(&filter_buf, &filter_len, input_byte[0..]);
+                                handled = true;
+                            },
+                        }
+                    } else {
+                        const list_count = if (current_tab == 4)
+                            cached_connections.len
+                        else if (thread_view)
+                            cached_threads.len
+                        else
+                            filtered_count;
+
+                        switch (token) {
+                            .mouse => |mouse| {
+                                switch (mouse.action) {
+                                    .scroll_up => {
+                                        if (mouse_regions.list_rect.contains(mouse.x, mouse.y)) {
+                                            moveSelection(&selected_idx, list_count, -1);
+                                        }
+                                        handled = true;
+                                    },
+                                    .scroll_down => {
+                                        if (mouse_regions.list_rect.contains(mouse.x, mouse.y)) {
+                                            moveSelection(&selected_idx, list_count, 1);
+                                        }
+                                        handled = true;
+                                    },
+                                    .press => {
+                                        if (mouse.button == .left) {
+                                            if (mouse_regions.tabAt(mouse.x, mouse.y)) |tab| {
+                                                try setCurrentTab(allocator, &sys_info, &cached_connections, &current_tab, &selected_idx, &scroll_offset, tab);
+                                                handled = true;
+                                            } else if (listIndexAt(mouse_regions, mouse.x, mouse.y, scroll_offset, list_count)) |idx| {
+                                                selected_idx = idx;
+                                                handled = true;
+                                            }
+                                        }
+                                    },
+                                    else => {},
+                                }
+                            },
+                            .arrow_up => {
+                                moveSelection(&selected_idx, list_count, -1);
+                                handled = true;
+                            },
+                            .arrow_down => {
+                                moveSelection(&selected_idx, list_count, 1);
+                                handled = true;
+                            },
+                            .enter => {
                                 if (current_tab != 4 and !thread_view and filtered_count > 0 and selected_idx < filtered_count) {
                                     const proc = cached_procs[filtered_indices[selected_idx]];
                                     thread_view_pid = proc.pid;
@@ -1051,7 +1165,7 @@ pub fn main() !void {
                                 }
                                 handled = true;
                             },
-                            '\x1b' => {
+                            .escape => {
                                 if (thread_view) {
                                     thread_view = false;
                                     if (cached_threads.len > 0) {
@@ -1068,43 +1182,112 @@ pub fn main() !void {
                                 }
                                 handled = true;
                             },
-                            't' => {
-                                if (current_tab != 4 and !thread_view and filtered_count > 0 and selected_idx < filtered_count) {
-                                    const pid = cached_procs[filtered_indices[selected_idx]].pid;
-                                    _ = posix.kill(@intCast(pid), posix.SIG.TERM) catch {};
-                                }
-                                handled = true;
+                            .byte => |ch| switch (ch) {
+                                '1' => {
+                                    try setCurrentTab(allocator, &sys_info, &cached_connections, &current_tab, &selected_idx, &scroll_offset, 1);
+                                    handled = true;
+                                },
+                                '2' => {
+                                    try setCurrentTab(allocator, &sys_info, &cached_connections, &current_tab, &selected_idx, &scroll_offset, 2);
+                                    handled = true;
+                                },
+                                '3' => {
+                                    try setCurrentTab(allocator, &sys_info, &cached_connections, &current_tab, &selected_idx, &scroll_offset, 3);
+                                    handled = true;
+                                },
+                                '4' => {
+                                    try setCurrentTab(allocator, &sys_info, &cached_connections, &current_tab, &selected_idx, &scroll_offset, 4);
+                                    handled = true;
+                                },
+                                'q' => {
+                                    quit_flag = true;
+                                    handled = true;
+                                },
+                                '?', 'h' => {
+                                    show_help = true;
+                                    handled = true;
+                                },
+                                'j' => {
+                                    moveSelection(&selected_idx, list_count, 1);
+                                    handled = true;
+                                },
+                                'k' => {
+                                    moveSelection(&selected_idx, list_count, -1);
+                                    handled = true;
+                                },
+                                'c' => {
+                                    if (!thread_view) {
+                                        sort_by = .cpu;
+                                        sort_dirty = true;
+                                    }
+                                    handled = true;
+                                },
+                                'm' => {
+                                    if (!thread_view) {
+                                        sort_by = .mem;
+                                        sort_dirty = true;
+                                    }
+                                    handled = true;
+                                },
+                                'p' => {
+                                    if (!thread_view) {
+                                        sort_by = .pid;
+                                        sort_dirty = true;
+                                    }
+                                    handled = true;
+                                },
+                                'n' => {
+                                    if (!thread_view) {
+                                        sort_by = .name;
+                                        sort_dirty = true;
+                                    }
+                                    handled = true;
+                                },
+                                'v' => {
+                                    if (!thread_view) {
+                                        tree_view = !tree_view;
+                                    }
+                                    handled = true;
+                                },
+                                '/' => {
+                                    if (!thread_view) {
+                                        is_filtering = true;
+                                    }
+                                    handled = true;
+                                },
+                                ':' => {
+                                    if (!thread_view) {
+                                        is_cmd_mode = true;
+                                    }
+                                    handled = true;
+                                },
+                                't' => {
+                                    if (current_tab != 4 and !thread_view and filtered_count > 0 and selected_idx < filtered_count) {
+                                        const pid = cached_procs[filtered_indices[selected_idx]].pid;
+                                        _ = posix.kill(@intCast(pid), posix.SIG.TERM) catch {};
+                                    }
+                                    handled = true;
+                                },
+                                'K' => {
+                                    if (current_tab != 4 and !thread_view and filtered_count > 0 and selected_idx < filtered_count) {
+                                        const pid = cached_procs[filtered_indices[selected_idx]].pid;
+                                        _ = posix.kill(@intCast(pid), posix.SIG.KILL) catch {};
+                                    }
+                                    handled = true;
+                                },
+                                else => {},
                             },
-                            'K' => {
-                                if (current_tab != 4 and !thread_view and filtered_count > 0 and selected_idx < filtered_count) {
-                                    const pid = cached_procs[filtered_indices[selected_idx]].pid;
-                                    _ = posix.kill(@intCast(pid), posix.SIG.KILL) catch {};
-                                }
-                                handled = true;
-                            },
-                            else => {},
-                        }
-                    } else if (n == 3 and buf[0] == '\x1b' and buf[1] == '[') {
-                        switch (buf[2]) {
-                            'A' => {
-                                if (selected_idx > 0) selected_idx -= 1;
-                                handled = true;
-                            },
-                            'B' => {
-                                if (selected_idx + 1 < list_count) selected_idx += 1;
-                                handled = true;
-                            },
-                            else => {},
                         }
                     }
+
+                    handled_any = handled_any or handled;
                 }
 
-                if (handled) {
-                    force_redraw = true;
-                    if (n == 1 and (buf[0] == 'c' or buf[0] == 'm' or buf[0] == 'p' or buf[0] == 'n')) {
-                        ztop.sysinfo.sortProcStats(cached_procs, sort_by);
-                    }
-                } else if (!quit_flag) {
+                if (sort_dirty) {
+                    ztop.sysinfo.sortProcStats(cached_procs, sort_by);
+                }
+
+                if (handled_any or (!quit_flag and write_len > 0)) {
                     force_redraw = true;
                 }
             }

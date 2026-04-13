@@ -42,6 +42,62 @@ pub const Tui = struct {
         synchronized_output: bool,
     };
 
+    pub const MouseButton = enum {
+        left,
+        middle,
+        right,
+        none,
+    };
+
+    pub const MouseAction = enum {
+        press,
+        release,
+        drag,
+        scroll_up,
+        scroll_down,
+    };
+
+    pub const MouseEvent = struct {
+        x: u16,
+        y: u16,
+        button: MouseButton,
+        action: MouseAction,
+        shift: bool = false,
+        alt: bool = false,
+        ctrl: bool = false,
+    };
+
+    pub const InputToken = union(enum) {
+        byte: u8,
+        enter,
+        escape,
+        arrow_up,
+        arrow_down,
+        mouse: MouseEvent,
+    };
+
+    pub const ParsedInputToken = struct {
+        token: InputToken,
+        used: usize,
+    };
+
+    pub const InputParseResult = union(enum) {
+        parsed: ParsedInputToken,
+        incomplete,
+        invalid: usize,
+    };
+
+    const ParsedMouseNumber = struct {
+        value: u16,
+        used: usize,
+    };
+
+    const MouseNumberParseResult = union(enum) {
+        parsed: ParsedMouseNumber,
+        incomplete,
+        invalid: usize,
+    };
+
     original_termios: posix.termios,
     in: std.fs.File,
     out: std.fs.File,
@@ -69,6 +125,13 @@ pub const Tui = struct {
         };
     }
 
+    pub fn mouseModeSequence(enable: bool) []const u8 {
+        return if (enable)
+            "\x1b[?1000h\x1b[?1006h"
+        else
+            "\x1b[?1006l\x1b[?1000l";
+    }
+
     pub fn styleSequence(buf: []u8, style: Style) ![]const u8 {
         var stream = std.io.fixedBufferStream(buf);
         const writer = stream.writer();
@@ -90,6 +153,139 @@ pub const Tui = struct {
         try writer.writeAll("\x1b\\");
         try writer.writeAll(label);
         try writer.writeAll("\x1b]8;;\x1b\\");
+    }
+
+    fn parseMouseNumber(bytes: []const u8, start: usize) MouseNumberParseResult {
+        if (start >= bytes.len) return .incomplete;
+
+        var idx = start;
+        var value: u32 = 0;
+        var saw_digit = false;
+
+        while (idx < bytes.len) : (idx += 1) {
+            const ch = bytes[idx];
+            if (ch < '0' or ch > '9') break;
+            saw_digit = true;
+            value = value * 10 + (ch - '0');
+        }
+
+        if (!saw_digit) return .{ .invalid = 1 };
+        if (value > std.math.maxInt(u16)) return .{ .invalid = 1 };
+
+        return .{ .parsed = .{ .value = @intCast(value), .used = idx } };
+    }
+
+    pub fn parseInputToken(bytes: []const u8) InputParseResult {
+        if (bytes.len == 0) return .incomplete;
+
+        const first = bytes[0];
+        if (first == '\r' or first == '\n') {
+            return .{ .parsed = .{ .token = .enter, .used = 1 } };
+        }
+        if (first != '\x1b') {
+            return .{ .parsed = .{ .token = .{ .byte = first }, .used = 1 } };
+        }
+        if (bytes.len == 1) {
+            return .{ .parsed = .{ .token = .escape, .used = 1 } };
+        }
+        if (bytes[1] != '[') {
+            return .{ .parsed = .{ .token = .escape, .used = 1 } };
+        }
+        if (bytes.len < 3) return .incomplete;
+
+        switch (bytes[2]) {
+            'A' => return .{ .parsed = .{ .token = .arrow_up, .used = 3 } },
+            'B' => return .{ .parsed = .{ .token = .arrow_down, .used = 3 } },
+            '<' => {
+                const cb_result = parseMouseNumber(bytes, 3);
+                const cb_end = switch (cb_result) {
+                    .parsed => |parsed| parsed.used,
+                    .incomplete => return .incomplete,
+                    .invalid => |used| return .{ .invalid = used },
+                };
+                if (cb_end >= bytes.len) return .incomplete;
+                if (bytes[cb_end] != ';') return .{ .invalid = 1 };
+
+                const x_result = parseMouseNumber(bytes, cb_end + 1);
+                const x_end = switch (x_result) {
+                    .parsed => |parsed| parsed.used,
+                    .incomplete => return .incomplete,
+                    .invalid => |used| return .{ .invalid = used },
+                };
+                if (x_end >= bytes.len) return .incomplete;
+                if (bytes[x_end] != ';') return .{ .invalid = 1 };
+
+                const y_result = parseMouseNumber(bytes, x_end + 1);
+                const parsed_y = switch (y_result) {
+                    .parsed => |parsed| parsed,
+                    .incomplete => return .incomplete,
+                    .invalid => |used| return .{ .invalid = used },
+                };
+                if (parsed_y.used >= bytes.len) return .incomplete;
+
+                const suffix = bytes[parsed_y.used];
+                if (suffix != 'M' and suffix != 'm') return .{ .invalid = 1 };
+
+                const cb_value = switch (cb_result) {
+                    .parsed => |parsed| parsed.value,
+                    else => unreachable,
+                };
+                const x_value = switch (x_result) {
+                    .parsed => |parsed| parsed.value,
+                    else => unreachable,
+                };
+                const y_value = parsed_y.value;
+
+                const button_bits = cb_value & 0b11;
+                const wheel = (cb_value & 0b0100_0000) != 0;
+                const motion = (cb_value & 0b0010_0000) != 0;
+                const button: MouseButton = if (wheel or button_bits == 3)
+                    .none
+                else switch (button_bits) {
+                    0 => .left,
+                    1 => .middle,
+                    2 => .right,
+                    else => .none,
+                };
+                const action: MouseAction = if (wheel)
+                    switch (button_bits) {
+                        0 => .scroll_up,
+                        1 => .scroll_down,
+                        else => .press,
+                    }
+                else if (suffix == 'm')
+                    .release
+                else if (motion)
+                    .drag
+                else
+                    .press;
+
+                return .{
+                    .parsed = .{
+                        .token = .{
+                            .mouse = .{
+                                .x = x_value,
+                                .y = y_value,
+                                .button = button,
+                                .action = action,
+                                .shift = (cb_value & 0b0000_0100) != 0,
+                                .alt = (cb_value & 0b0000_1000) != 0,
+                                .ctrl = (cb_value & 0b0001_0000) != 0,
+                            },
+                        },
+                        .used = parsed_y.used + 1,
+                    },
+                };
+            },
+            else => {
+                for (bytes[2..], 2..) |ch, idx| {
+                    if (ch >= 0x40 and ch <= 0x7e) {
+                        return .{ .invalid = idx + 1 };
+                    }
+                }
+                return .incomplete;
+            },
+        }
     }
 
     pub fn init(nerd_fonts: bool) !Tui {
@@ -118,8 +314,9 @@ pub const Tui = struct {
             .synchronized_output = shouldEnableSynchronizedOutput(if (posix.getenv("TERM_PROGRAM")) |term_program| term_program else null),
         };
 
-        // Enter alternate buffer and hide cursor
+        // Enter alternate buffer, hide cursor, and enable mouse reporting.
         try out.writeAll("\x1b[?1049h\x1b[?25l");
+        try out.writeAll(mouseModeSequence(true));
 
         return Tui{
             .original_termios = original_termios,
@@ -138,6 +335,7 @@ pub const Tui = struct {
         self.resetStyle() catch {};
         self.setCursorStyle(.steady_block) catch {};
         self.setCursorVisible(true) catch {};
+        self.out.writeAll(mouseModeSequence(false)) catch {};
         self.out.writeAll("\x1b[?1049l") catch {};
         posix.tcsetattr(self.in.handle, .FLUSH, self.original_termios) catch {};
     }
