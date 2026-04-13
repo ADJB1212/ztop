@@ -1,8 +1,8 @@
 const std = @import("std");
 const ztop = @import("ztop");
 const render = @import("render.zig");
+const input_handler = @import("input_handler.zig");
 const process_commands = ztop.process_commands;
-const text_input = ztop.text_input;
 const Tui = ztop.tui.Tui;
 const SysInfo = ztop.sysinfo.SysInfo;
 const posix = std.posix;
@@ -25,89 +25,6 @@ fn handleSigWinch(sig: c_int) callconv(.c) void {
 fn memoryUsagePercent(mem: ztop.sysinfo.MemStats) f32 {
     if (mem.total == 0) return 0;
     return @as(f32, @floatFromInt(mem.used)) / @as(f32, @floatFromInt(mem.total)) * 100.0;
-}
-
-const Rect = struct {
-    x: u16 = 0,
-    y: u16 = 0,
-    width: u16 = 0,
-    height: u16 = 0,
-
-    fn contains(self: Rect, x: u16, y: u16) bool {
-        return self.width > 0 and self.height > 0 and
-            x >= self.x and y >= self.y and
-            x - self.x < self.width and
-            y - self.y < self.height;
-    }
-};
-
-const TabRegion = struct {
-    tab: u8,
-    rect: Rect,
-};
-
-const MouseRegions = struct {
-    tabs: [4]TabRegion = undefined,
-    tab_count: usize = 0,
-    list_rect: Rect = .{},
-
-    fn reset(self: *MouseRegions) void {
-        self.tab_count = 0;
-        self.list_rect = .{};
-    }
-
-    fn addTab(self: *MouseRegions, tab: u8, rect: Rect) void {
-        if (self.tab_count >= self.tabs.len) return;
-        self.tabs[self.tab_count] = .{ .tab = tab, .rect = rect };
-        self.tab_count += 1;
-    }
-
-    fn tabAt(self: *const MouseRegions, x: u16, y: u16) ?u8 {
-        for (self.tabs[0..self.tab_count]) |tab| {
-            if (tab.rect.contains(x, y)) return tab.tab;
-        }
-        return null;
-    }
-};
-
-fn setCurrentTab(
-    allocator: std.mem.Allocator,
-    sys_info: *SysInfo,
-    cached_connections: *[]ztop.sysinfo.common.NetConnection,
-    current_tab: *u8,
-    selected_idx: *usize,
-    scroll_offset: *usize,
-    tab: u8,
-) !void {
-    if (current_tab.* == tab) return;
-
-    current_tab.* = tab;
-    if (tab == 4) {
-        try render.refreshConnections(allocator, sys_info, cached_connections);
-    }
-    selected_idx.* = 0;
-    scroll_offset.* = 0;
-}
-
-fn moveSelection(selected_idx: *usize, list_count: usize, delta: i32) void {
-    if (list_count == 0 or delta == 0) return;
-
-    if (delta < 0) {
-        const amount: usize = @intCast(-delta);
-        selected_idx.* = selected_idx.* -| amount;
-    } else {
-        const amount: usize = @intCast(delta);
-        selected_idx.* = @min(selected_idx.* + amount, list_count - 1);
-    }
-}
-
-fn listIndexAt(regions: MouseRegions, x: u16, y: u16, scroll_offset: usize, list_count: usize) ?usize {
-    if (!regions.list_rect.contains(x, y)) return null;
-
-    const row: usize = y - regions.list_rect.y;
-    const idx = scroll_offset + row;
-    if (idx >= list_count) return null;
-    return idx;
 }
 
 fn batteryStatusLabel(status: ztop.sysinfo.BatteryStatus) []const u8 {
@@ -230,7 +147,7 @@ pub fn main() !void {
 
     var force_redraw = true;
     var current_tab: u8 = 1;
-    var mouse_regions: MouseRegions = .{};
+    var mouse_regions: input_handler.MouseRegions = .{};
     var input_buf: [128]u8 = undefined;
     var input_len: usize = 0;
 
@@ -1070,326 +987,42 @@ pub fn main() !void {
         const poll_res = posix.poll(&fds, @intCast(remaining_ms)) catch 0;
 
         if (poll_res > 0 and (fds[0].revents & posix.POLL.IN) != 0) {
-            var buf: [16]u8 = undefined;
-            const n = app_tui.in.read(&buf) catch 0;
-            if (n > 0) {
-                if (input_len + n > input_buf.len) {
-                    input_len = 0;
-                }
-
-                const write_len = @min(n, input_buf.len - input_len);
-                @memcpy(input_buf[input_len .. input_len + write_len], buf[0..write_len]);
-                input_len += write_len;
-
-                var handled_any = false;
-                var sort_dirty = false;
-
-                while (input_len > 0) {
-                    const parsed = switch (Tui.parseInputToken(input_buf[0..input_len])) {
-                        .parsed => |token| token,
-                        .incomplete => break,
-                        .invalid => |used| {
-                            const consume = @max(@as(usize, 1), used);
-                            std.mem.copyForwards(u8, input_buf[0 .. input_len - consume], input_buf[consume..input_len]);
-                            input_len -= consume;
-                            continue;
-                        },
-                    };
-
-                    std.mem.copyForwards(u8, input_buf[0 .. input_len - parsed.used], input_buf[parsed.used..input_len]);
-                    input_len -= parsed.used;
-
-                    var handled = false;
-                    const token = parsed.token;
-
-                    if (show_help) {
-                        show_help = false;
-                        handled = true;
-                    } else if (is_cmd_mode) {
-                        switch (token) {
-                            .mouse, .arrow_up, .arrow_down => handled = true,
-                            .enter => {
-                                is_cmd_mode = false;
-                                const cmd = cmd_buf[0..cmd_len];
-                                if (std.mem.eql(u8, cmd, "show zombie")) {
-                                    zombie_summary = process_commands.collectZombieParents(cached_procs, zombie_parents[0..]);
-                                    show_zombie_parents = true;
-                                    filter_len = 0;
-                                    selected_idx = 0;
-                                    scroll_offset = 0;
-
-                                    if (zombie_summary.zombie_count == 0) {
-                                        render.setStatus(&status_buf, &status_len, "No zombie processes found", .{});
-                                    } else if (zombie_summary.parent_count == 0) {
-                                        render.setStatus(&status_buf, &status_len, "Found {d} zombies, but no visible parent processes", .{zombie_summary.zombie_count});
-                                    } else {
-                                        const parent_label = if (zombie_summary.parent_count == 1) "parent process" else "parent processes";
-                                        const zombie_label = if (zombie_summary.zombie_count == 1) "zombie" else "zombies";
-                                        render.setStatus(
-                                            &status_buf,
-                                            &status_len,
-                                            "Showing {d} {s} for {d} {s}. Esc clears",
-                                            .{ zombie_summary.parent_count, parent_label, zombie_summary.zombie_count, zombie_label },
-                                        );
-                                    }
-                                } else if (std.mem.startsWith(u8, cmd, "killall ")) {
-                                    const target = cmd[8..];
-                                    var matches: usize = 0;
-                                    for (cached_procs) |proc| {
-                                        var l_name: [64]u8 = undefined;
-                                        const name_len = proc.name().len;
-                                        @memcpy(l_name[0..name_len], proc.name());
-                                        const n_str = l_name[0..name_len];
-                                        for (n_str) |*c| c.* = std.ascii.toLower(c.*);
-
-                                        var l_target: [64]u8 = undefined;
-                                        const target_len = @min(target.len, 64);
-                                        @memcpy(l_target[0..target_len], target[0..target_len]);
-                                        const t_str = l_target[0..target_len];
-                                        for (t_str) |*c| c.* = std.ascii.toLower(c.*);
-
-                                        if (std.mem.indexOf(u8, n_str, t_str) != null) {
-                                            _ = posix.kill(@intCast(proc.pid), posix.SIG.TERM) catch {};
-                                            matches += 1;
-                                        }
-                                    }
-
-                                    if (matches == 0) {
-                                        render.setStatus(&status_buf, &status_len, "No processes matched '{s}'", .{target});
-                                    } else {
-                                        render.setStatus(&status_buf, &status_len, "Sent SIGTERM to {d} matching processes", .{matches});
-                                    }
-                                } else if (std.mem.startsWith(u8, cmd, "search ")) {
-                                    const target = cmd[7..];
-                                    is_filtering = true;
-                                    filter_len = @min(target.len, filter_buf.len);
-                                    @memcpy(filter_buf[0..filter_len], target[0..filter_len]);
-                                    status_len = 0;
-                                } else if (std.mem.eql(u8, cmd, "q") or std.mem.eql(u8, cmd, "quit")) {
-                                    quit_flag = true;
-                                } else if (cmd.len > 0) {
-                                    render.setStatus(&status_buf, &status_len, "Unknown command: {s}", .{cmd});
-                                }
-                                cmd_len = 0;
-                                handled = true;
-                            },
-                            .escape => {
-                                is_cmd_mode = false;
-                                cmd_len = 0;
-                                handled = true;
-                            },
-                            .byte => |ch| {
-                                const input_byte = [1]u8{ch};
-                                _ = text_input.applyInputBytes(&cmd_buf, &cmd_len, input_byte[0..]);
-                                handled = true;
-                            },
-                        }
-                    } else if (is_filtering) {
-                        switch (token) {
-                            .mouse, .arrow_up, .arrow_down => handled = true,
-                            .enter => {
-                                is_filtering = false;
-                                handled = true;
-                            },
-                            .escape => {
-                                is_filtering = false;
-                                filter_len = 0;
-                                handled = true;
-                            },
-                            .byte => |ch| {
-                                const input_byte = [1]u8{ch};
-                                _ = text_input.applyInputBytes(&filter_buf, &filter_len, input_byte[0..]);
-                                handled = true;
-                            },
-                        }
-                    } else {
-                        const list_count = if (current_tab == 4)
-                            cached_connections.len
-                        else if (thread_view)
-                            cached_threads.len
-                        else
-                            filtered_count;
-
-                        switch (token) {
-                            .mouse => |mouse| {
-                                switch (mouse.action) {
-                                    .scroll_up => {
-                                        if (mouse_regions.list_rect.contains(mouse.x, mouse.y)) {
-                                            moveSelection(&selected_idx, list_count, -1);
-                                        }
-                                        handled = true;
-                                    },
-                                    .scroll_down => {
-                                        if (mouse_regions.list_rect.contains(mouse.x, mouse.y)) {
-                                            moveSelection(&selected_idx, list_count, 1);
-                                        }
-                                        handled = true;
-                                    },
-                                    .press => {
-                                        if (mouse.button == .left) {
-                                            if (mouse_regions.tabAt(mouse.x, mouse.y)) |tab| {
-                                                try setCurrentTab(allocator, &sys_info, &cached_connections, &current_tab, &selected_idx, &scroll_offset, tab);
-                                                handled = true;
-                                            } else if (listIndexAt(mouse_regions, mouse.x, mouse.y, scroll_offset, list_count)) |idx| {
-                                                selected_idx = idx;
-                                                handled = true;
-                                            }
-                                        }
-                                    },
-                                    else => {},
-                                }
-                            },
-                            .arrow_up => {
-                                moveSelection(&selected_idx, list_count, -1);
-                                handled = true;
-                            },
-                            .arrow_down => {
-                                moveSelection(&selected_idx, list_count, 1);
-                                handled = true;
-                            },
-                            .enter => {
-                                if (current_tab != 4 and !thread_view and filtered_count > 0 and selected_idx < filtered_count) {
-                                    const proc = cached_procs[filtered_indices[selected_idx]];
-                                    thread_view_pid = proc.pid;
-                                    thread_view_name_len = proc.name_len;
-                                    @memcpy(thread_view_name_buf[0..proc.name_len], proc.name());
-                                    thread_view = true;
-                                    selected_idx = 0;
-                                    scroll_offset = 0;
-
-                                    if (cached_threads.len > 0) {
-                                        allocator.free(cached_threads);
-                                    }
-                                    cached_threads = sys_info.getThreadStats(allocator, thread_view_pid) catch &.{};
-                                }
-                                handled = true;
-                            },
-                            .escape => {
-                                if (thread_view) {
-                                    thread_view = false;
-                                    if (cached_threads.len > 0) {
-                                        allocator.free(cached_threads);
-                                        cached_threads = &.{};
-                                    }
-                                    selected_idx = 0;
-                                    scroll_offset = 0;
-                                } else {
-                                    filter_len = 0;
-                                    status_len = 0;
-                                    zombie_summary = .{};
-                                    show_zombie_parents = false;
-                                }
-                                handled = true;
-                            },
-                            .byte => |ch| switch (ch) {
-                                '1' => {
-                                    try setCurrentTab(allocator, &sys_info, &cached_connections, &current_tab, &selected_idx, &scroll_offset, 1);
-                                    handled = true;
-                                },
-                                '2' => {
-                                    try setCurrentTab(allocator, &sys_info, &cached_connections, &current_tab, &selected_idx, &scroll_offset, 2);
-                                    handled = true;
-                                },
-                                '3' => {
-                                    try setCurrentTab(allocator, &sys_info, &cached_connections, &current_tab, &selected_idx, &scroll_offset, 3);
-                                    handled = true;
-                                },
-                                '4' => {
-                                    try setCurrentTab(allocator, &sys_info, &cached_connections, &current_tab, &selected_idx, &scroll_offset, 4);
-                                    handled = true;
-                                },
-                                'q' => {
-                                    quit_flag = true;
-                                    handled = true;
-                                },
-                                '?', 'h' => {
-                                    show_help = true;
-                                    handled = true;
-                                },
-                                'j' => {
-                                    moveSelection(&selected_idx, list_count, 1);
-                                    handled = true;
-                                },
-                                'k' => {
-                                    moveSelection(&selected_idx, list_count, -1);
-                                    handled = true;
-                                },
-                                'c' => {
-                                    if (!thread_view) {
-                                        sort_by = .cpu;
-                                        sort_dirty = true;
-                                    }
-                                    handled = true;
-                                },
-                                'm' => {
-                                    if (!thread_view) {
-                                        sort_by = .mem;
-                                        sort_dirty = true;
-                                    }
-                                    handled = true;
-                                },
-                                'p' => {
-                                    if (!thread_view) {
-                                        sort_by = .pid;
-                                        sort_dirty = true;
-                                    }
-                                    handled = true;
-                                },
-                                'n' => {
-                                    if (!thread_view) {
-                                        sort_by = .name;
-                                        sort_dirty = true;
-                                    }
-                                    handled = true;
-                                },
-                                'v' => {
-                                    if (!thread_view) {
-                                        tree_view = !tree_view;
-                                    }
-                                    handled = true;
-                                },
-                                '/' => {
-                                    if (!thread_view) {
-                                        is_filtering = true;
-                                    }
-                                    handled = true;
-                                },
-                                ':' => {
-                                    if (!thread_view) {
-                                        is_cmd_mode = true;
-                                    }
-                                    handled = true;
-                                },
-                                't' => {
-                                    if (current_tab != 4 and !thread_view and filtered_count > 0 and selected_idx < filtered_count) {
-                                        const pid = cached_procs[filtered_indices[selected_idx]].pid;
-                                        _ = posix.kill(@intCast(pid), posix.SIG.TERM) catch {};
-                                    }
-                                    handled = true;
-                                },
-                                'K' => {
-                                    if (current_tab != 4 and !thread_view and filtered_count > 0 and selected_idx < filtered_count) {
-                                        const pid = cached_procs[filtered_indices[selected_idx]].pid;
-                                        _ = posix.kill(@intCast(pid), posix.SIG.KILL) catch {};
-                                    }
-                                    handled = true;
-                                },
-                                else => {},
-                            },
-                        }
-                    }
-
-                    handled_any = handled_any or handled;
-                }
-
-                if (sort_dirty) {
-                    ztop.sysinfo.sortProcStats(cached_procs, sort_by);
-                }
-
-                if (handled_any or (!quit_flag and write_len > 0)) {
-                    force_redraw = true;
-                }
-            }
+            var input_ctx: input_handler.Context = .{
+                .allocator = allocator,
+                .sys_info = &sys_info,
+                .app_tui = &app_tui,
+                .cached_procs = cached_procs,
+                .cached_threads = &cached_threads,
+                .cached_connections = &cached_connections,
+                .sort_by = &sort_by,
+                .selected_idx = &selected_idx,
+                .scroll_offset = &scroll_offset,
+                .show_help = &show_help,
+                .filter_buf = &filter_buf,
+                .filter_len = &filter_len,
+                .is_filtering = &is_filtering,
+                .cmd_buf = &cmd_buf,
+                .cmd_len = &cmd_len,
+                .is_cmd_mode = &is_cmd_mode,
+                .filtered_indices = filtered_indices[0..],
+                .filtered_count = &filtered_count,
+                .tree_view = &tree_view,
+                .zombie_parents = zombie_parents[0..],
+                .zombie_summary = &zombie_summary,
+                .show_zombie_parents = &show_zombie_parents,
+                .thread_view = &thread_view,
+                .thread_view_pid = &thread_view_pid,
+                .thread_view_name_buf = &thread_view_name_buf,
+                .thread_view_name_len = &thread_view_name_len,
+                .status_buf = &status_buf,
+                .status_len = &status_len,
+                .current_tab = &current_tab,
+                .mouse_regions = &mouse_regions,
+                .quit_flag = &quit_flag,
+                .input_buf = &input_buf,
+                .input_len = &input_len,
+            };
+            force_redraw = try input_handler.handleAvailableInput(&input_ctx);
         }
     }
 }
