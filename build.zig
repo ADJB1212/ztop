@@ -26,6 +26,13 @@ pub fn build(b: *std.Build) void {
     });
 
     if (target.result.os.tag == .macos) {
+        // Allow explicit SDK root for cross-compilation (e.g. aarch64 from x86_64 host).
+        // Pass with: -Dsdk-root=$(xcrun --show-sdk-path)
+        const sdk_root = b.option([]const u8, "sdk-root", "Path to macOS SDK root (for cross-compilation)");
+        if (sdk_root) |root| {
+            exe.addFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ root, "System/Library/Frameworks" }) });
+            exe.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/lib" }) });
+        }
         exe.root_module.linkFramework("IOKit", .{});
         exe.root_module.linkFramework("CoreFoundation", .{});
     }

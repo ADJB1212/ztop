@@ -546,7 +546,7 @@ fn readCpuTopology(self: *SysInfo) !void {
         else |_|
             CpuListInfo{ .count = 1, .first = logical_id, .target_index = 0 };
 
-        const cache_info = readLinuxSharedCache(&cpu_dir) catch .{};
+        const cache_info = readLinuxSharedCache(&cpu_dir) catch LinuxSharedCacheInfo{};
         const numa_node_id = readCpuNumaNode(&cpu_dir) catch -1;
         const physical_id = findOrAppendPhysicalId(&physical_keys, &physical_count, package_id, core_id);
 

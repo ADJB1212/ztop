@@ -10,3 +10,4 @@ testing
 *.obj
 ROADMAP.md
 scripts
+dist
