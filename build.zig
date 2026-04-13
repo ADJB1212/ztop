@@ -4,6 +4,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
 
     const optimize = b.standardOptimizeOption(.{});
+    const sdk_root = b.option([]const u8, "sdk-root", "Path to macOS SDK root (for cross-compilation)");
 
     const mod = b.addModule("ztop", .{
         .root_source_file = b.path("src/root.zig"),
@@ -25,16 +26,32 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const tests_module = b.createModule(.{
+        .root_source_file = b.path("tests/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "ztop", .module = mod },
+        },
+    });
+
+    const tests = b.addTest(.{
+        .root_module = tests_module,
+    });
+
     if (target.result.os.tag == .macos) {
         // Allow explicit SDK root for cross-compilation (e.g. aarch64 from x86_64 host).
         // Pass with: -Dsdk-root=$(xcrun --show-sdk-path)
-        const sdk_root = b.option([]const u8, "sdk-root", "Path to macOS SDK root (for cross-compilation)");
         if (sdk_root) |root| {
             exe.addFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ root, "System/Library/Frameworks" }) });
             exe.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/lib" }) });
+            tests.addFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ root, "System/Library/Frameworks" }) });
+            tests.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/lib" }) });
         }
         exe.root_module.linkFramework("IOKit", .{});
         exe.root_module.linkFramework("CoreFoundation", .{});
+        tests.root_module.linkFramework("IOKit", .{});
+        tests.root_module.linkFramework("CoreFoundation", .{});
     }
 
     b.installArtifact(exe);
@@ -51,17 +68,6 @@ pub fn build(b: *std.Build) void {
     }
 
     const test_step = b.step("test", "Run unit tests");
-
-    const tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tests/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "ztop", .module = mod },
-            },
-        }),
-    });
 
     const run_tests = b.addRunArtifact(tests);
     test_step.dependOn(&run_tests.step);

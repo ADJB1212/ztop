@@ -110,6 +110,32 @@ fn listIndexAt(regions: MouseRegions, x: u16, y: u16, scroll_offset: usize, list
     return idx;
 }
 
+fn batteryStatusLabel(status: ztop.sysinfo.BatteryStatus) []const u8 {
+    return switch (status) {
+        .charging => "Charging",
+        .discharging => "Discharging",
+        .full => "Full",
+        .unknown => "Unknown",
+    };
+}
+
+fn aggregateGpuTemp(thermal: ztop.sysinfo.ThermalStats, gpus: []const ztop.sysinfo.GpuStats) ?f32 {
+    for (gpus) |gpu| {
+        if (gpu.temperature_c) |temp_c| return temp_c;
+    }
+    return thermal.gpu_temp;
+}
+
+fn gpuVendorLabel(vendor: ztop.sysinfo.GpuVendor) []const u8 {
+    return switch (vendor) {
+        .nvidia => "NVIDIA",
+        .amd => "AMD",
+        .apple => "Apple",
+        .intel => "Intel",
+        .unknown => "Unknown",
+    };
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -177,6 +203,9 @@ pub fn main() !void {
     var cached_connections: []ztop.sysinfo.common.NetConnection = &.{};
     defer if (cached_connections.len > 0) allocator.free(cached_connections);
 
+    var cached_gpus: []ztop.sysinfo.GpuStats = &.{};
+    defer if (cached_gpus.len > 0) allocator.free(cached_gpus);
+
     var status_buf: [160]u8 = std.mem.zeroes([160]u8);
     var status_len: usize = 0;
 
@@ -189,6 +218,7 @@ pub fn main() !void {
     var disk = sys_info.getDiskStats();
     var net = sys_info.getNetStats();
     var thermal = sys_info.getThermalStats();
+    cached_gpus = try sys_info.getGpuStats(allocator);
     var battery = sys_info.getBatteryStats();
     cached_procs = try sys_info.getProcStats(allocator, sort_by);
     cached_procs = ztop.sysinfo.common.filterProcStatsByLaunchCommandSubstring(cached_procs, app_config.ignoredLaunchCommandSubstr());
@@ -222,6 +252,10 @@ pub fn main() !void {
             disk = sys_info.getDiskStats();
             net = sys_info.getNetStats();
             thermal = sys_info.getThermalStats();
+            if (cached_gpus.len > 0) {
+                allocator.free(cached_gpus);
+            }
+            cached_gpus = try sys_info.getGpuStats(allocator);
             battery = sys_info.getBatteryStats();
             cpu_history.append(cpu.usage_percent);
             mem_history.append(memoryUsagePercent(mem));
@@ -427,7 +461,6 @@ pub fn main() !void {
                         try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} {s}", .{ tx_total.value, tx_total.unit });
                     }
                 } else if (current_tab == 3) {
-                    // Thermal Box
                     try app_tui.drawBoxStyled(
                         cpu_box_x,
                         cpu_box_y,
@@ -445,51 +478,117 @@ pub fn main() !void {
                         } else {
                             try app_tui.printStyled(.{ .fg = theme.muted }, "N/A", .{});
                         }
-                        try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 2);
-                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "GPU Temp: ", .{});
-                        if (thermal.gpu_temp) |t| {
-                            try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} C", .{t});
-                        } else {
-                            try app_tui.printStyled(.{ .fg = theme.muted }, "N/A", .{});
+                        if (cpu_box_height >= 4) {
+                            try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 2);
+                            try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "GPU Temp: ", .{});
+                            if (aggregateGpuTemp(thermal, cached_gpus)) |t| {
+                                try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} C", .{t});
+                            } else {
+                                try app_tui.printStyled(.{ .fg = theme.muted }, "N/A", .{});
+                            }
+                        }
+                        if (cpu_box_height >= 5) {
+                            try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 3);
+                            try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Charge: ", .{});
+                            if (battery.charge_percent) |c| {
+                                try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1}%", .{c});
+                            } else {
+                                try app_tui.printStyled(.{ .fg = theme.muted }, "N/A", .{});
+                            }
+                        }
+                        if (cpu_box_height >= 6) {
+                            try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 4);
+                            try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Power: ", .{});
+                            if (battery.power_draw_w) |w| {
+                                try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.2} W", .{w});
+                            } else {
+                                try app_tui.printStyled(.{ .fg = theme.muted }, "N/A", .{});
+                            }
+                        }
+                        if (cpu_box_height >= 7) {
+                            try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 5);
+                            try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Status: ", .{});
+                            try app_tui.printStyled(.{ .fg = theme.text }, "{s}", .{batteryStatusLabel(battery.status)});
                         }
                     }
 
-                    // Battery Box
                     try app_tui.drawBoxStyled(
                         mem_box_x,
                         mem_box_y,
                         mem_box_width,
                         mem_box_height,
-                        "Battery",
+                        "GPU Monitoring",
                         .{ .fg = theme.border },
-                        .{ .fg = theme.battery_title, .bold = true },
+                        .{ .fg = theme.sensor_title, .bold = true },
                     );
                     if (mem_box_height >= 3) {
-                        try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 1);
-                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Charge: ", .{});
-                        if (battery.charge_percent) |c| {
-                            try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1}%", .{c});
+                        if (cached_gpus.len == 0) {
+                            try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 1);
+                            try app_tui.printStyled(.{ .fg = theme.muted }, "No supported GPU metrics detected", .{});
                         } else {
-                            try app_tui.printStyled(.{ .fg = theme.muted }, "N/A", .{});
-                        }
-                        try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 2);
-                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Power: ", .{});
-                        if (battery.power_draw_w) |w| {
-                            try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.2} W", .{w});
-                        } else {
-                            try app_tui.printStyled(.{ .fg = theme.muted }, "N/A", .{});
-                        }
+                            const rows_per_gpu: u16 = if (mem_box_height >= 7 and mem_box_width >= 42) 2 else 1;
+                            const available_rows = mem_box_height - 2;
+                            const visible_gpu_count = @min(cached_gpus.len, @as(usize, @intCast(available_rows / rows_per_gpu)));
 
-                        if (mem_box_height >= 4) {
-                            try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 3);
-                            try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Status: ", .{});
-                            const status_str = switch (battery.status) {
-                                .charging => "Charging",
-                                .discharging => "Discharging",
-                                .full => "Full",
-                                .unknown => "Unknown",
-                            };
-                            try app_tui.printStyled(.{ .fg = theme.text }, "{s}", .{status_str});
+                            for (cached_gpus[0..visible_gpu_count], 0..) |gpu, gpu_idx| {
+                                const row_y = mem_box_y + 1 + @as(u16, @intCast(gpu_idx)) * rows_per_gpu;
+                                const gpu_name = gpu.name();
+                                const name_limit: usize = if (mem_box_width > 38) @as(usize, mem_box_width - 30) else 12;
+                                const display_name = if (gpu_name.len > name_limit) gpu_name[0..name_limit] else gpu_name;
+
+                                try app_tui.moveCursor(mem_box_x + 2, row_y);
+                                try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "{s}", .{if (display_name.len > 0) display_name else "GPU"});
+                                try app_tui.printStyled(.{ .fg = theme.muted }, " [{s}]", .{gpuVendorLabel(gpu.vendor)});
+                                if (gpu.core_count) |core_count| {
+                                    try app_tui.printStyled(.{ .fg = theme.muted }, " {d} cores", .{core_count});
+                                }
+                                try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "  Util: ", .{});
+                                if (gpu.utilization_percent) |util| {
+                                    try app_tui.printStyled(.{ .fg = render.usageColor(theme, util), .bold = true }, "{d:4.1}%", .{util});
+                                } else {
+                                    try app_tui.printStyled(.{ .fg = theme.muted }, "N/A", .{});
+                                }
+
+                                if (rows_per_gpu == 2 and row_y + 1 < mem_box_y + mem_box_height - 1) {
+                                    try app_tui.moveCursor(mem_box_x + 2, row_y + 1);
+                                    var wrote_detail = false;
+
+                                    if (gpu.memory_used_bytes) |used_bytes| {
+                                        const used_value = render.formatUnit(used_bytes);
+                                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Mem: ", .{});
+                                        if (gpu.memory_total_bytes) |total_bytes| {
+                                            const total_value = render.formatUnit(total_bytes);
+                                            try app_tui.printStyled(.{ .fg = theme.memory_mid }, "{d:4.1} {s} / {d:4.1} {s}", .{ used_value.value, used_value.unit, total_value.value, total_value.unit });
+                                        } else {
+                                            try app_tui.printStyled(.{ .fg = theme.memory_mid }, "{d:4.1} {s}", .{ used_value.value, used_value.unit });
+                                        }
+                                        wrote_detail = true;
+                                    }
+
+                                    if (gpu.temperature_c) |temp_c| {
+                                        if (wrote_detail) try app_tui.printStyled(.{ .fg = theme.muted }, "  ", .{});
+                                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Temp: ", .{});
+                                        try app_tui.printStyled(.{ .fg = theme.io_rate }, "{d:4.1} C", .{temp_c});
+                                        wrote_detail = true;
+                                    }
+
+                                    if (gpu.power_draw_w) |power_w| {
+                                        if (wrote_detail) try app_tui.printStyled(.{ .fg = theme.muted }, "  ", .{});
+                                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Power: ", .{});
+                                        try app_tui.printStyled(.{ .fg = theme.io_rate }, "{d:4.1} W", .{power_w});
+                                        wrote_detail = true;
+                                    }
+
+                                    if (!wrote_detail) {
+                                        try app_tui.printStyled(.{ .fg = theme.muted }, "No additional counters exposed", .{});
+                                    }
+                                }
+                            }
+
+                            if (visible_gpu_count < cached_gpus.len and mem_box_height >= 4) {
+                                try app_tui.moveCursor(mem_box_x + 2, mem_box_y + mem_box_height - 2);
+                                try app_tui.printStyled(.{ .fg = theme.muted }, "+{d} more GPU(s)", .{cached_gpus.len - visible_gpu_count});
+                            }
                         }
                     }
                 } else if (current_tab == 4) {

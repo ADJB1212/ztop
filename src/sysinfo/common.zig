@@ -64,6 +64,39 @@ pub const ThermalStats = struct {
     gpu_temp: ?f32 = null,
 };
 
+pub const GpuVendor = enum {
+    nvidia,
+    amd,
+    apple,
+    intel,
+    unknown,
+};
+
+pub const GpuBackend = enum {
+    nvml,
+    sysfs,
+    iokit,
+    unknown,
+};
+
+pub const GpuStats = struct {
+    index: u8 = 0,
+    vendor: GpuVendor = .unknown,
+    backend: GpuBackend = .unknown,
+    name_buf: [96]u8 = std.mem.zeroes([96]u8),
+    name_len: u8 = 0,
+    utilization_percent: ?f32 = null,
+    temperature_c: ?f32 = null,
+    power_draw_w: ?f32 = null,
+    memory_used_bytes: ?u64 = null,
+    memory_total_bytes: ?u64 = null,
+    core_count: ?u32 = null,
+
+    pub fn name(self: *const GpuStats) []const u8 {
+        return self.name_buf[0..self.name_len];
+    }
+};
+
 pub const BatteryStatus = enum {
     unknown,
     charging,

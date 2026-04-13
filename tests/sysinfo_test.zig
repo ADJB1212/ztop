@@ -38,3 +38,15 @@ test "SysInfo fetches Proc stats" {
     }
     try std.testing.expect(valid_found);
 }
+
+test "SysInfo fetches GPU stats without failing" {
+    var sys_info = SysInfo.init();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const gpus = try sys_info.getGpuStats(allocator);
+    for (gpus) |gpu| {
+        try std.testing.expect(gpu.name_len > 0);
+    }
+}

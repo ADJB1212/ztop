@@ -18,6 +18,7 @@ const MemStats = common.MemStats;
 const DiskStats = common.DiskStats;
 const NetStats = common.NetStats;
 const ThermalStats = common.ThermalStats;
+const GpuStats = common.GpuStats;
 const BatteryStats = common.BatteryStats;
 const BatteryStatus = common.BatteryStatus;
 const CpuEfficiencyClass = common.CpuEfficiencyClass;
@@ -517,6 +518,16 @@ pub const SysInfo = struct {
         return .{ .charge_percent = charge, .power_draw_w = null, .status = status };
     }
 
+    pub fn getGpuStats(self: *SysInfo, allocator: std.mem.Allocator) ![]GpuStats {
+        _ = self;
+        var result: std.ArrayList(GpuStats) = .empty;
+        errdefer result.deinit(allocator);
+
+        try appendAppleGpuStats(allocator, &result);
+
+        return result.toOwnedSlice(allocator);
+    }
+
     fn findPrevProcEntry(self: *const SysInfo, pid: u32) ?ProcCpuEntry {
         for (self.prev_procs[0..self.prev_proc_count]) |entry| {
             if (entry.pid == pid) return entry;
@@ -749,6 +760,125 @@ pub const SysInfo = struct {
         return result.toOwnedSlice(allocator);
     }
 };
+
+fn appendAppleGpuStats(allocator: std.mem.Allocator, result: *std.ArrayList(GpuStats)) !void {
+    const matching = c.IOServiceMatching("IOAccelerator") orelse return;
+
+    var iter: c.io_iterator_t = 0;
+    if (c.IOServiceGetMatchingServices(c.kIOMainPortDefault, matching, &iter) != c.KERN_SUCCESS) {
+        return;
+    }
+    defer _ = c.IOObjectRelease(iter);
+
+    const performance_key = c.CFStringCreateWithCString(null, "PerformanceStatistics", c.kCFStringEncodingUTF8) orelse return;
+    defer c.CFRelease(performance_key);
+
+    const utilization_key = c.CFStringCreateWithCString(null, "Device Utilization %", c.kCFStringEncodingUTF8) orelse return;
+    defer c.CFRelease(utilization_key);
+
+    const in_use_key = c.CFStringCreateWithCString(null, "In use system memory", c.kCFStringEncodingUTF8) orelse return;
+    defer c.CFRelease(in_use_key);
+
+    const alloc_key = c.CFStringCreateWithCString(null, "Alloc system memory", c.kCFStringEncodingUTF8) orelse return;
+    defer c.CFRelease(alloc_key);
+
+    const model_key = c.CFStringCreateWithCString(null, "model", c.kCFStringEncodingUTF8) orelse return;
+    defer c.CFRelease(model_key);
+
+    const core_count_key = c.CFStringCreateWithCString(null, "gpu-core-count", c.kCFStringEncodingUTF8) orelse return;
+    defer c.CFRelease(core_count_key);
+
+    var device_index: u8 = 0;
+    while (true) {
+        const service = c.IOIteratorNext(iter);
+        if (service == 0) break;
+        defer _ = c.IOObjectRelease(service);
+
+        const stats_ref = c.IORegistryEntryCreateCFProperty(service, performance_key, null, 0) orelse continue;
+        defer c.CFRelease(stats_ref);
+        if (c.CFGetTypeID(stats_ref) != c.CFDictionaryGetTypeID()) continue;
+
+        const stats_dict: c.CFDictionaryRef = @ptrCast(stats_ref);
+        var gpu = GpuStats{
+            .index = device_index,
+            .vendor = .apple,
+            .backend = .iokit,
+        };
+        device_index +%= 1;
+
+        if (copyServiceStringProperty(service, model_key, gpu.name_buf[0..])) |name_len| {
+            gpu.name_len = @intCast(name_len);
+        } else {
+            var fallback_buf: [24]u8 = undefined;
+            setGpuName(&gpu, buildIndexedName(&fallback_buf, "Apple GPU", gpu.index));
+        }
+
+        if (getCFDictionaryNumber(stats_dict, utilization_key)) |utilization| {
+            gpu.utilization_percent = @floatFromInt(utilization);
+        }
+        if (getCFDictionaryNumber(stats_dict, in_use_key)) |used_bytes| {
+            gpu.memory_used_bytes = used_bytes;
+        }
+        if (getCFDictionaryNumber(stats_dict, alloc_key)) |allocated_bytes| {
+            gpu.memory_total_bytes = allocated_bytes;
+        }
+        if (readServiceNumber(service, core_count_key)) |core_count| {
+            gpu.core_count = @intCast(core_count);
+        }
+
+        try result.append(allocator, gpu);
+    }
+}
+
+fn setGpuName(gpu: *GpuStats, name: []const u8) void {
+    const bounded_len = @min(name.len, gpu.name_buf.len - 1);
+    if (bounded_len == 0) return;
+    @memcpy(gpu.name_buf[0..bounded_len], name[0..bounded_len]);
+    gpu.name_len = @intCast(bounded_len);
+}
+
+fn buildIndexedName(buf: []u8, prefix: []const u8, index: u8) []const u8 {
+    return std.fmt.bufPrint(buf, "{s} {d}", .{ prefix, index }) catch prefix;
+}
+
+fn copyServiceStringProperty(service: c.io_registry_entry_t, key: c.CFStringRef, dest: []u8) ?usize {
+    const value_ref = c.IORegistryEntryCreateCFProperty(service, key, null, 0) orelse return null;
+    defer c.CFRelease(value_ref);
+    return copyCFStringLikeValue(value_ref, dest);
+}
+
+fn copyCFStringLikeValue(value_ref: *const anyopaque, dest: []u8) ?usize {
+    if (dest.len == 0) return null;
+
+    const type_id = c.CFGetTypeID(value_ref);
+    if (type_id == c.CFStringGetTypeID()) {
+        if (c.CFStringGetCString(@ptrCast(value_ref), dest.ptr, @intCast(dest.len), c.kCFStringEncodingUTF8) == 0) {
+            return null;
+        }
+        return std.mem.indexOfScalar(u8, dest, 0) orelse dest.len;
+    }
+
+    if (type_id == c.CFDataGetTypeID()) {
+        const data_ref: c.CFDataRef = @ptrCast(value_ref);
+        const bytes = c.CFDataGetBytePtr(data_ref);
+        if (bytes == null) return null;
+
+        const data_len: usize = @intCast(@max(c.CFDataGetLength(data_ref), 0));
+        const bounded_len = @min(data_len, dest.len - 1);
+        if (bounded_len == 0) return null;
+
+        @memcpy(dest[0..bounded_len], bytes[0..bounded_len]);
+        return std.mem.indexOfScalar(u8, dest[0..bounded_len], 0) orelse bounded_len;
+    }
+
+    return null;
+}
+
+fn readServiceNumber(service: c.io_registry_entry_t, key: c.CFStringRef) ?u64 {
+    const value_ref = c.IORegistryEntryCreateCFProperty(service, key, null, 0) orelse return null;
+    defer c.CFRelease(value_ref);
+    return getCFNumberValue(value_ref);
+}
 
 fn readCpuTopology(self: *SysInfo) !void {
     const total_logical = @min(@as(usize, @intCast(readSysctlNumber(u32, "hw.logicalcpu") orelse return error.UnexpectedCpuTopology)), MAX_CORES);
@@ -1147,10 +1277,19 @@ fn readDiskTotals() !DiskTotals {
 
 fn getCFDictionaryU64(dict: c.CFDictionaryRef, key: c.CFStringRef) u64 {
     const value = c.CFDictionaryGetValue(dict, key) orelse return 0;
-    if (c.CFGetTypeID(value) != c.CFNumberGetTypeID()) return 0;
+    return getCFNumberValue(value) orelse 0;
+}
+
+fn getCFDictionaryNumber(dict: c.CFDictionaryRef, key: c.CFStringRef) ?u64 {
+    const value = c.CFDictionaryGetValue(dict, key) orelse return null;
+    return getCFNumberValue(value);
+}
+
+fn getCFNumberValue(value: *const anyopaque) ?u64 {
+    if (c.CFGetTypeID(value) != c.CFNumberGetTypeID()) return null;
 
     var raw: i64 = 0;
-    if (c.CFNumberGetValue(@ptrCast(value), c.kCFNumberSInt64Type, &raw) == 0 or raw < 0) return 0;
+    if (c.CFNumberGetValue(@ptrCast(value), c.kCFNumberSInt64Type, &raw) == 0 or raw < 0) return null;
 
     return @intCast(raw);
 }

@@ -454,6 +454,8 @@ pub const Tui = struct {
                     try self.printStyled(title_style, "┤ 󰋊 {s} ├", .{title});
                 } else if (std.mem.startsWith(u8, title, "Network") or std.mem.startsWith(u8, title, "Connections")) {
                     try self.printStyled(title_style, "┤ 󰈀 {s} ├", .{title});
+                } else if (std.mem.startsWith(u8, title, "GPU")) {
+                    try self.printStyled(title_style, "┤ 󰢮 {s} ├", .{title});
                 } else if (std.mem.startsWith(u8, title, "Sensors") or std.mem.startsWith(u8, title, "Thermal")) {
                     try self.printStyled(title_style, "┤  {s} ├", .{title});
                 } else if (std.mem.startsWith(u8, title, "Battery")) {
