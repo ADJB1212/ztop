@@ -274,6 +274,116 @@ fn buildTopologyRowText(buf: []u8, row: TopologyPhysicalRow, cpu: ztop.sysinfo.C
     };
 }
 
+fn collectLogicalIndicesForPhysical(
+    topology: CpuTopology,
+    physical_id: u16,
+    out: *[ztop.sysinfo.common.MAX_CORES]usize,
+) []usize {
+    var count: usize = 0;
+    for (topology.logical_cores, 0..) |logical_core, idx| {
+        if (logical_core.physical_id != physical_id or count >= out.len) continue;
+        out[count] = idx;
+        count += 1;
+    }
+
+    std.mem.sort(usize, out[0..count], topology, struct {
+        fn lessThan(topology_ctx: CpuTopology, a_idx: usize, b_idx: usize) bool {
+            const a = topology_ctx.logical_cores[a_idx];
+            const b = topology_ctx.logical_cores[b_idx];
+            if (a.thread_index != b.thread_index) return a.thread_index < b.thread_index;
+            return a.logical_id < b.logical_id;
+        }
+    }.lessThan);
+
+    return out[0..count];
+}
+
+fn renderTopologyHeaderLine(app_tui: *Tui, theme: ztop.config.Theme, column_width: u16, header_row: TopologyPhysicalRow, topology: CpuTopology) !void {
+    var header_buf: [64]u8 = undefined;
+    const label = buildTopologyHeaderText(&header_buf, header_row, topology);
+
+    // Format: "┈ <label> ┈" and fill to the column width.
+    const left = "┈ ";
+    const right = " ┈";
+    const fixed = left.len + right.len;
+    const available_label: usize = if (column_width > fixed) @as(usize, @intCast(column_width - fixed)) else 0;
+    const visible_label = label[0..@min(label.len, available_label)];
+
+    try app_tui.printStyled(.{ .fg = theme.muted }, "{s}", .{left});
+    try app_tui.printStyled(.{ .fg = theme.cpu_title, .bold = true }, "{s}", .{visible_label});
+    try app_tui.printStyled(.{ .fg = theme.muted }, "{s}", .{right});
+
+    // Pad remainder with "┈" so headers look like section dividers.
+    const used = fixed + visible_label.len;
+    if (@as(usize, @intCast(column_width)) > used) {
+        var i: usize = 0;
+        while (i < (@as(usize, @intCast(column_width)) - used)) : (i += 1) {
+            try app_tui.printStyled(.{ .fg = theme.muted }, "┈", .{});
+        }
+    }
+}
+
+fn renderTopologyPhysicalRowLine(
+    app_tui: *Tui,
+    theme: ztop.config.Theme,
+    column_width: u16,
+    physical_row: TopologyPhysicalRow,
+    cpu: ztop.sysinfo.CpuStats,
+    topology: CpuTopology,
+) !void {
+    var logical_indices: [ztop.sysinfo.common.MAX_CORES]usize = undefined;
+    const indices = collectLogicalIndicesForPhysical(topology, physical_row.physical_id, &logical_indices);
+
+    // Left label: "C00 │"
+    var prefix_buf: [8]u8 = undefined;
+    const prefix = std.fmt.bufPrint(&prefix_buf, "C{d:0>2}", .{physical_row.physical_id}) catch "C??";
+    var written: u16 = 0;
+    if (column_width == 0) return;
+
+    try app_tui.printStyled(.{ .fg = theme.muted, .bold = true }, "{s}", .{prefix});
+    written +|= @as(u16, @intCast(@min(prefix.len, @as(usize, @intCast(column_width)))));
+    if (written >= column_width) return;
+
+    try app_tui.printStyled(.{ .fg = theme.muted }, " │ ", .{});
+    written +|= 3;
+    if (written >= column_width) return;
+
+    for (indices, 0..) |logical_idx, thread_i| {
+        const logical_core = topology.logical_cores[logical_idx];
+        const usage = if (@as(usize, logical_core.logical_id) < cpu.per_core_usage.len)
+            cpu.per_core_usage[logical_core.logical_id]
+        else
+            0.0;
+        const usage_int: u16 = @intFromFloat(@round(@max(usage, 0.0)));
+
+        // Per-thread chunk: "[tile] <pct>%"
+        // tile is a small heat-colored block with the logical id inside.
+        const chunk_width: u16 = 4 + 1 + 4; // " 00 " + " " + "100%"
+        const needs_space: u16 = if (thread_i > 0) 1 else 0;
+        const remaining = column_width -| written;
+        if (remaining < needs_space + chunk_width) break;
+
+        if (thread_i > 0) {
+            try app_tui.printStyled(.{ .fg = theme.muted }, " ", .{});
+            written +|= 1;
+        }
+
+        const heat = usageColor(theme, usage);
+        try app_tui.printStyled(
+            .{ .fg = theme.selection_fg, .bg = heat, .bold = usage >= 70 },
+            " {d:0>2} ",
+            .{logical_core.logical_id},
+        );
+        written +|= 4;
+
+        try app_tui.printStyled(.{ .fg = theme.muted }, " ", .{});
+        written +|= 1;
+
+        try app_tui.printStyled(.{ .fg = heat, .bold = usage >= 70 }, "{d:>3}%", .{usage_int});
+        written +|= 4;
+    }
+}
+
 fn renderPerCoreUsageArea(app_tui: *Tui, theme: ztop.config.Theme, x: u16, y: u16, width: u16, height: u16, cpu: ztop.sysinfo.CpuStats) !void {
     if (height == 0 or cpu.per_core_usage.len == 0) return;
 
@@ -396,9 +506,9 @@ pub fn renderCpuTopologyBox(
         for (topology.logical_cores) |logical_core| {
             if (logical_core.physical_id == row.physical_id) threads += 1;
         }
-        const physical_digits = digitsU16(row.physical_id);
-        const logical_digits = digitsU16(@intCast(cpu.cores -| 1));
-        const row_width = physical_digits + 1 + threads * (logical_digits + 5);
+        // Layout estimate for the fancy map rows:
+        // "C00 │ " + threads * (" 00 " + " " + "100%") + (threads-1) spaces between chunks
+        const row_width = 6 + threads * 9 + (threads -| 1);
         max_row_width = @max(max_row_width, row_width);
     }
 
@@ -414,19 +524,10 @@ pub fn renderCpuTopologyBox(
 
             switch (line) {
                 .header => |header_row| {
-                    const label = buildTopologyHeaderText(&header_buf, header_row, topology);
-                    const visible = label[0..@min(label.len, column_width)];
-                    try app_tui.printStyled(.{ .fg = theme.cpu_title, .bold = true }, "{s}", .{visible});
+                    try renderTopologyHeaderLine(app_tui, theme, @intCast(column_width), header_row, topology);
                 },
                 .row => |physical_row| {
-                    var row_buf: [256]u8 = undefined;
-                    const row_text = buildTopologyRowText(&row_buf, physical_row, cpu, topology);
-                    const visible = row_text.text[0..@min(row_text.text.len, column_width)];
-                    const row_style: Tui.Style = if (row_text.hot)
-                        .{ .fg = theme.text, .bold = true }
-                    else
-                        .{ .fg = theme.text };
-                    try app_tui.printStyled(row_style, "{s}", .{visible});
+                    try renderTopologyPhysicalRowLine(app_tui, theme, @intCast(column_width), physical_row, cpu, topology);
                 },
             }
         }
