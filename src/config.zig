@@ -89,6 +89,9 @@ pub const Config = struct {
     theme: Theme,
     theme_overrides: ThemeOverrides,
     default_sort: sysinfo.SortBy,
+    default_tab: u8,
+    default_tree_view: bool,
+    show_help_on_startup: bool,
     update_interval_ms: u32,
     ignore_launch_cmd_substr_buf: [256]u8,
     ignore_launch_cmd_substr_len: u16,
@@ -100,6 +103,9 @@ pub const Config = struct {
             .theme = themePreset(.default),
             .theme_overrides = .{},
             .default_sort = .cpu,
+            .default_tab = 1,
+            .default_tree_view = false,
+            .show_help_on_startup = false,
             .update_interval_ms = 500,
             .ignore_launch_cmd_substr_buf = std.mem.zeroes([256]u8),
             .ignore_launch_cmd_substr_len = 0,
@@ -318,6 +324,11 @@ fn applyEntry(config: *Config, raw_key: []const u8, raw_value: []const u8) !void
         return;
     }
 
+    if (std.mem.eql(u8, key, "default_tab") or std.mem.eql(u8, key, "startup_tab") or std.mem.eql(u8, key, "tab")) {
+        config.default_tab = try parseTab(value);
+        return;
+    }
+
     if (std.mem.eql(u8, key, "update_interval_ms") or std.mem.eql(u8, key, "refresh_interval_ms")) {
         const interval_ms = try std.fmt.parseInt(u32, raw_value, 10);
         if (interval_ms < 100 or interval_ms > 10_000) return error.InvalidUpdateInterval;
@@ -326,13 +337,23 @@ fn applyEntry(config: *Config, raw_key: []const u8, raw_value: []const u8) !void
     }
 
     if (std.mem.eql(u8, key, "nerd_fonts") or std.mem.eql(u8, key, "nerd_font")) {
-        if (std.mem.eql(u8, value, "true") or std.mem.eql(u8, value, "1") or std.mem.eql(u8, value, "yes")) {
-            config.nerd_fonts = true;
-        } else if (std.mem.eql(u8, value, "false") or std.mem.eql(u8, value, "0") or std.mem.eql(u8, value, "no")) {
-            config.nerd_fonts = false;
-        } else {
-            return error.InvalidBooleanValue;
-        }
+        config.nerd_fonts = try parseBool(value);
+        return;
+    }
+
+    if (std.mem.eql(u8, key, "default_tree_view") or
+        std.mem.eql(u8, key, "tree_view") or
+        std.mem.eql(u8, key, "start_in_tree_view"))
+    {
+        config.default_tree_view = try parseBool(value);
+        return;
+    }
+
+    if (std.mem.eql(u8, key, "show_help_on_startup") or
+        std.mem.eql(u8, key, "help_on_startup") or
+        std.mem.eql(u8, key, "startup_help"))
+    {
+        config.show_help_on_startup = try parseBool(value);
         return;
     }
 
@@ -414,6 +435,24 @@ fn parseSortBy(value: []const u8) !sysinfo.SortBy {
     if (std.mem.eql(u8, value, "memory")) return .mem;
     if (std.mem.eql(u8, value, "process_name")) return .name;
     return std.meta.stringToEnum(sysinfo.SortBy, value) orelse error.UnknownSort;
+}
+
+fn parseTab(value: []const u8) !u8 {
+    if (std.mem.eql(u8, value, "1") or std.mem.eql(u8, value, "main")) return 1;
+    if (std.mem.eql(u8, value, "2") or std.mem.eql(u8, value, "io") or std.mem.eql(u8, value, "i_o")) return 2;
+    if (std.mem.eql(u8, value, "3") or std.mem.eql(u8, value, "sensor") or std.mem.eql(u8, value, "sensors")) return 3;
+    if (std.mem.eql(u8, value, "4") or std.mem.eql(u8, value, "network") or std.mem.eql(u8, value, "connections")) return 4;
+    return error.UnknownTab;
+}
+
+fn parseBool(value: []const u8) !bool {
+    if (std.mem.eql(u8, value, "true") or std.mem.eql(u8, value, "1") or std.mem.eql(u8, value, "yes")) {
+        return true;
+    }
+    if (std.mem.eql(u8, value, "false") or std.mem.eql(u8, value, "0") or std.mem.eql(u8, value, "no")) {
+        return false;
+    }
+    return error.InvalidBooleanValue;
 }
 
 fn parseColor(value: []const u8) !tui.Tui.Color {

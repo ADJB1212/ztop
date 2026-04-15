@@ -90,7 +90,7 @@ pub fn main() !void {
     var sort_by: ztop.sysinfo.SortBy = app_config.default_sort;
     var selected_idx: usize = 0;
     var scroll_offset: usize = 0;
-    var show_help: bool = false;
+    var show_help: bool = app_config.show_help_on_startup;
 
     var filter_buf: [32]u8 = std.mem.zeroes([32]u8);
     var filter_len: usize = 0;
@@ -104,7 +104,7 @@ pub fn main() !void {
     var filtered_depths: [2048]u8 = std.mem.zeroes([2048]u8);
     var filtered_is_lasts: [2048]u16 = std.mem.zeroes([2048]u16);
     var filtered_count: usize = 0;
-    var tree_view: bool = false;
+    var tree_view: bool = app_config.default_tree_view;
 
     var zombie_parents: [ztop.sysinfo.common.MAX_PROCS]process_commands.ZombieParentEntry = undefined;
     var zombie_summary: process_commands.ZombieParentSummary = .{};
@@ -128,6 +128,10 @@ pub fn main() !void {
 
     var cpu_history: ztop.history.MetricHistory = .{};
     var mem_history: ztop.history.MetricHistory = .{};
+    var disk_read_history: ztop.history.RateHistory = .{};
+    var disk_write_history: ztop.history.RateHistory = .{};
+    var net_rx_history: ztop.history.RateHistory = .{};
+    var net_tx_history: ztop.history.RateHistory = .{};
 
     var cpu = sys_info.getCpuStats();
     var cpu_topology = sys_info.getCpuTopology();
@@ -141,15 +145,23 @@ pub fn main() !void {
     cached_procs = ztop.sysinfo.common.filterProcStatsByLaunchCommandSubstring(cached_procs, app_config.ignoredLaunchCommandSubstr());
     cpu_history.append(cpu.usage_percent);
     mem_history.append(memoryUsagePercent(mem));
+    disk_read_history.append(disk.read_bytes_ps);
+    disk_write_history.append(disk.write_bytes_ps);
+    net_rx_history.append(net.rx_bytes_ps);
+    net_tx_history.append(net.tx_bytes_ps);
 
     var last_fetch_time = std.time.milliTimestamp();
     const fetch_interval_ms: i64 = @intCast(app_config.update_interval_ms);
 
     var force_redraw = true;
-    var current_tab: u8 = 1;
+    var current_tab: u8 = app_config.default_tab;
     var mouse_regions: input_handler.MouseRegions = .{};
     var input_buf: [128]u8 = undefined;
     var input_len: usize = 0;
+
+    if (current_tab == 4) {
+        try render.refreshConnections(allocator, &sys_info, &cached_connections);
+    }
 
     try app_tui.out.writeAll("\x1b]2;ztop\x1b\\");
 
@@ -176,6 +188,10 @@ pub fn main() !void {
             battery = sys_info.getBatteryStats();
             cpu_history.append(cpu.usage_percent);
             mem_history.append(memoryUsagePercent(mem));
+            disk_read_history.append(disk.read_bytes_ps);
+            disk_write_history.append(disk.write_bytes_ps);
+            net_rx_history.append(net.rx_bytes_ps);
+            net_tx_history.append(net.tx_bytes_ps);
 
             if (cached_procs.len > 0) {
                 allocator.free(cached_procs);
@@ -325,58 +341,57 @@ pub fn main() !void {
                         }
                     }
                 } else if (current_tab == 2) {
-                    // Disk Box
-                    try app_tui.drawBoxStyled(
+                    try render.renderDualRateBox(
+                        &app_tui,
+                        theme,
                         cpu_box_x,
                         cpu_box_y,
                         cpu_box_width,
                         cpu_box_height,
                         "Disk I/O",
-                        .{ .fg = theme.border },
-                        .{ .fg = theme.disk_title, .bold = true },
+                        theme.disk_title,
+                        .{
+                            .label = "READ",
+                            .short_label = "R ",
+                            .rate_bytes_ps = disk.read_bytes_ps,
+                            .history = &disk_read_history,
+                            .color = theme.disk_title,
+                        },
+                        .{
+                            .label = "WRITE",
+                            .short_label = "W ",
+                            .rate_bytes_ps = disk.write_bytes_ps,
+                            .history = &disk_write_history,
+                            .color = theme.io_rate,
+                        },
                     );
-                    if (cpu_box_height >= 3) {
-                        try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 1);
-                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Read: ", .{});
-                        const r = render.formatUnit(disk.read_bytes_ps);
-                        try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} {s}/s", .{ r.value, r.unit });
-                        try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 2);
-                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Write: ", .{});
-                        const w = render.formatUnit(disk.write_bytes_ps);
-                        try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} {s}/s", .{ w.value, w.unit });
-                    }
 
-                    // Network Box
-                    try app_tui.drawBoxStyled(
+                    try render.renderDualRateBox(
+                        &app_tui,
+                        theme,
                         mem_box_x,
                         mem_box_y,
                         mem_box_width,
                         mem_box_height,
                         "Network I/O",
-                        .{ .fg = theme.border },
-                        .{ .fg = theme.network_title, .bold = true },
+                        theme.network_title,
+                        .{
+                            .label = "RX",
+                            .short_label = "RX ",
+                            .rate_bytes_ps = net.rx_bytes_ps,
+                            .total_bytes = net.rx_bytes,
+                            .history = &net_rx_history,
+                            .color = theme.network_title,
+                        },
+                        .{
+                            .label = "TX",
+                            .short_label = "TX ",
+                            .rate_bytes_ps = net.tx_bytes_ps,
+                            .total_bytes = net.tx_bytes,
+                            .history = &net_tx_history,
+                            .color = theme.io_rate,
+                        },
                     );
-                    if (mem_box_height >= 3) {
-                        try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 1);
-                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Rx: ", .{});
-                        const rx_ps = render.formatUnit(net.rx_bytes_ps);
-                        try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} {s}/s", .{ rx_ps.value, rx_ps.unit });
-
-                        try app_tui.moveCursor(mem_box_x + 22, mem_box_y + 1);
-                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Total: ", .{});
-                        const rx_total = render.formatUnit(net.rx_bytes);
-                        try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} {s}", .{ rx_total.value, rx_total.unit });
-
-                        try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 2);
-                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Tx: ", .{});
-                        const tx_ps = render.formatUnit(net.tx_bytes_ps);
-                        try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} {s}/s", .{ tx_ps.value, tx_ps.unit });
-
-                        try app_tui.moveCursor(mem_box_x + 22, mem_box_y + 2);
-                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Total: ", .{});
-                        const tx_total = render.formatUnit(net.tx_bytes);
-                        try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} {s}", .{ tx_total.value, tx_total.unit });
-                    }
                 } else if (current_tab == 3) {
                     try app_tui.drawBoxStyled(
                         cpu_box_x,

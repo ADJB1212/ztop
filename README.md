@@ -101,8 +101,19 @@ Example:
 ```ini
 theme = nord
 default_sort = cpu
+default_tab = network
+default_tree_view = false
+show_help_on_startup = false
 update_interval_ms = 500
 color.tab_active = bright_cyan
 ```
 
-This lets you set a preferred theme, choose the initial process sort, adjust refresh speed, and override individual UI colors.
+This lets you set a preferred theme, choose the initial tab and process sort, start in tree view, open the help overlay on launch, adjust refresh speed, and override individual UI colors.
+
+Additional startup options:
+
+- `default_tab = main|io|sensors|network` (or `1` through `4`)
+- `default_tree_view = true|false`
+- `show_help_on_startup = true|false`
+
+Boolean values also accept `yes`/`no` and `1`/`0`.
