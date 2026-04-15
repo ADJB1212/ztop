@@ -55,7 +55,7 @@ zig build run
 
 Requirements:
 
-- Zig `0.15.2` or newer
+- Zig `0.16.0` or newer
 - A real terminal/TTY for `zig build run`
 
 To run the test suite:
