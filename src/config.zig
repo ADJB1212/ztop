@@ -118,22 +118,22 @@ pub const Config = struct {
     }
 };
 
-pub fn load(allocator: std.mem.Allocator) !Config {
+pub fn load(allocator: std.mem.Allocator, io: std.Io, environ_map: *const std.process.Environ.Map) !Config {
     var config = Config.defaults();
-    const config_path = try defaultConfigPath(allocator);
+    const config_path = try defaultConfigPath(allocator, environ_map);
     defer if (config_path) |path| allocator.free(path);
 
     const path = config_path orelse return config;
-    parseFile(allocator, path, &config) catch |err| switch (err) {
+    parseFile(io, allocator, path, &config) catch |err| switch (err) {
         error.FileNotFound => return config,
         else => return err,
     };
     return config;
 }
 
-pub fn loadPath(allocator: std.mem.Allocator, path: []const u8) !Config {
+pub fn loadPath(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !Config {
     var config = Config.defaults();
-    try parseFile(allocator, path, &config);
+    try parseFile(io, allocator, path, &config);
     return config;
 }
 
@@ -283,8 +283,8 @@ pub fn themePreset(name: ThemeName) Theme {
     };
 }
 
-fn parseFile(allocator: std.mem.Allocator, path: []const u8, config: *Config) !void {
-    const contents = try std.fs.cwd().readFileAlloc(allocator, path, 64 * 1024);
+fn parseFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, config: *Config) !void {
+    const contents = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(64 * 1024));
     defer allocator.free(contents);
     try parseInto(contents, config);
 }
@@ -383,22 +383,16 @@ fn applyEntry(config: *Config, raw_key: []const u8, raw_value: []const u8) !void
     return error.UnknownConfigKey;
 }
 
-fn defaultConfigPath(allocator: std.mem.Allocator) !?[]u8 {
-    if (std.process.getEnvVarOwned(allocator, "XDG_CONFIG_HOME")) |xdg_config_home| {
-        defer allocator.free(xdg_config_home);
+fn defaultConfigPath(allocator: std.mem.Allocator, environ_map: *const std.process.Environ.Map) !?[]u8 {
+    if (environ_map.get("XDG_CONFIG_HOME")) |xdg_config_home| {
         return try std.fs.path.join(allocator, &.{ xdg_config_home, "ztop.cfg" });
-    } else |err| switch (err) {
-        error.EnvironmentVariableNotFound => {},
-        else => return err,
     }
 
-    if (std.process.getEnvVarOwned(allocator, "HOME")) |home| {
-        defer allocator.free(home);
+    if (environ_map.get("HOME")) |home| {
         return try std.fs.path.join(allocator, &.{ home, ".config", "ztop.cfg" });
-    } else |err| switch (err) {
-        error.EnvironmentVariableNotFound => return null,
-        else => return err,
     }
+
+    return null;
 }
 
 fn normalize(buffer: []u8, text: []const u8) ![]const u8 {

@@ -65,14 +65,70 @@ test "config file loader reads explicit path" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.writeFile(.{ .sub_path = "ztop.cfg", .data = "theme = solarized\ncolor.command_prompt = bright_yellow\n" });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "ztop.cfg", .data = "theme = solarized\ncolor.command_prompt = bright_yellow\n" });
 
-    const config_path = try tmp.dir.realpathAlloc(std.testing.allocator, "ztop.cfg");
+    const config_path = try absoluteTmpPath(std.testing.allocator, &tmp, "ztop.cfg");
     defer std.testing.allocator.free(config_path);
 
-    const loaded = try config.loadPath(std.testing.allocator, config_path);
+    const loaded = try config.loadPath(std.testing.allocator, std.testing.io, config_path);
 
     try std.testing.expectEqual(config.ThemeName.solarized, loaded.theme_name);
     try std.testing.expectEqual(tui.Tui.Color.bright_yellow, loaded.theme.command_prompt);
     try std.testing.expectEqual(tui.Tui.Color.blue, loaded.theme.cpu_title);
+}
+
+test "config loader resolves XDG_CONFIG_HOME from environ map" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "ztop.cfg",
+        .data = "theme = gruvbox\nnerd_fonts = true\n",
+    });
+
+    const xdg_config_home = try absoluteTmpPath(std.testing.allocator, &tmp, "");
+    defer std.testing.allocator.free(xdg_config_home);
+
+    var environ_map = std.process.Environ.Map.init(std.testing.allocator);
+    defer environ_map.deinit();
+    try environ_map.put("XDG_CONFIG_HOME", xdg_config_home);
+
+    const loaded = try config.load(std.testing.allocator, std.testing.io, &environ_map);
+
+    try std.testing.expectEqual(config.ThemeName.gruvbox, loaded.theme_name);
+    try std.testing.expectEqual(true, loaded.nerd_fonts);
+}
+
+test "config loader falls back to HOME from environ map" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(std.testing.io, ".config");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = ".config/ztop.cfg",
+        .data = "theme = catppuccin\nshow_help_on_startup = true\n",
+    });
+
+    const home = try absoluteTmpPath(std.testing.allocator, &tmp, "");
+    defer std.testing.allocator.free(home);
+
+    var environ_map = std.process.Environ.Map.init(std.testing.allocator);
+    defer environ_map.deinit();
+    try environ_map.put("HOME", home);
+
+    const loaded = try config.load(std.testing.allocator, std.testing.io, &environ_map);
+
+    try std.testing.expectEqual(config.ThemeName.catppuccin, loaded.theme_name);
+    try std.testing.expectEqual(true, loaded.show_help_on_startup);
+}
+
+fn absoluteTmpPath(allocator: std.mem.Allocator, tmp: *const std.testing.TmpDir, sub_path: []const u8) ![]u8 {
+    const cwd = try std.process.currentPathAlloc(std.testing.io, allocator);
+    defer allocator.free(cwd);
+
+    if (sub_path.len == 0) {
+        return try std.fs.path.join(allocator, &.{ cwd, ".zig-cache", "tmp", tmp.sub_path[0..] });
+    }
+
+    return try std.fs.path.join(allocator, &.{ cwd, ".zig-cache", "tmp", tmp.sub_path[0..], sub_path });
 }

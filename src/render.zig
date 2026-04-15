@@ -112,7 +112,7 @@ pub fn renderHistoryGraph(
 
                 try app_tui.writeStyled(.{ .fg = metricGraphColor(theme, mode, value) }, graph_blocks[cell_level]);
             } else {
-                try app_tui.out.writeAll(" ");
+                try app_tui.out.writeStreamingAll(app_tui.io, " ");
             }
         }
     }
@@ -221,7 +221,7 @@ fn renderRateMetricRow(
     );
     if (used >= width) return;
 
-    try app_tui.out.writeAll(" ");
+    try app_tui.out.writeStreamingAll(app_tui.io, " ");
     used += 1;
 
     const rate = formatUnit(series.rate_bytes_ps);
@@ -242,7 +242,7 @@ fn renderRateMetricRow(
 
     if (used + 6 > width) return;
 
-    try app_tui.out.writeAll(" ");
+    try app_tui.out.writeStreamingAll(app_tui.io, " ");
     used += 1;
 
     const meter_width: u16 = @intCast(width - used);
@@ -276,7 +276,7 @@ fn renderRateLane(
         try app_tui.moveCursor(x, y);
         try app_tui.printStyled(.{ .fg = series.color, .bold = true }, "{s}", .{series.short_label});
         for (series.short_label.len..label_width) |_| {
-            try app_tui.out.writeAll(" ");
+            try app_tui.out.writeStreamingAll(app_tui.io, " ");
         }
     }
 
@@ -431,8 +431,7 @@ fn collectTopologyRows(topology: CpuTopology, rows: *[ztop.sysinfo.common.MAX_CO
 }
 
 fn buildTopologyHeaderText(buf: []u8, row: TopologyPhysicalRow, topology: CpuTopology) []const u8 {
-    var stream = std.io.fixedBufferStream(buf);
-    const writer = stream.writer();
+    var writer: std.Io.Writer = .fixed(buf);
     var wrote_any = false;
 
     if (topology.has_numa and row.numa_node_id >= 0) {
@@ -463,7 +462,7 @@ fn buildTopologyHeaderText(buf: []u8, row: TopologyPhysicalRow, topology: CpuTop
         writer.writeAll("Topology") catch {};
     }
 
-    return buf[0..stream.pos];
+    return writer.buffered();
 }
 
 fn logicalCoreUsage(cpu: ztop.sysinfo.CpuStats, logical_id: u16) f32 {
@@ -583,7 +582,7 @@ fn renderTopologyPhysicalRowLine(
     );
     if (written >= column_width) return;
 
-    try app_tui.out.writeAll(" ");
+    try app_tui.out.writeStreamingAll(app_tui.io, " ");
     written += 1;
     if (written >= column_width) return;
 
@@ -593,7 +592,7 @@ fn renderTopologyPhysicalRowLine(
     written += prefix.len;
     if (written >= column_width) return;
 
-    try app_tui.out.writeAll(" ");
+    try app_tui.out.writeStreamingAll(app_tui.io, " ");
     written += 1;
     if (written >= column_width) return;
 

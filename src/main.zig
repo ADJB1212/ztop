@@ -12,12 +12,12 @@ const repo_label = "github.com/ADJB1212/ztop";
 var quit_flag = false;
 var sigwinch_flag = false;
 
-fn handleSigInt(sig: c_int) callconv(.c) void {
+fn handleSigInt(sig: posix.SIG) callconv(.c) void {
     _ = sig;
     quit_flag = true;
 }
 
-fn handleSigWinch(sig: c_int) callconv(.c) void {
+fn handleSigWinch(sig: posix.SIG) callconv(.c) void {
     _ = sig;
     sigwinch_flag = true;
 }
@@ -53,12 +53,15 @@ fn gpuVendorLabel(vendor: ztop.sysinfo.GpuVendor) []const u8 {
     };
 }
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+fn nowMs(io: std.Io) i64 {
+    return std.Io.Clock.now(.real, io).toMilliseconds();
+}
 
-    const app_config = ztop.config.load(allocator) catch |err| {
+pub fn main(main_init: std.process.Init) !void {
+    const allocator = main_init.gpa;
+    const io = main_init.io;
+
+    const app_config = ztop.config.load(allocator, io, main_init.environ_map) catch |err| {
         std.debug.print("ztop: failed to load config: {s}\n", .{@errorName(err)});
         return err;
     };
@@ -79,10 +82,10 @@ pub fn main() !void {
     };
     posix.sigaction(posix.SIG.WINCH, &act_winch, null);
 
-    var app_tui = try Tui.init(app_config.nerd_fonts);
+    var app_tui = try Tui.init(io, app_config.nerd_fonts, main_init.environ_map.get("TERM_PROGRAM"));
     defer app_tui.deinit();
 
-    var sys_info = SysInfo.init();
+    var sys_info = SysInfo.init(io);
 
     var cached_procs: []ztop.sysinfo.ProcStats = &.{};
     defer if (cached_procs.len > 0) allocator.free(cached_procs);
@@ -150,7 +153,7 @@ pub fn main() !void {
     net_rx_history.append(net.rx_bytes_ps);
     net_tx_history.append(net.tx_bytes_ps);
 
-    var last_fetch_time = std.time.milliTimestamp();
+    var last_fetch_time = nowMs(io);
     const fetch_interval_ms: i64 = @intCast(app_config.update_interval_ms);
 
     var force_redraw = true;
@@ -163,7 +166,7 @@ pub fn main() !void {
         try render.refreshConnections(allocator, &sys_info, &cached_connections);
     }
 
-    try app_tui.out.writeAll("\x1b]2;ztop\x1b\\");
+    try app_tui.out.writeStreamingAll(io, "\x1b]2;ztop\x1b\\");
 
     while (!quit_flag) {
         if (sigwinch_flag) {
@@ -171,7 +174,7 @@ pub fn main() !void {
             force_redraw = true;
         }
 
-        const current_time = std.time.milliTimestamp();
+        const current_time = nowMs(io);
         const elapsed = current_time - last_fetch_time;
 
         if (elapsed >= fetch_interval_ms) {
@@ -261,11 +264,11 @@ pub fn main() !void {
 
                     try app_tui.moveCursor(tabs_x, 1);
                     if (current_tab == 1) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab1_label}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab1_label});
-                    try app_tui.out.writeAll("  ");
+                    try app_tui.out.writeStreamingAll(io, "  ");
                     if (current_tab == 2) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab2_label}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab2_label});
-                    try app_tui.out.writeAll("  ");
+                    try app_tui.out.writeStreamingAll(io, "  ");
                     if (current_tab == 3) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab3_label}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab3_label});
-                    try app_tui.out.writeAll("  ");
+                    try app_tui.out.writeStreamingAll(io, "  ");
                     if (current_tab == 4) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab4_label}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab4_label});
                 }
 
@@ -597,7 +600,7 @@ pub fn main() !void {
 
                             if (is_selected) {
                                 try app_tui.setStyle(.{ .bg = theme.selection_bg });
-                                for (0..procs_box_width - 4) |_| try app_tui.out.writeAll(" ");
+                                for (0..procs_box_width - 4) |_| try app_tui.out.writeStreamingAll(io, " ");
                                 try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1 + @as(u16, @intCast(row)));
                             }
 
@@ -684,7 +687,7 @@ pub fn main() !void {
 
                             if (is_selected) {
                                 try app_tui.setStyle(.{ .bg = theme.selection_bg });
-                                for (0..procs_box_width - 4) |_| try app_tui.out.writeAll(" ");
+                                for (0..procs_box_width - 4) |_| try app_tui.out.writeStreamingAll(io, " ");
                                 try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1 + @as(u16, @intCast(row)));
                             }
 
@@ -830,7 +833,7 @@ pub fn main() !void {
 
                             if (is_selected) {
                                 try app_tui.setStyle(.{ .bg = theme.selection_bg });
-                                for (0..procs_box_width - 4) |_| try app_tui.out.writeAll(" ");
+                                for (0..procs_box_width - 4) |_| try app_tui.out.writeStreamingAll(io, " ");
                                 try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1 + @as(u16, @intCast(row)));
                             }
 
@@ -905,7 +908,7 @@ pub fn main() !void {
                     // Clear background for overlay
                     for (0..help_height) |i| {
                         try app_tui.moveCursor(h_x, h_y + @as(u16, @intCast(i)));
-                        for (0..help_width) |_| try app_tui.out.writeAll(" ");
+                        for (0..help_width) |_| try app_tui.out.writeStreamingAll(io, " ");
                     }
 
                     try app_tui.drawBoxStyled(h_x, h_y, help_width, help_height, "Help", .{ .fg = theme.border }, .{ .fg = theme.text, .bold = true });
@@ -995,7 +998,7 @@ pub fn main() !void {
         } // end force_redraw
 
         var fds = [_]posix.pollfd{.{ .fd = app_tui.in.handle, .events = posix.POLL.IN, .revents = 0 }};
-        const now = std.time.milliTimestamp();
+        const now = nowMs(io);
         var remaining_ms = fetch_interval_ms - (now - last_fetch_time);
         if (remaining_ms < 0) remaining_ms = 0;
 

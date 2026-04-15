@@ -37,11 +37,11 @@ test "synchronized output is disabled for Apple Terminal" {
 
 test "hyperlink writer emits OSC 8 wrapper" {
     var buf: [128]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
+    var writer: std.Io.Writer = .fixed(&buf);
 
-    try tui.Tui.writeHyperlinkTo(stream.writer(), "https://example.com", "example");
+    try tui.Tui.writeHyperlinkTo(&writer, "https://example.com", "example");
 
-    try std.testing.expectEqualStrings("\x1b]8;;https://example.com\x1b\\example\x1b]8;;\x1b\\", stream.getWritten());
+    try std.testing.expectEqualStrings("\x1b]8;;https://example.com\x1b\\example\x1b]8;;\x1b\\", writer.buffered());
 }
 
 test "parseInputToken parses mouse press and scroll events" {

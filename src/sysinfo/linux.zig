@@ -45,6 +45,7 @@ pub const CpuListInfo = struct {
 const MAX_THREADS = common.MAX_THREADS;
 
 pub const SysInfo = struct {
+    io: std.Io,
     prev_cpu_tick: CpuTick = .{},
     prev_core_ticks: [MAX_CORES]CpuTick = std.mem.zeroes([MAX_CORES]CpuTick),
     core_usage: [MAX_CORES]f32 = [_]f32{0} ** MAX_CORES,
@@ -73,12 +74,13 @@ pub const SysInfo = struct {
     prev_disk_ms: i64 = 0,
     prev_net_ms: i64 = 0,
 
-    pub fn init() SysInfo {
+    pub fn init(io: std.Io) SysInfo {
         const initial_cores = @min(std.Thread.getCpuCount() catch 1, MAX_CORES);
-        const now = std.time.milliTimestamp();
+        const now = nowMs(io);
         var self: SysInfo = .{
+            .io = io,
             .ncpu = @intCast(initial_cores),
-            .total_mem = readMemInfoTotal() catch 0,
+            .total_mem = readMemInfoTotal(io) catch 0,
             .page_size = std.heap.pageSize(),
             .prev_time = now,
             .prev_disk_ms = now,
@@ -86,6 +88,10 @@ pub const SysInfo = struct {
         };
         self.loadTopology();
         return self;
+    }
+
+    fn nowMs(io: std.Io) i64 {
+        return std.Io.Clock.now(.real, io).toMilliseconds();
     }
 
     fn loadTopology(self: *SysInfo) void {
@@ -130,7 +136,7 @@ pub const SysInfo = struct {
     }
 
     pub fn getCpuStats(self: *SysInfo) CpuStats {
-        const snapshot = readCpuSnapshot() catch {
+        const snapshot = readCpuSnapshot(self.io) catch {
             return .{ .usage_percent = 0, .cores = self.ncpu };
         };
 
@@ -166,7 +172,7 @@ pub const SysInfo = struct {
     }
 
     pub fn getMemStats(self: *SysInfo) MemStats {
-        const mem_info = readMemInfo() catch {
+        const mem_info = readMemInfo(self.io) catch {
             return .{ .total = self.total_mem, .used = 0, .free = self.total_mem, .cached = 0, .buffered = 0, .swap_total = 0, .swap_used = 0 };
         };
 
@@ -176,8 +182,8 @@ pub const SysInfo = struct {
     }
 
     pub fn getDiskStats(self: *SysInfo) DiskStats {
-        const stats = readDiskStats() catch .{ .read_bytes = 0, .write_bytes = 0 };
-        const now = std.time.milliTimestamp();
+        const stats = readDiskStats(self.io) catch .{ .read_bytes = 0, .write_bytes = 0 };
+        const now = nowMs(self.io);
         const elapsed = now - self.prev_disk_ms;
 
         var read_ps: u64 = 0;
@@ -198,8 +204,8 @@ pub const SysInfo = struct {
     }
 
     pub fn getNetStats(self: *SysInfo) NetStats {
-        const stats = readNetStats() catch .{ .rx_bytes = 0, .tx_bytes = 0 };
-        const now = std.time.milliTimestamp();
+        const stats = readNetStats(self.io) catch .{ .rx_bytes = 0, .tx_bytes = 0 };
+        const now = nowMs(self.io);
         const elapsed = now - self.prev_net_ms;
 
         var rx_ps: u64 = 0;
@@ -225,28 +231,26 @@ pub const SysInfo = struct {
     }
 
     pub fn getThermalStats(self: *SysInfo) ThermalStats {
-        _ = self;
         var buf: [64]u8 = undefined;
-        const contents = readAbsoluteFile("/sys/class/thermal/thermal_zone0/temp", &buf) catch return .{};
+        const contents = readAbsoluteFile(self.io, "/sys/class/thermal/thermal_zone0/temp", &buf) catch return .{};
         const temp_str = std.mem.trim(u8, contents, " \n");
         const milli_c = std.fmt.parseInt(i32, temp_str, 10) catch return .{};
         return .{ .cpu_temp = @as(f32, @floatFromInt(milli_c)) / 1000.0, .gpu_temp = null };
     }
 
     pub fn getBatteryStats(self: *SysInfo) BatteryStats {
-        _ = self;
         var buf_cap: [64]u8 = undefined;
         var buf_stat: [64]u8 = undefined;
         var buf_power: [64]u8 = undefined;
 
         var charge_percent: ?f32 = null;
-        if (readAbsoluteFile("/sys/class/power_supply/BAT0/capacity", &buf_cap)) |cap| {
+        if (readAbsoluteFile(self.io, "/sys/class/power_supply/BAT0/capacity", &buf_cap)) |cap| {
             const val = std.fmt.parseInt(u32, std.mem.trim(u8, cap, " \n"), 10) catch 0;
             charge_percent = @as(f32, @floatFromInt(val));
         } else |_| {}
 
         var status: BatteryStatus = .unknown;
-        if (readAbsoluteFile("/sys/class/power_supply/BAT0/status", &buf_stat)) |stat| {
+        if (readAbsoluteFile(self.io, "/sys/class/power_supply/BAT0/status", &buf_stat)) |stat| {
             const s = std.mem.trim(u8, stat, " \n");
             if (std.mem.eql(u8, s, "Charging")) {
                 status = .charging;
@@ -258,7 +262,7 @@ pub const SysInfo = struct {
         } else |_| {}
 
         var power_draw_w: ?f32 = null;
-        if (readAbsoluteFile("/sys/class/power_supply/BAT0/power_now", &buf_power)) |power| {
+        if (readAbsoluteFile(self.io, "/sys/class/power_supply/BAT0/power_now", &buf_power)) |power| {
             const val = std.fmt.parseInt(u64, std.mem.trim(u8, power, " \n"), 10) catch 0;
             power_draw_w = @as(f32, @floatFromInt(val)) / 1000000.0;
         } else |_| {}
@@ -267,12 +271,11 @@ pub const SysInfo = struct {
     }
 
     pub fn getGpuStats(self: *SysInfo, allocator: std.mem.Allocator) ![]GpuStats {
-        _ = self;
         var result: std.ArrayList(GpuStats) = .empty;
         errdefer result.deinit(allocator);
 
         try appendNvidiaGpuStats(allocator, &result);
-        try appendAmdGpuStats(allocator, &result);
+        try appendAmdGpuStats(self.io, allocator, &result);
 
         return result.toOwnedSlice(allocator);
     }
@@ -285,40 +288,40 @@ pub const SysInfo = struct {
     }
 
     pub fn getProcStats(self: *SysInfo, allocator: std.mem.Allocator, sort_by: common.SortBy) ![]ProcStats {
-        const snapshot = readCpuSnapshot() catch CpuSnapshot{};
+        const snapshot = readCpuSnapshot(self.io) catch CpuSnapshot{};
         const total_tick_delta = if (self.prev_proc_total_ticks > 0) snapshot.overall.total -| self.prev_proc_total_ticks else 0;
 
-        const now = std.time.milliTimestamp();
+        const now = nowMs(self.io);
         const elapsed_ms = now - self.prev_time;
 
-        var proc_dir = try std.fs.openDirAbsolute("/proc", .{ .iterate = true });
-        defer proc_dir.close();
+        var proc_dir = try std.Io.Dir.openDirAbsolute(self.io, "/proc", .{ .iterate = true });
+        defer proc_dir.close(self.io);
 
         var iter = proc_dir.iterate();
         var result: std.ArrayList(ProcStats) = .empty;
         var new_procs: [MAX_PROCS]ProcCpuEntry = undefined;
         var new_proc_count: usize = 0;
 
-        while (try iter.next()) |entry| {
+        while (try iter.next(self.io)) |entry| {
             if (entry.kind != .directory) continue;
             const pid = std.fmt.parseInt(u32, entry.name, 10) catch continue;
 
-            var pid_dir = proc_dir.openDir(entry.name, .{}) catch continue;
-            defer pid_dir.close();
+            var pid_dir = proc_dir.openDir(self.io, entry.name, .{}) catch continue;
+            defer pid_dir.close(self.io);
 
             var stat_buf: [4096]u8 = undefined;
-            const stat_contents = readDirFile(&pid_dir, "stat", &stat_buf) catch continue;
+            const stat_contents = readDirFile(self.io, &pid_dir, "stat", &stat_buf) catch continue;
             const proc_info = parseProcStat(stat_contents) orelse continue;
 
             var statm_buf: [128]u8 = undefined;
-            const statm_contents = readDirFile(&pid_dir, "statm", &statm_buf) catch continue;
+            const statm_contents = readDirFile(self.io, &pid_dir, "statm", &statm_buf) catch continue;
             const resident_pages = parseResidentPages(statm_contents) orelse continue;
             const resident_size = resident_pages * self.page_size;
 
             var io_buf: [1024]u8 = undefined;
             var disk_read: u64 = 0;
             var disk_write: u64 = 0;
-            if (readDirFile(&pid_dir, "io", &io_buf)) |io_contents| {
+            if (readDirFile(self.io, &pid_dir, "io", &io_buf)) |io_contents| {
                 var lines = std.mem.splitScalar(u8, io_contents, '\n');
                 while (lines.next()) |line| {
                     if (std.mem.startsWith(u8, line, "read_bytes:")) {
@@ -375,7 +378,7 @@ pub const SysInfo = struct {
             @memcpy(proc_stat.name_buf[0..name.len], name);
 
             var cmdline_buf: [4096]u8 = undefined;
-            if (readDirFile(&pid_dir, "cmdline", &cmdline_buf)) |cmdline_contents| {
+            if (readDirFile(self.io, &pid_dir, "cmdline", &cmdline_buf)) |cmdline_contents| {
                 const launch_cmd = compactLinuxCmdline(cmdline_contents, &proc_stat.launch_cmd_buf);
                 proc_stat.launch_cmd_len = @intCast(launch_cmd.len);
             } else |_| {}
@@ -399,39 +402,39 @@ pub const SysInfo = struct {
             self.prev_thread_count = 0;
         }
 
-        const snapshot = readCpuSnapshot() catch CpuSnapshot{};
+        const snapshot = readCpuSnapshot(self.io) catch CpuSnapshot{};
         const total_tick_delta = if (self.prev_thread_total_ticks > 0) snapshot.overall.total -| self.prev_thread_total_ticks else 0;
 
         var path_buf: [64]u8 = undefined;
         const task_path = std.fmt.bufPrint(&path_buf, "/proc/{d}/task", .{pid}) catch
             return allocator.alloc(common.ThreadStats, 0);
 
-        var task_dir = std.fs.openDirAbsolute(task_path, .{ .iterate = true }) catch
+        var task_dir = std.Io.Dir.openDirAbsolute(self.io, task_path, .{ .iterate = true }) catch
             return allocator.alloc(common.ThreadStats, 0);
-        defer task_dir.close();
+        defer task_dir.close(self.io);
 
         var iter = task_dir.iterate();
         var result: std.ArrayList(common.ThreadStats) = .empty;
         var new_threads: [MAX_THREADS]common.ThreadCpuEntry = undefined;
         var new_thread_count: usize = 0;
 
-        while (try iter.next()) |entry| {
+        while (try iter.next(self.io)) |entry| {
             if (entry.kind != .directory) continue;
             const tid = std.fmt.parseInt(u64, entry.name, 10) catch continue;
 
-            var tid_dir = task_dir.openDir(entry.name, .{}) catch continue;
-            defer tid_dir.close();
+            var tid_dir = task_dir.openDir(self.io, entry.name, .{}) catch continue;
+            defer tid_dir.close(self.io);
 
             var stat_buf: [4096]u8 = undefined;
-            const stat_contents = readDirFile(&tid_dir, "stat", &stat_buf) catch continue;
+            const stat_contents = readDirFile(self.io, &tid_dir, "stat", &stat_buf) catch continue;
             const parsed = parseProcStat(stat_contents) orelse continue;
 
             // Read comm for thread name
             var comm_buf: [128]u8 = undefined;
             var name_buf_local: [64]u8 = std.mem.zeroes([64]u8);
             var name_len: u8 = 0;
-            if (readDirFile(&tid_dir, "comm", &comm_buf)) |comm| {
-                const trimmed = std.mem.trimRight(u8, comm, "\n");
+            if (readDirFile(self.io, &tid_dir, "comm", &comm_buf)) |comm| {
+                const trimmed = std.mem.trimEnd(u8, comm, "\n");
                 name_len = @intCast(@min(trimmed.len, 63));
                 @memcpy(name_buf_local[0..name_len], trimmed[0..name_len]);
             } else |_| {
@@ -576,21 +579,21 @@ fn appendNvidiaGpuStats(allocator: std.mem.Allocator, result: *std.ArrayList(Gpu
     }
 }
 
-fn appendAmdGpuStats(allocator: std.mem.Allocator, result: *std.ArrayList(GpuStats)) !void {
-    var drm_dir = std.fs.openDirAbsolute("/sys/class/drm", .{ .iterate = true }) catch return;
-    defer drm_dir.close();
+fn appendAmdGpuStats(io: std.Io, allocator: std.mem.Allocator, result: *std.ArrayList(GpuStats)) !void {
+    var drm_dir = std.Io.Dir.openDirAbsolute(io, "/sys/class/drm", .{ .iterate = true }) catch return;
+    defer drm_dir.close(io);
 
     var iter = drm_dir.iterate();
-    while (try iter.next()) |entry| {
+    while (try iter.next(io)) |entry| {
         const card_index = parseDrmCardIndex(entry.name) orelse continue;
 
-        var card_dir = drm_dir.openDir(entry.name, .{}) catch continue;
-        defer card_dir.close();
+        var card_dir = drm_dir.openDir(io, entry.name, .{}) catch continue;
+        defer card_dir.close(io);
 
-        var device_dir = card_dir.openDir("device", .{}) catch continue;
-        defer device_dir.close();
+        var device_dir = card_dir.openDir(io, "device", .{}) catch continue;
+        defer device_dir.close(io);
 
-        const vendor_id = readHexIntFromDir(&device_dir, u32, "vendor") catch continue;
+        const vendor_id = readHexIntFromDir(io, &device_dir, u32, "vendor") catch continue;
         if (vendor_id != 0x1002) continue;
 
         var gpu = GpuStats{
@@ -602,23 +605,23 @@ fn appendAmdGpuStats(allocator: std.mem.Allocator, result: *std.ArrayList(GpuSta
         var name_buf: [48]u8 = undefined;
         setGpuName(&gpu, buildAmdGpuName(&name_buf, entry.name));
 
-        if (readIntFromDir(&device_dir, u32, "gpu_busy_percent")) |busy_percent| {
+        if (readIntFromDir(io, &device_dir, u32, "gpu_busy_percent")) |busy_percent| {
             gpu.utilization_percent = @floatFromInt(busy_percent);
         } else |_| {}
 
-        if (readIntFromDir(&device_dir, u64, "mem_info_vram_used")) |used_bytes| {
+        if (readIntFromDir(io, &device_dir, u64, "mem_info_vram_used")) |used_bytes| {
             gpu.memory_used_bytes = used_bytes;
         } else |_| {}
 
-        if (readIntFromDir(&device_dir, u64, "mem_info_vram_total")) |total_bytes| {
+        if (readIntFromDir(io, &device_dir, u64, "mem_info_vram_total")) |total_bytes| {
             gpu.memory_total_bytes = total_bytes;
         } else |_| {}
 
-        if (readHwmonMetric(&device_dir, "temp1_input")) |milli_c| {
+        if (readHwmonMetric(io, &device_dir, "temp1_input")) |milli_c| {
             gpu.temperature_c = @as(f32, @floatFromInt(milli_c)) / 1000.0;
         } else |_| {}
 
-        if (readHwmonMetric(&device_dir, "power1_average")) |microwatts| {
+        if (readHwmonMetric(io, &device_dir, "power1_average")) |microwatts| {
             gpu.power_draw_w = @as(f32, @floatFromInt(microwatts)) / 1000000.0;
         } else |_| {}
 
@@ -674,9 +677,9 @@ fn parseDrmCardIndex(name: []const u8) ?u8 {
     return std.fmt.parseInt(u8, suffix, 10) catch null;
 }
 
-fn readHexIntFromDir(dir: *std.fs.Dir, comptime T: type, sub_path: []const u8) !T {
+fn readHexIntFromDir(io: std.Io, dir: *std.Io.Dir, comptime T: type, sub_path: []const u8) !T {
     var buf: [64]u8 = undefined;
-    const contents = try readDirFile(dir, sub_path, &buf);
+    const contents = try readDirFile(io, dir, sub_path, &buf);
     var trimmed = std.mem.trim(u8, contents, " \t\r\n");
     if (std.mem.startsWith(u8, trimmed, "0x") or std.mem.startsWith(u8, trimmed, "0X")) {
         trimmed = trimmed[2..];
@@ -684,16 +687,16 @@ fn readHexIntFromDir(dir: *std.fs.Dir, comptime T: type, sub_path: []const u8) !
     return std.fmt.parseInt(T, trimmed, 16);
 }
 
-fn readHwmonMetric(device_dir: *std.fs.Dir, file_name: []const u8) !u64 {
-    var hwmon_dir = try device_dir.openDir("hwmon", .{ .iterate = true });
-    defer hwmon_dir.close();
+fn readHwmonMetric(io: std.Io, device_dir: *std.Io.Dir, file_name: []const u8) !u64 {
+    var hwmon_dir = try device_dir.openDir(io, "hwmon", .{ .iterate = true });
+    defer hwmon_dir.close(io);
 
     var iter = hwmon_dir.iterate();
-    while (try iter.next()) |entry| {
-        var sensor_dir = hwmon_dir.openDir(entry.name, .{}) catch continue;
-        defer sensor_dir.close();
+    while (try iter.next(io)) |entry| {
+        var sensor_dir = hwmon_dir.openDir(io, entry.name, .{}) catch continue;
+        defer sensor_dir.close(io);
 
-        return readIntFromDir(&sensor_dir, u64, file_name) catch continue;
+        return readIntFromDir(io, &sensor_dir, u64, file_name) catch continue;
     }
 
     return error.HwmonMetricUnavailable;
@@ -716,14 +719,14 @@ const CacheGroupKey = struct {
 };
 
 fn readCpuTopology(self: *SysInfo) !void {
-    var sys_cpu_dir = try std.fs.openDirAbsolute("/sys/devices/system/cpu", .{ .iterate = true });
-    defer sys_cpu_dir.close();
+    var sys_cpu_dir = try std.Io.Dir.openDirAbsolute(self.io, "/sys/devices/system/cpu", .{ .iterate = true });
+    defer sys_cpu_dir.close(self.io);
 
     var logical_ids: [MAX_CORES]u16 = undefined;
     var logical_count: usize = 0;
 
     var iter = sys_cpu_dir.iterate();
-    while (try iter.next()) |entry| {
+    while (try iter.next(self.io)) |entry| {
         if (logical_count >= MAX_CORES) break;
         if (!std.mem.startsWith(u8, entry.name, "cpu")) continue;
 
@@ -759,23 +762,23 @@ fn readCpuTopology(self: *SysInfo) !void {
         var cpu_name_buf: [16]u8 = undefined;
         const cpu_name = std.fmt.bufPrint(&cpu_name_buf, "cpu{d}", .{logical_id}) catch continue;
 
-        var cpu_dir = sys_cpu_dir.openDir(cpu_name, .{ .iterate = true }) catch continue;
-        defer cpu_dir.close();
+        var cpu_dir = sys_cpu_dir.openDir(self.io, cpu_name, .{ .iterate = true }) catch continue;
+        defer cpu_dir.close(self.io);
 
-        var topo_dir = cpu_dir.openDir("topology", .{}) catch continue;
-        defer topo_dir.close();
+        var topo_dir = cpu_dir.openDir(self.io, "topology", .{}) catch continue;
+        defer topo_dir.close(self.io);
 
-        const core_id = readIntFromDir(&topo_dir, i32, "core_id") catch @as(i32, @intCast(logical_id));
-        const package_id = readIntFromDir(&topo_dir, u16, "physical_package_id") catch 0;
+        const core_id = readIntFromDir(self.io, &topo_dir, i32, "core_id") catch @as(i32, @intCast(logical_id));
+        const package_id = readIntFromDir(self.io, &topo_dir, u16, "physical_package_id") catch 0;
 
         var siblings_buf: [128]u8 = undefined;
-        const siblings_info = if (readDirFile(&topo_dir, "thread_siblings_list", &siblings_buf)) |contents|
+        const siblings_info = if (readDirFile(self.io, &topo_dir, "thread_siblings_list", &siblings_buf)) |contents|
             parseCpuListInfo(std.mem.trim(u8, contents, " \t\r\n"), logical_id)
         else |_|
             CpuListInfo{ .count = 1, .first = logical_id, .target_index = 0 };
 
-        const cache_info = readLinuxSharedCache(&cpu_dir) catch LinuxSharedCacheInfo{};
-        const numa_node_id = readCpuNumaNode(&cpu_dir) catch -1;
+        const cache_info = readLinuxSharedCache(self.io, &cpu_dir) catch LinuxSharedCacheInfo{};
+        const numa_node_id = readCpuNumaNode(self.io, &cpu_dir) catch -1;
         const physical_id = findOrAppendPhysicalId(&physical_keys, &physical_count, package_id, core_id);
 
         self.topology_cores[resolved_count] = .{
@@ -812,27 +815,27 @@ fn readCpuTopology(self: *SysInfo) !void {
     self.topology_has_cache_groups = cache_count > 1;
 }
 
-fn readLinuxSharedCache(cpu_dir: *std.fs.Dir) !LinuxSharedCacheInfo {
-    var cache_dir = try cpu_dir.openDir("cache", .{ .iterate = true });
-    defer cache_dir.close();
+fn readLinuxSharedCache(io: std.Io, cpu_dir: *std.Io.Dir) !LinuxSharedCacheInfo {
+    var cache_dir = try cpu_dir.openDir(io, "cache", .{ .iterate = true });
+    defer cache_dir.close(io);
 
     var best = LinuxSharedCacheInfo{};
     var iter = cache_dir.iterate();
-    while (try iter.next()) |entry| {
+    while (try iter.next(io)) |entry| {
         if (entry.kind != .directory) continue;
         if (!std.mem.startsWith(u8, entry.name, "index")) continue;
 
-        var index_dir = cache_dir.openDir(entry.name, .{}) catch continue;
-        defer index_dir.close();
+        var index_dir = cache_dir.openDir(io, entry.name, .{}) catch continue;
+        defer index_dir.close(io);
 
-        const level = readIntFromDir(&index_dir, u8, "level") catch continue;
+        const level = readIntFromDir(io, &index_dir, u8, "level") catch continue;
 
         var type_buf: [32]u8 = undefined;
-        const type_str = std.mem.trim(u8, readDirFile(&index_dir, "type", &type_buf) catch continue, " \t\r\n");
+        const type_str = std.mem.trim(u8, readDirFile(io, &index_dir, "type", &type_buf) catch continue, " \t\r\n");
         if (!std.mem.eql(u8, type_str, "Unified") and !std.mem.eql(u8, type_str, "Data")) continue;
 
         var shared_buf: [128]u8 = undefined;
-        const shared_list = std.mem.trim(u8, readDirFile(&index_dir, "shared_cpu_list", &shared_buf) catch continue, " \t\r\n");
+        const shared_list = std.mem.trim(u8, readDirFile(io, &index_dir, "shared_cpu_list", &shared_buf) catch continue, " \t\r\n");
         const shared_info = parseCpuListInfo(shared_list, null);
         if (shared_info.count == 0 or shared_info.first == null) continue;
 
@@ -849,9 +852,9 @@ fn readLinuxSharedCache(cpu_dir: *std.fs.Dir) !LinuxSharedCacheInfo {
     return best;
 }
 
-fn readCpuNumaNode(cpu_dir: *std.fs.Dir) !i16 {
+fn readCpuNumaNode(io: std.Io, cpu_dir: *std.Io.Dir) !i16 {
     var iter = cpu_dir.iterate();
-    while (try iter.next()) |entry| {
+    while (try iter.next(io)) |entry| {
         if (!std.mem.startsWith(u8, entry.name, "node")) continue;
         const suffix = entry.name[4..];
         if (suffix.len == 0) continue;
@@ -860,9 +863,9 @@ fn readCpuNumaNode(cpu_dir: *std.fs.Dir) !i16 {
     return error.NumaNodeUnavailable;
 }
 
-fn readIntFromDir(dir: *std.fs.Dir, comptime T: type, sub_path: []const u8) !T {
+fn readIntFromDir(io: std.Io, dir: *std.Io.Dir, comptime T: type, sub_path: []const u8) !T {
     var buf: [64]u8 = undefined;
-    const contents = try readDirFile(dir, sub_path, &buf);
+    const contents = try readDirFile(io, dir, sub_path, &buf);
     return std.fmt.parseInt(T, std.mem.trim(u8, contents, " \t\r\n"), 10);
 }
 
@@ -950,17 +953,23 @@ fn recordCpuListValue(info: *CpuListInfo, value: u16, target: ?u16) void {
     info.count += 1;
 }
 
-fn readDirFile(dir: *std.fs.Dir, sub_path: []const u8, buf: []u8) ![]const u8 {
-    var file = try dir.openFile(sub_path, .{});
-    defer file.close();
-    const len = try file.readAll(buf);
+fn readDirFile(io: std.Io, dir: *std.Io.Dir, sub_path: []const u8, buf: []u8) ![]const u8 {
+    const file = try dir.openFile(io, sub_path, .{});
+    defer file.close(io);
+    const len = file.readStreaming(io, &.{buf}) catch |err| switch (err) {
+        error.EndOfStream => 0,
+        else => |e| return e,
+    };
     return buf[0..len];
 }
 
-fn readAbsoluteFile(path: []const u8, buf: []u8) ![]const u8 {
-    var file = try std.fs.openFileAbsolute(path, .{});
-    defer file.close();
-    const len = try file.readAll(buf);
+fn readAbsoluteFile(io: std.Io, path: []const u8, buf: []u8) ![]const u8 {
+    const file = try std.Io.Dir.openFileAbsolute(io, path, .{});
+    defer file.close(io);
+    const len = file.readStreaming(io, &.{buf}) catch |err| switch (err) {
+        error.EndOfStream => 0,
+        else => |e| return e,
+    };
     return buf[0..len];
 }
 
@@ -985,7 +994,7 @@ fn compactLinuxCmdline(raw: []const u8, dest: []u8) []const u8 {
         write_idx += 1;
     }
 
-    return std.mem.trimRight(u8, dest[0..write_idx], " ");
+    return std.mem.trimEnd(u8, dest[0..write_idx], " ");
 }
 
 fn parseCpuStatLine(line: []const u8) ?struct { label: []const u8, tick: CpuTick } {
@@ -1016,9 +1025,9 @@ fn parseCpuStatLine(line: []const u8) ?struct { label: []const u8, tick: CpuTick
     };
 }
 
-fn readCpuSnapshot() !CpuSnapshot {
+fn readCpuSnapshot(io: std.Io) !CpuSnapshot {
     var buf: [16384]u8 = undefined;
-    const contents = try readAbsoluteFile("/proc/stat", &buf);
+    const contents = try readAbsoluteFile(io, "/proc/stat", &buf);
 
     var snapshot = CpuSnapshot{};
     var lines = std.mem.splitScalar(u8, contents, '\n');
@@ -1040,13 +1049,13 @@ fn readCpuSnapshot() !CpuSnapshot {
 }
 
 pub fn parseProcStat(contents: []const u8) ?ParsedProcStat {
-    const line = std.mem.trimRight(u8, contents, "\n");
+    const line = std.mem.trimEnd(u8, contents, "\n");
     const open_paren = std.mem.indexOfScalar(u8, line, '(') orelse return null;
     const close_paren = std.mem.lastIndexOfScalar(u8, line, ')') orelse return null;
     if (close_paren <= open_paren) return null;
 
     const name = line[open_paren + 1 .. close_paren];
-    const rest = std.mem.trimLeft(u8, line[close_paren + 1 ..], " ");
+    const rest = std.mem.trimStart(u8, line[close_paren + 1 ..], " ");
     var fields = std.mem.tokenizeAny(u8, rest, " ");
     var field_number: usize = 3;
     var state: common.ProcState = .unknown;
@@ -1096,9 +1105,9 @@ fn parseResidentPages(contents: []const u8) ?u64 {
     return std.fmt.parseInt(u64, resident, 10) catch null;
 }
 
-fn readDiskStats() !struct { read_bytes: u64, write_bytes: u64 } {
+fn readDiskStats(io: std.Io) !struct { read_bytes: u64, write_bytes: u64 } {
     var buf: [4096]u8 = undefined;
-    const contents = readAbsoluteFile("/proc/diskstats", &buf) catch return .{ .read_bytes = 0, .write_bytes = 0 };
+    const contents = readAbsoluteFile(io, "/proc/diskstats", &buf) catch return .{ .read_bytes = 0, .write_bytes = 0 };
     var lines = std.mem.splitScalar(u8, contents, '\n');
     var read_sectors: u64 = 0;
     var write_sectors: u64 = 0;
@@ -1124,9 +1133,9 @@ fn readDiskStats() !struct { read_bytes: u64, write_bytes: u64 } {
     return .{ .read_bytes = read_sectors * 512, .write_bytes = write_sectors * 512 };
 }
 
-fn readNetStats() !struct { rx_bytes: u64, tx_bytes: u64 } {
+fn readNetStats(io: std.Io) !struct { rx_bytes: u64, tx_bytes: u64 } {
     var buf: [4096]u8 = undefined;
-    const contents = readAbsoluteFile("/proc/net/dev", &buf) catch return .{ .rx_bytes = 0, .tx_bytes = 0 };
+    const contents = readAbsoluteFile(io, "/proc/net/dev", &buf) catch return .{ .rx_bytes = 0, .tx_bytes = 0 };
     var lines = std.mem.splitScalar(u8, contents, '\n');
     _ = lines.next();
     _ = lines.next();
@@ -1153,14 +1162,14 @@ fn readNetStats() !struct { rx_bytes: u64, tx_bytes: u64 } {
     return .{ .rx_bytes = rx, .tx_bytes = tx };
 }
 
-fn readMemInfoTotal() !u64 {
-    const mem_info = try readMemInfo();
+fn readMemInfoTotal(io: std.Io) !u64 {
+    const mem_info = try readMemInfo(io);
     return mem_info.total;
 }
 
-fn readMemInfo() !MemStats {
+fn readMemInfo(io: std.Io) !MemStats {
     var buf: [4096]u8 = undefined;
-    const contents = try readAbsoluteFile("/proc/meminfo", &buf);
+    const contents = try readAbsoluteFile(io, "/proc/meminfo", &buf);
 
     var total_kb: ?u64 = null;
     var available_kb: ?u64 = null;

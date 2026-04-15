@@ -1,15 +1,100 @@
 const std = @import("std");
 const common = @import("common.zig");
-pub const c = @cImport({
+const sys_c = @cImport({
     @cInclude("sys/sysctl.h");
     @cInclude("sys/proc_info.h");
     @cInclude("sys/socket.h");
     @cInclude("net/if.h");
     @cInclude("net/route.h");
-    @cInclude("IOKit/IOKitLib.h");
-    @cInclude("IOKit/storage/IOBlockStorageDriver.h");
-    @cInclude("CoreFoundation/CoreFoundation.h");
 });
+pub const c = struct {
+    const __CFString = opaque {};
+    const __CFDictionary = opaque {};
+    const __CFData = opaque {};
+    const __CFNumber = opaque {};
+    const __CFAllocator = opaque {};
+
+    pub const struct_proc_fdinfo = sys_c.struct_proc_fdinfo;
+    pub const struct_socket_fdinfo = sys_c.struct_socket_fdinfo;
+    pub const struct_in_sockinfo = sys_c.struct_in_sockinfo;
+    pub const struct_if_msghdr2 = sys_c.struct_if_msghdr2;
+
+    pub const PROC_PIDLISTFDS = sys_c.PROC_PIDLISTFDS;
+    pub const PROC_PIDFDSOCKETINFO = sys_c.PROC_PIDFDSOCKETINFO;
+    pub const PROX_FDTYPE_SOCKET = sys_c.PROX_FDTYPE_SOCKET;
+    pub const SOCKINFO_IN = sys_c.SOCKINFO_IN;
+    pub const SOCKINFO_TCP = sys_c.SOCKINFO_TCP;
+    pub const SOCKINFO_UN = sys_c.SOCKINFO_UN;
+    pub const INI_IPV4 = sys_c.INI_IPV4;
+    pub const INI_IPV6 = sys_c.INI_IPV6;
+    pub const TSI_S_CLOSED = sys_c.TSI_S_CLOSED;
+    pub const TSI_S_LISTEN = sys_c.TSI_S_LISTEN;
+    pub const TSI_S_SYN_SENT = sys_c.TSI_S_SYN_SENT;
+    pub const TSI_S_SYN_RECEIVED = sys_c.TSI_S_SYN_RECEIVED;
+    pub const TSI_S_ESTABLISHED = sys_c.TSI_S_ESTABLISHED;
+    pub const TSI_S__CLOSE_WAIT = sys_c.TSI_S__CLOSE_WAIT;
+    pub const TSI_S_FIN_WAIT_1 = sys_c.TSI_S_FIN_WAIT_1;
+    pub const TSI_S_CLOSING = sys_c.TSI_S_CLOSING;
+    pub const TSI_S_LAST_ACK = sys_c.TSI_S_LAST_ACK;
+    pub const TSI_S_FIN_WAIT_2 = sys_c.TSI_S_FIN_WAIT_2;
+    pub const TSI_S_TIME_WAIT = sys_c.TSI_S_TIME_WAIT;
+    pub const CTL_NET = sys_c.CTL_NET;
+    pub const PF_ROUTE = sys_c.PF_ROUTE;
+    pub const NET_RT_IFLIST2 = sys_c.NET_RT_IFLIST2;
+    pub const RTM_IFINFO2 = sys_c.RTM_IFINFO2;
+    pub const IFF_LOOPBACK = sys_c.IFF_LOOPBACK;
+    pub const CTL_KERN = sys_c.CTL_KERN;
+    pub const KERN_PROCARGS2 = sys_c.KERN_PROCARGS2;
+    pub const sysctl = sys_c.sysctl;
+
+    pub const Boolean = u8;
+    pub const CFTypeID = c_ulong;
+    pub const CFIndex = c_long;
+    pub const CFStringEncoding = u32;
+    pub const CFNumberType = CFIndex;
+    pub const IOOptionBits = u32;
+
+    pub const CFTypeRef = *const anyopaque;
+    pub const CFStringRef = *const __CFString;
+    pub const CFDictionaryRef = *const __CFDictionary;
+    pub const CFMutableDictionaryRef = *__CFDictionary;
+    pub const CFDataRef = *const __CFData;
+    pub const CFNumberRef = *const __CFNumber;
+    pub const CFAllocatorRef = *const __CFAllocator;
+
+    pub const io_object_t = mach_port_t;
+    pub const io_iterator_t = io_object_t;
+    pub const io_registry_entry_t = io_object_t;
+    pub const io_service_t = io_object_t;
+
+    pub const KERN_SUCCESS: kern_return_t = 0;
+    pub const kIOMainPortDefault: mach_port_t = 0;
+    pub const kCFStringEncodingUTF8: CFStringEncoding = 0x08000100;
+    pub const kCFNumberSInt64Type: CFNumberType = 4;
+    pub const kIOBlockStorageDriverClass = "IOBlockStorageDriver";
+    pub const kIOBlockStorageDriverStatisticsKey = "Statistics";
+    pub const kIOBlockStorageDriverStatisticsBytesReadKey = "Bytes (Read)";
+    pub const kIOBlockStorageDriverStatisticsBytesWrittenKey = "Bytes (Write)";
+
+    pub extern fn IOServiceMatching(name: [*:0]const u8) ?CFMutableDictionaryRef;
+    pub extern fn IOServiceGetMatchingServices(mainPort: mach_port_t, matching: CFDictionaryRef, existing: *io_iterator_t) kern_return_t;
+    pub extern fn IOIteratorNext(iterator: io_iterator_t) io_object_t;
+    pub extern fn IOObjectRelease(object: io_object_t) kern_return_t;
+    pub extern fn IORegistryEntryCreateCFProperty(entry: io_registry_entry_t, key: CFStringRef, allocator: ?CFAllocatorRef, options: IOOptionBits) ?CFTypeRef;
+
+    pub extern fn CFStringCreateWithCString(alloc: ?CFAllocatorRef, cStr: [*:0]const u8, encoding: CFStringEncoding) ?CFStringRef;
+    pub extern fn CFRelease(cf: CFTypeRef) void;
+    pub extern fn CFGetTypeID(cf: CFTypeRef) CFTypeID;
+    pub extern fn CFDictionaryGetTypeID() CFTypeID;
+    pub extern fn CFStringGetTypeID() CFTypeID;
+    pub extern fn CFDataGetTypeID() CFTypeID;
+    pub extern fn CFNumberGetTypeID() CFTypeID;
+    pub extern fn CFStringGetCString(theString: CFStringRef, buffer: [*]u8, bufferSize: CFIndex, encoding: CFStringEncoding) Boolean;
+    pub extern fn CFDataGetBytePtr(theData: CFDataRef) ?[*]const u8;
+    pub extern fn CFDataGetLength(theData: CFDataRef) CFIndex;
+    pub extern fn CFDictionaryGetValue(theDict: CFDictionaryRef, key: CFStringRef) ?*const anyopaque;
+    pub extern fn CFNumberGetValue(number: CFNumberRef, theType: CFNumberType, valuePtr: *anyopaque) Boolean;
+};
 
 const CpuStats = common.CpuStats;
 const CpuTopology = common.CpuTopology;
@@ -193,6 +278,7 @@ const TH_STATE_HALTED: i32 = 5;
 const MAX_THREADS = common.MAX_THREADS;
 
 pub const SysInfo = struct {
+    io: std.Io,
     prev_ticks: [4]u64 = .{ 0, 0, 0, 0 },
     prev_core_ticks: [MAX_CORES][4]u64 = std.mem.zeroes([MAX_CORES][4]u64),
     core_usage: [MAX_CORES]f32 = [_]f32{0} ** MAX_CORES,
@@ -219,7 +305,7 @@ pub const SysInfo = struct {
     prev_disk_ms: i64 = 0,
     prev_net_ms: i64 = 0,
 
-    pub fn init() SysInfo {
+    pub fn init(io: std.Io) SysInfo {
         const host_port = mach_host_self();
 
         var ncpu: u32 = 0;
@@ -236,9 +322,10 @@ pub const SysInfo = struct {
         var timebase: MachTimebaseInfo = undefined;
         _ = mach_timebase_info(&timebase);
 
-        const now = std.time.milliTimestamp();
+        const now = nowMs(io);
 
         var self: SysInfo = .{
+            .io = io,
             .ncpu = if (ncpu > 0) @min(ncpu, @as(u32, MAX_CORES)) else 1,
             .total_mem = total_mem,
             .page_size = if (pg_size > 0) pg_size else 4096,
@@ -250,6 +337,10 @@ pub const SysInfo = struct {
         };
         self.loadTopology();
         return self;
+    }
+
+    fn nowMs(io: std.Io) i64 {
+        return std.Io.Clock.now(.real, io).toMilliseconds();
     }
 
     fn loadTopology(self: *SysInfo) void {
@@ -424,7 +515,7 @@ pub const SysInfo = struct {
 
     pub fn getDiskStats(self: *SysInfo) DiskStats {
         const stats = readDiskTotals() catch DiskTotals{ .read_bytes = 0, .write_bytes = 0 };
-        const now = std.time.milliTimestamp();
+        const now = nowMs(self.io);
         const elapsed = now - self.prev_disk_ms;
 
         var read_ps: u64 = 0;
@@ -446,7 +537,7 @@ pub const SysInfo = struct {
 
     pub fn getNetStats(self: *SysInfo) NetStats {
         const stats = readNetTotals() catch NetTotals{ .rx_bytes = 0, .tx_bytes = 0 };
-        const now = std.time.milliTimestamp();
+        const now = nowMs(self.io);
         const elapsed = now - self.prev_net_ms;
 
         var rx_ps: u64 = 0;
@@ -477,20 +568,22 @@ pub const SysInfo = struct {
     }
 
     pub fn getBatteryStats(self: *SysInfo) BatteryStats {
-        _ = self;
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
 
-        var child = std.process.Child.init(&.{ "pmset", "-g", "batt" }, allocator);
-        child.stdout_behavior = .Pipe;
-        child.stderr_behavior = .Ignore;
+        const result = std.process.run(allocator, self.io, .{
+            .argv = &.{ "pmset", "-g", "batt" },
+        }) catch return .{};
+        defer allocator.free(result.stdout);
+        defer allocator.free(result.stderr);
 
-        child.spawn() catch return .{};
+        switch (result.term) {
+            .exited => |code| if (code != 0) return .{},
+            else => return .{},
+        }
 
-        const out_str = child.stdout.?.readToEndAlloc(allocator, 4096) catch return .{};
-
-        _ = child.wait() catch return .{};
+        const out_str = result.stdout;
 
         var charge: ?f32 = null;
         var status: BatteryStatus = .unknown;
@@ -542,7 +635,7 @@ pub const SysInfo = struct {
     pub fn getProcStats(self: *SysInfo, allocator: std.mem.Allocator, sort_by: common.SortBy) ![]ProcStats {
         const current_time = mach_absolute_time();
         const wall_delta_ns: u64 = if (self.prev_time > 0) self.machToNs(current_time -| self.prev_time) else 0;
-        const now_ms = std.time.milliTimestamp();
+        const now_ms = nowMs(self.io);
         const elapsed_ms = now_ms - self.prev_ms;
 
         var pid_buf: [MAX_PROCS]c_int = undefined;
@@ -867,7 +960,7 @@ fn copyCFStringLikeValue(value_ref: *const anyopaque, dest: []u8) ?usize {
         const bounded_len = @min(data_len, dest.len - 1);
         if (bounded_len == 0) return null;
 
-        @memcpy(dest[0..bounded_len], bytes[0..bounded_len]);
+        @memcpy(dest[0..bounded_len], bytes.?[0..bounded_len]);
         return std.mem.indexOfScalar(u8, dest[0..bounded_len], 0) orelse bounded_len;
     }
 

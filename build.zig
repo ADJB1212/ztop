@@ -43,10 +43,10 @@ pub fn build(b: *std.Build) void {
         // Allow explicit SDK root for cross-compilation (e.g. aarch64 from x86_64 host).
         // Pass with: -Dsdk-root=$(xcrun --show-sdk-path)
         if (sdk_root) |root| {
-            exe.addFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ root, "System/Library/Frameworks" }) });
-            exe.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/lib" }) });
-            tests.addFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ root, "System/Library/Frameworks" }) });
-            tests.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/lib" }) });
+            exe.root_module.addFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ root, "System/Library/Frameworks" }) });
+            exe.root_module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/lib" }) });
+            tests.root_module.addFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ root, "System/Library/Frameworks" }) });
+            tests.root_module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/lib" }) });
         }
         exe.root_module.linkFramework("IOKit", .{});
         exe.root_module.linkFramework("CoreFoundation", .{});

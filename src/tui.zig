@@ -99,8 +99,9 @@ pub const Tui = struct {
     };
 
     original_termios: posix.termios,
-    in: std.fs.File,
-    out: std.fs.File,
+    io: std.Io,
+    in: std.Io.File,
+    out: std.Io.File,
     features: TerminalFeatures,
     cursor_visible: bool,
     cursor_style: CursorStyle,
@@ -133,8 +134,7 @@ pub const Tui = struct {
     }
 
     pub fn styleSequence(buf: []u8, style: Style) ![]const u8 {
-        var stream = std.io.fixedBufferStream(buf);
-        const writer = stream.writer();
+        var writer: std.Io.Writer = .fixed(buf);
 
         try writer.writeAll("\x1b[0");
         if (style.bold) try writer.writeAll(";1");
@@ -144,15 +144,16 @@ pub const Tui = struct {
         if (style.bg) |bg| try writer.print(";{d}", .{@intFromEnum(bg) + 10});
         try writer.writeAll("m");
 
-        return stream.getWritten();
+        return writer.buffered();
     }
 
-    pub fn writeHyperlinkTo(writer: anytype, uri: []const u8, label: []const u8) !void {
+    pub fn writeHyperlinkTo(writer: *std.Io.Writer, uri: []const u8, label: []const u8) !void {
         try writer.writeAll("\x1b]8;;");
         try writer.writeAll(uri);
         try writer.writeAll("\x1b\\");
         try writer.writeAll(label);
         try writer.writeAll("\x1b]8;;\x1b\\");
+        try writer.flush();
     }
 
     fn parseMouseNumber(bytes: []const u8, start: usize) MouseNumberParseResult {
@@ -288,9 +289,9 @@ pub const Tui = struct {
         }
     }
 
-    pub fn init(nerd_fonts: bool) !Tui {
-        const in = std.fs.File.stdin();
-        const out = std.fs.File.stdout();
+    pub fn init(io: std.Io, nerd_fonts: bool, term_program: ?[]const u8) !Tui {
+        const in = std.Io.File.stdin();
+        const out = std.Io.File.stdout();
         const original_termios = try posix.tcgetattr(in.handle);
 
         var raw = original_termios;
@@ -311,15 +312,16 @@ pub const Tui = struct {
         try posix.tcsetattr(in.handle, .FLUSH, raw);
 
         const features = TerminalFeatures{
-            .synchronized_output = shouldEnableSynchronizedOutput(if (posix.getenv("TERM_PROGRAM")) |term_program| term_program else null),
+            .synchronized_output = shouldEnableSynchronizedOutput(term_program),
         };
 
         // Enter alternate buffer, hide cursor, and enable mouse reporting.
-        try out.writeAll("\x1b[?1049h\x1b[?25l");
-        try out.writeAll(mouseModeSequence(true));
+        try out.writeStreamingAll(io, "\x1b[?1049h\x1b[?25l");
+        try out.writeStreamingAll(io, mouseModeSequence(true));
 
         return Tui{
             .original_termios = original_termios,
+            .io = io,
             .in = in,
             .out = out,
             .features = features,
@@ -335,67 +337,70 @@ pub const Tui = struct {
         self.resetStyle() catch {};
         self.setCursorStyle(.steady_block) catch {};
         self.setCursorVisible(true) catch {};
-        self.out.writeAll(mouseModeSequence(false)) catch {};
-        self.out.writeAll("\x1b[?1049l") catch {};
+        self.out.writeStreamingAll(self.io, mouseModeSequence(false)) catch {};
+        self.out.writeStreamingAll(self.io, "\x1b[?1049l") catch {};
         posix.tcsetattr(self.in.handle, .FLUSH, self.original_termios) catch {};
     }
 
     pub fn beginFrame(self: *Tui) !void {
         if (!self.features.synchronized_output or self.frame_active) return;
 
-        try self.out.writeAll("\x1b[?2026h");
+        try self.out.writeStreamingAll(self.io, "\x1b[?2026h");
         self.frame_active = true;
     }
 
     pub fn endFrame(self: *Tui) !void {
         if (!self.frame_active) return;
 
-        try self.out.writeAll("\x1b[?2026l");
+        try self.out.writeStreamingAll(self.io, "\x1b[?2026l");
         self.frame_active = false;
     }
 
     pub fn clear(self: *Tui) !void {
-        try self.out.writeAll("\x1b[0m\x1b[2J\x1b[H");
+        try self.out.writeStreamingAll(self.io, "\x1b[0m\x1b[2J\x1b[H");
     }
 
     pub fn moveCursor(self: *Tui, x: u16, y: u16) !void {
         var buf: [32]u8 = undefined;
         const seq = try std.fmt.bufPrint(&buf, "\x1b[{d};{d}H", .{ y, x });
-        _ = try self.out.write(seq);
+        _ = try self.out.writeStreamingAll(self.io, seq);
     }
 
     pub fn setCursorVisible(self: *Tui, visible: bool) !void {
         if (self.cursor_visible == visible) return;
 
-        try self.out.writeAll(if (visible) "\x1b[?25h" else "\x1b[?25l");
+        try self.out.writeStreamingAll(self.io, if (visible) "\x1b[?25h" else "\x1b[?25l");
         self.cursor_visible = visible;
     }
 
     pub fn setCursorStyle(self: *Tui, style: CursorStyle) !void {
         if (self.cursor_style == style) return;
 
-        try self.out.writeAll(cursorStyleSequence(style));
+        try self.out.writeStreamingAll(self.io, cursorStyleSequence(style));
         self.cursor_style = style;
     }
 
     pub fn print(self: *Tui, comptime fmt: []const u8, args: anytype) !void {
-        try self.out.deprecatedWriter().print(fmt, args);
+        var buf: [1024]u8 = undefined;
+        var w = self.out.writer(self.io, &buf);
+        try w.interface.print(fmt, args);
+        try w.interface.flush();
     }
 
     pub fn setStyle(self: *Tui, style: Style) !void {
         var buf: [32]u8 = undefined;
         const seq = try styleSequence(&buf, style);
-        try self.out.writeAll(seq);
+        try self.out.writeStreamingAll(self.io, seq);
     }
 
     pub fn resetStyle(self: *Tui) !void {
-        try self.out.writeAll("\x1b[0m");
+        try self.out.writeStreamingAll(self.io, "\x1b[0m");
     }
 
     pub fn writeStyled(self: *Tui, style: Style, text: []const u8) !void {
         try self.setStyle(style);
         defer self.resetStyle() catch {};
-        try self.out.writeAll(text);
+        try self.out.writeStreamingAll(self.io, text);
     }
 
     pub fn printStyled(self: *Tui, style: Style, comptime fmt: []const u8, args: anytype) !void {
@@ -405,7 +410,10 @@ pub const Tui = struct {
     }
 
     pub fn writeHyperlink(self: *Tui, uri: []const u8, label: []const u8) !void {
-        try writeHyperlinkTo(self.out.deprecatedWriter(), uri, label);
+        var buf: [1024]u8 = undefined;
+        var writer = self.out.writer(self.io, &buf);
+
+        try writeHyperlinkTo(&writer.interface, uri, label);
     }
 
     pub fn writeStyledHyperlink(self: *Tui, style: Style, uri: []const u8, label: []const u8) !void {
@@ -423,23 +431,23 @@ pub const Tui = struct {
 
         // Draw top border
         try self.moveCursor(x, y);
-        try self.out.writeAll("╭");
-        for (0..width - 2) |_| try self.out.writeAll("─");
-        try self.out.writeAll("╮");
+        try self.out.writeStreamingAll(self.io, "╭");
+        for (0..width - 2) |_| try self.out.writeStreamingAll(self.io, "─");
+        try self.out.writeStreamingAll(self.io, "╮");
 
         // Draw sides
         for (1..height - 1) |i| {
             try self.moveCursor(x, y + @as(u16, @intCast(i)));
-            try self.out.writeAll("│");
+            try self.out.writeStreamingAll(self.io, "│");
             try self.moveCursor(x + width - 1, y + @as(u16, @intCast(i)));
-            try self.out.writeAll("│");
+            try self.out.writeStreamingAll(self.io, "│");
         }
 
         // Draw bottom border
         try self.moveCursor(x, y + height - 1);
-        try self.out.writeAll("╰");
-        for (0..width - 2) |_| try self.out.writeAll("─");
-        try self.out.writeAll("╯");
+        try self.out.writeStreamingAll(self.io, "╰");
+        for (0..width - 2) |_| try self.out.writeStreamingAll(self.io, "─");
+        try self.out.writeStreamingAll(self.io, "╯");
         try self.resetStyle();
 
         // Draw title

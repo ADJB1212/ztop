@@ -88,7 +88,7 @@ pub const Context = struct {
 
 pub fn handleAvailableInput(ctx: *Context) !bool {
     var buf: [16]u8 = undefined;
-    const n = ctx.app_tui.in.read(&buf) catch 0;
+    const n = ctx.app_tui.in.readStreaming(ctx.app_tui.io, &.{buf[0..]}) catch 0;
     if (n == 0) return false;
 
     if (ctx.input_len.* + n > ctx.input_buf.len) {
@@ -436,7 +436,7 @@ fn clearCurrentView(ctx: *Context) void {
     }
 }
 
-fn signalSelectedProcess(ctx: *Context, signal: u8) void {
+fn signalSelectedProcess(ctx: *Context, signal: posix.SIG) void {
     if (ctx.current_tab.* != 4 and !ctx.thread_view.* and ctx.filtered_count.* > 0 and ctx.selected_idx.* < ctx.filtered_count.*) {
         const pid = ctx.cached_procs[ctx.filtered_indices[ctx.selected_idx.*]].pid;
         _ = posix.kill(@intCast(pid), signal) catch {};
