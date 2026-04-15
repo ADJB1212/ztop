@@ -22,7 +22,7 @@ test "config parse applies theme defaults and overrides" {
     try std.testing.expectEqual(true, parsed.show_help_on_startup);
     try std.testing.expectEqual(tui.Tui.Color.bright_magenta, parsed.theme.brand);
     try std.testing.expectEqual(tui.Tui.Color.magenta, parsed.theme.selection_bg);
-    try std.testing.expectEqual(tui.Tui.Color.bright_blue, parsed.theme.memory_title);
+    try std.testing.expectEqual(tui.Tui.Color{ .indexed = 67 }, parsed.theme.memory_title);
 }
 
 test "config parse supports aliases and quoted values" {
@@ -41,7 +41,23 @@ test "config parse supports aliases and quoted values" {
     try std.testing.expectEqual(true, parsed.default_tree_view);
     try std.testing.expectEqual(true, parsed.show_help_on_startup);
     try std.testing.expectEqual(tui.Tui.Color.bright_cyan, parsed.theme.io_rate);
-    try std.testing.expectEqual(tui.Tui.Color.bright_magenta, parsed.theme.process_title);
+    try std.testing.expectEqual(tui.Tui.Color{ .indexed = 183 }, parsed.theme.process_title);
+}
+
+test "config parse supports 256 color themes and numeric overrides" {
+    const parsed = try config.parse(
+        \\theme = "default-light"
+        \\color.command_prompt = 33
+    );
+
+    try std.testing.expectEqual(config.ThemeName.default_light, parsed.theme_name);
+    try std.testing.expectEqual(tui.Tui.Color{ .indexed = 25 }, parsed.theme.brand);
+    try std.testing.expectEqual(tui.Tui.Color{ .indexed = 33 }, parsed.theme.command_prompt);
+
+    const palenight = try config.parse("theme = palenight\n");
+    try std.testing.expectEqual(config.ThemeName.palenight, palenight.theme_name);
+    try std.testing.expectEqual(tui.Tui.Color{ .indexed = 141 }, palenight.theme.brand);
+    try std.testing.expectEqual(tui.Tui.Color{ .indexed = 235 }, palenight.theme.selection_bg);
 }
 
 test "config parse supports launch command ignore substring list" {
@@ -105,7 +121,7 @@ test "config file loader reads explicit path" {
 
     try std.testing.expectEqual(config.ThemeName.solarized, loaded.theme_name);
     try std.testing.expectEqual(tui.Tui.Color.bright_yellow, loaded.theme.command_prompt);
-    try std.testing.expectEqual(tui.Tui.Color.blue, loaded.theme.cpu_title);
+    try std.testing.expectEqual(tui.Tui.Color{ .indexed = 32 }, loaded.theme.cpu_title);
 }
 
 test "config loader resolves XDG_CONFIG_HOME from environ map" {

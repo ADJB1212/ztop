@@ -1,13 +1,6 @@
 const std = @import("std");
 const tui = @import("ztop").tui;
 
-test "Tui.Color enums" {
-    try std.testing.expectEqual(@as(u8, 30), @intFromEnum(tui.Tui.Color.black));
-    try std.testing.expectEqual(@as(u8, 31), @intFromEnum(tui.Tui.Color.red));
-    try std.testing.expectEqual(@as(u8, 37), @intFromEnum(tui.Tui.Color.white));
-    try std.testing.expectEqual(@as(u8, 97), @intFromEnum(tui.Tui.Color.bright_white));
-}
-
 test "cursor style sequences match VT cursor styles" {
     try std.testing.expectEqualStrings("\x1b[2 q", tui.Tui.cursorStyleSequence(.steady_block));
     try std.testing.expectEqualStrings("\x1b[6 q", tui.Tui.cursorStyleSequence(.steady_bar));
@@ -19,7 +12,7 @@ test "mouse mode sequences match SGR mouse reporting" {
 }
 
 test "style sequence supports underline" {
-    var buf: [32]u8 = undefined;
+    var buf: [48]u8 = undefined;
     const seq = try tui.Tui.styleSequence(&buf, .{
         .fg = .bright_cyan,
         .bold = true,
@@ -27,6 +20,17 @@ test "style sequence supports underline" {
     });
 
     try std.testing.expectEqualStrings("\x1b[0;1;4;96m", seq);
+}
+
+test "style sequence supports indexed 256 colors" {
+    var buf: [48]u8 = undefined;
+    const seq = try tui.Tui.styleSequence(&buf, .{
+        .fg = .{ .indexed = 141 },
+        .bg = .{ .indexed = 235 },
+        .bold = true,
+    });
+
+    try std.testing.expectEqualStrings("\x1b[0;1;38;5;141;48;5;235m", seq);
 }
 
 test "synchronized output is disabled for Apple Terminal" {

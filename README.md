@@ -42,7 +42,7 @@ It is built for people who want a focused dashboard in the terminal: quick enoug
   - `:search <term>` to jump into filtering from command mode
 - Responsive layout that adapts to narrow terminals
 - Configurable refresh interval, default sort, theme, and color overrides
-- Included themes: `default`, `gruvbox`, `nord`, `solarized`, `catppuccin`
+- Included themes: `default` (dark alias), `default_dark`, `default_light`, `gruvbox`, `nord`, `solarized`, `catppuccin`, `palenight`
 - Runs on both macOS and Linux
 
 ## Quick Start
@@ -101,7 +101,7 @@ If present, `ztop` reads configuration from:
 Example:
 
 ```ini
-theme = nord
+theme = palenight
 default_sort = cpu
 default_tab = network
 default_tree_view = false
@@ -109,7 +109,7 @@ show_help_on_startup = false
 update_interval_ms = 500
 process_columns = pid,cpu,mem,threads,state
 io_process_columns = pid,disk_read,disk_write,ppid
-color.tab_active = bright_cyan
+color.tab_active = 141
 ```
 
 This lets you set a preferred theme, choose the initial tab and process sort, start in tree view, open the help overlay on launch, adjust refresh speed, and override individual UI colors.
@@ -119,10 +119,13 @@ Additional startup options:
 - `default_tab = main|io|sensors|network` (or `1` through `4`)
 - `default_tree_view = true|false`
 - `show_help_on_startup = true|false`
+- `theme = default|default_dark|default_light|gruvbox|nord|solarized|catppuccin|palenight`
 - `process_columns = pid,ppid,state,cpu,mem,threads,disk_read,disk_write`
 - `io_process_columns = ...` uses the same column names for the I/O tab
 - `process_columns = none|default|all` and `io_process_columns = none|default|all` are also supported
 
 The process name column is always shown. Press `C` inside the TUI to toggle columns interactively for the current process table.
+
+Color overrides accept both named ANSI colors such as `bright_cyan` and xterm-256 indexes such as `141`.
 
 Boolean values also accept `yes`/`no` and `1`/`0`.

@@ -2,23 +2,50 @@ const std = @import("std");
 const posix = std.posix;
 
 pub const Tui = struct {
-    pub const Color = enum(u8) {
-        black = 30,
-        red = 31,
-        green = 32,
-        yellow = 33,
-        blue = 34,
-        magenta = 35,
-        cyan = 36,
-        white = 37,
-        bright_black = 90,
-        bright_red = 91,
-        bright_green = 92,
-        bright_yellow = 93,
-        bright_blue = 94,
-        bright_magenta = 95,
-        bright_cyan = 96,
-        bright_white = 97,
+    pub const Color = union(enum) {
+        black,
+        red,
+        green,
+        yellow,
+        blue,
+        magenta,
+        cyan,
+        white,
+        bright_black,
+        bright_red,
+        bright_green,
+        bright_yellow,
+        bright_blue,
+        bright_magenta,
+        bright_cyan,
+        bright_white,
+        indexed: u8,
+
+        pub fn index(value: u8) Color {
+            return .{ .indexed = value };
+        }
+
+        fn writeSgr(self: Color, writer: *std.Io.Writer, comptime bg: bool) !void {
+            switch (self) {
+                .black => try writer.writeAll(if (bg) ";40" else ";30"),
+                .red => try writer.writeAll(if (bg) ";41" else ";31"),
+                .green => try writer.writeAll(if (bg) ";42" else ";32"),
+                .yellow => try writer.writeAll(if (bg) ";43" else ";33"),
+                .blue => try writer.writeAll(if (bg) ";44" else ";34"),
+                .magenta => try writer.writeAll(if (bg) ";45" else ";35"),
+                .cyan => try writer.writeAll(if (bg) ";46" else ";36"),
+                .white => try writer.writeAll(if (bg) ";47" else ";37"),
+                .bright_black => try writer.writeAll(if (bg) ";100" else ";90"),
+                .bright_red => try writer.writeAll(if (bg) ";101" else ";91"),
+                .bright_green => try writer.writeAll(if (bg) ";102" else ";92"),
+                .bright_yellow => try writer.writeAll(if (bg) ";103" else ";93"),
+                .bright_blue => try writer.writeAll(if (bg) ";104" else ";94"),
+                .bright_magenta => try writer.writeAll(if (bg) ";105" else ";95"),
+                .bright_cyan => try writer.writeAll(if (bg) ";106" else ";96"),
+                .bright_white => try writer.writeAll(if (bg) ";107" else ";97"),
+                .indexed => |value| try writer.print(if (bg) ";48;5;{d}" else ";38;5;{d}", .{value}),
+            }
+        }
     };
 
     pub const Style = struct {
@@ -140,8 +167,8 @@ pub const Tui = struct {
         if (style.bold) try writer.writeAll(";1");
         if (style.dim) try writer.writeAll(";2");
         if (style.underline) try writer.writeAll(";4");
-        if (style.fg) |fg| try writer.print(";{d}", .{@intFromEnum(fg)});
-        if (style.bg) |bg| try writer.print(";{d}", .{@intFromEnum(bg) + 10});
+        if (style.fg) |fg| try fg.writeSgr(&writer, false);
+        if (style.bg) |bg| try bg.writeSgr(&writer, true);
         try writer.writeAll("m");
 
         return writer.buffered();
@@ -388,7 +415,7 @@ pub const Tui = struct {
     }
 
     pub fn setStyle(self: *Tui, style: Style) !void {
-        var buf: [32]u8 = undefined;
+        var buf: [48]u8 = undefined;
         const seq = try styleSequence(&buf, style);
         try self.out.writeStreamingAll(self.io, seq);
     }
