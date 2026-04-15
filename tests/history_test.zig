@@ -35,3 +35,26 @@ test "MetricHistory downsamples columns using the peak value in each bucket" {
     try std.testing.expectEqual(@as(?f32, 70), metric_history.valueForColumn(1, 3));
     try std.testing.expectEqual(@as(?f32, 50), metric_history.valueForColumn(2, 3));
 }
+
+test "RateHistory preserves insertion order after wrap" {
+    var rate_history = history.RateHistory{};
+
+    for (0..history.MAX_HISTORY_SAMPLES + 2) |idx| {
+        rate_history.append(idx * 10);
+    }
+
+    try std.testing.expectEqual(@as(usize, history.MAX_HISTORY_SAMPLES), rate_history.len());
+    try std.testing.expectEqual(@as(u64, 20), rate_history.sampleAt(0));
+    try std.testing.expectEqual(@as(u64, (history.MAX_HISTORY_SAMPLES + 1) * 10), rate_history.sampleAt(rate_history.len() - 1));
+}
+
+test "RateHistory downsamples columns using peak values" {
+    var rate_history = history.RateHistory{};
+    const samples = [_]u64{ 10, 40, 20, 90, 30, 50 };
+    for (samples) |sample| rate_history.append(sample);
+
+    try std.testing.expectEqual(@as(?u64, 40), rate_history.valueForColumn(0, 3));
+    try std.testing.expectEqual(@as(?u64, 90), rate_history.valueForColumn(1, 3));
+    try std.testing.expectEqual(@as(?u64, 50), rate_history.valueForColumn(2, 3));
+    try std.testing.expectEqual(@as(u64, 90), rate_history.maxSample());
+}

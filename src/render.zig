@@ -5,6 +5,7 @@ const SysInfo = ztop.sysinfo.SysInfo;
 const CpuTopology = ztop.sysinfo.CpuTopology;
 const CpuEfficiencyClass = ztop.sysinfo.CpuEfficiencyClass;
 const MetricHistory = ztop.history.MetricHistory;
+const RateHistory = ztop.history.RateHistory;
 
 pub fn usageColor(theme: ztop.config.Theme, percent: f32) Tui.Color {
     if (percent >= 90) return theme.usage_critical;
@@ -44,6 +45,16 @@ pub const MetricColorMode = enum {
 };
 
 const graph_blocks = [_][]const u8{ " ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" };
+const meter_blocks = [_][]const u8{ " ", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█" };
+
+pub const RateSeries = struct {
+    label: []const u8,
+    short_label: []const u8,
+    rate_bytes_ps: u64,
+    total_bytes: ?u64 = null,
+    history: *const RateHistory,
+    color: Tui.Color,
+};
 
 fn metricGraphColor(theme: ztop.config.Theme, mode: MetricColorMode, percent: f32) Tui.Color {
     return switch (mode) {
@@ -107,6 +118,245 @@ pub fn renderHistoryGraph(
     }
 }
 
+fn renderMeter(
+    app_tui: *Tui,
+    width: u16,
+    percent: f32,
+    fill_style: Tui.Style,
+    empty_style: Tui.Style,
+) !void {
+    if (width == 0) return;
+
+    const clamped = @max(0.0, @min(percent, 100.0));
+    const total_eighths = @as(usize, width) * 8;
+    const filled_eighths = @min(
+        total_eighths,
+        @as(usize, @intFromFloat(@round((clamped / 100.0) * @as(f32, @floatFromInt(total_eighths))))),
+    );
+    const full_blocks = filled_eighths / 8;
+    const partial_block = filled_eighths % 8;
+
+    for (0..width) |idx| {
+        if (idx < full_blocks) {
+            try app_tui.writeStyled(fill_style, meter_blocks[8]);
+        } else if (idx == full_blocks and partial_block > 0) {
+            try app_tui.writeStyled(fill_style, meter_blocks[partial_block]);
+        } else {
+            try app_tui.writeStyled(empty_style, "░");
+        }
+    }
+}
+
+fn rateGraphLevel(value: u64, max_value: u64, rows: usize) usize {
+    if (rows == 0 or value == 0 or max_value == 0) return 0;
+
+    const total_levels = rows * 8;
+    const normalized = @as(f32, @floatFromInt(value)) / @as(f32, @floatFromInt(max_value));
+    return @max(1, @min(total_levels, @as(usize, @intFromFloat(@ceil(normalized * @as(f32, @floatFromInt(total_levels)))))));
+}
+
+fn renderRateHistoryGraph(
+    app_tui: *Tui,
+    theme: ztop.config.Theme,
+    x: u16,
+    y: u16,
+    width: u16,
+    height: u16,
+    history: *const RateHistory,
+    color: Tui.Color,
+    max_value: u64,
+) !void {
+    if (width == 0 or height == 0 or history.len() == 0) return;
+
+    const graph_width: usize = width;
+    const graph_height: usize = height;
+
+    for (0..graph_height) |row| {
+        try app_tui.moveCursor(x, y + @as(u16, @intCast(row)));
+
+        for (0..graph_width) |column| {
+            if (history.valueForColumn(column, graph_width)) |value| {
+                const total_level = rateGraphLevel(value, max_value, graph_height);
+                const rows_below = graph_height - row - 1;
+                const row_base = rows_below * 8;
+                const cell_level = if (total_level > row_base)
+                    @min(total_level - row_base, 8)
+                else
+                    0;
+
+                if (cell_level > 0) {
+                    try app_tui.writeStyled(.{ .fg = color, .bold = value == max_value and max_value > 0 }, graph_blocks[cell_level]);
+                } else {
+                    try app_tui.writeStyled(.{ .fg = theme.muted, .dim = true }, "·");
+                }
+            } else {
+                try app_tui.writeStyled(.{ .fg = theme.muted, .dim = true }, " ");
+            }
+        }
+    }
+}
+
+fn writeChip(app_tui: *Tui, style: Tui.Style, label: []const u8) !usize {
+    try app_tui.printStyled(style, " {s} ", .{label});
+    return label.len + 2;
+}
+
+fn renderRateMetricRow(
+    app_tui: *Tui,
+    theme: ztop.config.Theme,
+    x: u16,
+    y: u16,
+    width: u16,
+    series: RateSeries,
+    peak_rate: u64,
+) !void {
+    if (width == 0) return;
+
+    try app_tui.moveCursor(x, y);
+
+    var used: usize = try writeChip(
+        app_tui,
+        .{ .fg = theme.selection_fg, .bg = series.color, .bold = true },
+        series.label,
+    );
+    if (used >= width) return;
+
+    try app_tui.out.writeAll(" ");
+    used += 1;
+
+    const rate = formatUnit(series.rate_bytes_ps);
+    var rate_buf: [32]u8 = undefined;
+    const rate_text = std.fmt.bufPrint(&rate_buf, "{d:4.1} {s}/s", .{ rate.value, rate.unit }) catch "0.0 B/s";
+    try app_tui.printStyled(.{ .fg = series.color, .bold = true }, "{s}", .{rate_text});
+    used += rate_text.len;
+
+    if (series.total_bytes) |total_bytes| {
+        const total = formatUnit(total_bytes);
+        var total_buf: [32]u8 = undefined;
+        const total_text = std.fmt.bufPrint(&total_buf, "  Σ {d:4.1} {s}", .{ total.value, total.unit }) catch "";
+        if (used + total_text.len + 6 <= width) {
+            try app_tui.printStyled(.{ .fg = theme.muted }, "{s}", .{total_text});
+            used += total_text.len;
+        }
+    }
+
+    if (used + 6 > width) return;
+
+    try app_tui.out.writeAll(" ");
+    used += 1;
+
+    const meter_width: u16 = @intCast(width - used);
+    const ratio = if (peak_rate > 0)
+        (@as(f32, @floatFromInt(series.rate_bytes_ps)) / @as(f32, @floatFromInt(peak_rate))) * 100.0
+    else
+        0.0;
+    try renderMeter(
+        app_tui,
+        meter_width,
+        ratio,
+        .{ .fg = series.color, .bold = ratio >= 75 },
+        .{ .fg = theme.muted, .dim = true },
+    );
+}
+
+fn renderRateLane(
+    app_tui: *Tui,
+    theme: ztop.config.Theme,
+    x: u16,
+    y: u16,
+    width: u16,
+    height: u16,
+    series: RateSeries,
+    peak_rate: u64,
+) !void {
+    if (width == 0 or height == 0) return;
+
+    const label_width: u16 = if (width >= 8) 4 else 0;
+    if (label_width > 0) {
+        try app_tui.moveCursor(x, y);
+        try app_tui.printStyled(.{ .fg = series.color, .bold = true }, "{s}", .{series.short_label});
+        for (series.short_label.len..label_width) |_| {
+            try app_tui.out.writeAll(" ");
+        }
+    }
+
+    const graph_x = x + label_width;
+    const graph_width = width -| label_width;
+    if (graph_width == 0) return;
+    try renderRateHistoryGraph(app_tui, theme, graph_x, y, graph_width, height, series.history, series.color, peak_rate);
+}
+
+pub fn renderDualRateBox(
+    app_tui: *Tui,
+    theme: ztop.config.Theme,
+    box_x: u16,
+    box_y: u16,
+    box_width: u16,
+    box_height: u16,
+    title: []const u8,
+    title_color: Tui.Color,
+    primary: RateSeries,
+    secondary: RateSeries,
+) !void {
+    try app_tui.drawBoxStyled(
+        box_x,
+        box_y,
+        box_width,
+        box_height,
+        title,
+        .{ .fg = theme.border },
+        .{ .fg = title_color, .bold = true },
+    );
+    if (box_height < 3 or box_width < 8) return;
+
+    const inner_x = box_x + 2;
+    const inner_y = box_y + 1;
+    const inner_width = box_width -| 4;
+    const inner_height = box_height -| 2;
+    if (inner_width == 0 or inner_height == 0) return;
+
+    const peak_rate = @max(
+        @max(primary.history.maxSample(), secondary.history.maxSample()),
+        @max(primary.rate_bytes_ps, secondary.rate_bytes_ps),
+    );
+
+    try renderRateMetricRow(app_tui, theme, inner_x, inner_y, inner_width, primary, peak_rate);
+    if (inner_height == 1) return;
+
+    try renderRateMetricRow(app_tui, theme, inner_x, inner_y + 1, inner_width, secondary, peak_rate);
+
+    const graph_rows = inner_height -| 2;
+    if (graph_rows == 0) return;
+
+    if (graph_rows == 1) {
+        try app_tui.moveCursor(inner_x, inner_y + 2);
+        try app_tui.printStyled(.{ .fg = theme.muted }, "Peak scale ", .{});
+        var peak_buf: [24]u8 = undefined;
+        const peak_text = if (peak_rate > 0) blk: {
+            const peak = formatUnit(peak_rate);
+            break :blk std.fmt.bufPrint(&peak_buf, "{d:4.1} {s}/s", .{ peak.value, peak.unit }) catch "0.0 B/s";
+        } else "0.0 B/s";
+        try app_tui.printStyled(.{ .fg = title_color, .bold = true }, "{s}", .{peak_text});
+        return;
+    }
+
+    const primary_height = (graph_rows + 1) / 2;
+    const secondary_height = graph_rows / 2;
+    try renderRateLane(app_tui, theme, inner_x, inner_y + 2, inner_width, @intCast(primary_height), primary, peak_rate);
+    if (secondary_height > 0) {
+        try renderRateLane(
+            app_tui,
+            theme,
+            inner_x,
+            inner_y + 2 + @as(u16, @intCast(primary_height)),
+            inner_width,
+            @intCast(secondary_height),
+            secondary,
+            peak_rate,
+        );
+    }
+}
+
 const TopologyPhysicalRow = struct {
     physical_id: u16,
     package_id: u16,
@@ -120,21 +370,6 @@ const TopologyLine = union(enum) {
     header: TopologyPhysicalRow,
     row: TopologyPhysicalRow,
 };
-
-const TopologyRowText = struct {
-    text: []const u8,
-    hot: bool,
-};
-
-fn digitsU16(value: u16) usize {
-    var digits: usize = 1;
-    var remaining = value;
-    while (remaining >= 10) {
-        remaining /= 10;
-        digits += 1;
-    }
-    return digits;
-}
 
 fn efficiencySortKey(class: CpuEfficiencyClass) u8 {
     return switch (class) {
@@ -231,46 +466,42 @@ fn buildTopologyHeaderText(buf: []u8, row: TopologyPhysicalRow, topology: CpuTop
     return buf[0..stream.pos];
 }
 
-fn buildTopologyRowText(buf: []u8, row: TopologyPhysicalRow, cpu: ztop.sysinfo.CpuStats, topology: CpuTopology) TopologyRowText {
-    var logical_indices: [ztop.sysinfo.common.MAX_CORES]usize = undefined;
-    var logical_count: usize = 0;
+fn logicalCoreUsage(cpu: ztop.sysinfo.CpuStats, logical_id: u16) f32 {
+    return if (@as(usize, logical_id) < cpu.per_core_usage.len)
+        cpu.per_core_usage[logical_id]
+    else
+        0.0;
+}
 
-    for (topology.logical_cores, 0..) |logical_core, idx| {
-        if (logical_core.physical_id != row.physical_id or logical_count >= logical_indices.len) continue;
-        logical_indices[logical_count] = idx;
-        logical_count += 1;
+fn averageCoreUsage(cpu: ztop.sysinfo.CpuStats, topology: CpuTopology, physical_id: u16) f32 {
+    var sum: f32 = 0.0;
+    var count: usize = 0;
+
+    for (topology.logical_cores) |logical_core| {
+        if (logical_core.physical_id != physical_id) continue;
+        sum += logicalCoreUsage(cpu, logical_core.logical_id);
+        count += 1;
     }
 
-    std.mem.sort(usize, logical_indices[0..logical_count], topology, struct {
-        fn lessThan(topology_ctx: CpuTopology, a_idx: usize, b_idx: usize) bool {
-            const a = topology_ctx.logical_cores[a_idx];
-            const b = topology_ctx.logical_cores[b_idx];
-            if (a.thread_index != b.thread_index) return a.thread_index < b.thread_index;
-            return a.logical_id < b.logical_id;
-        }
-    }.lessThan);
+    if (count == 0) return 0.0;
+    return sum / @as(f32, @floatFromInt(count));
+}
 
-    var stream = std.io.fixedBufferStream(buf);
-    const writer = stream.writer();
-    writer.print("C{d:0>2} ", .{row.physical_id}) catch {};
+fn efficiencyLabel(class: CpuEfficiencyClass) []const u8 {
+    return switch (class) {
+        .performance => "P",
+        .efficiency => "E",
+        .balanced => "B",
+        .unknown => "?",
+    };
+}
 
-    var hot = false;
-    for (logical_indices[0..logical_count], 0..) |logical_idx, thread_idx| {
-        const logical_core = topology.logical_cores[logical_idx];
-        const usage = if (@as(usize, logical_core.logical_id) < cpu.per_core_usage.len)
-            cpu.per_core_usage[logical_core.logical_id]
-        else
-            0.0;
-        const usage_int: u16 = @intFromFloat(@round(@max(usage, 0.0)));
-        hot = hot or usage >= 70;
-
-        if (thread_idx > 0) writer.writeAll(" ") catch {};
-        writer.print("{d:0>2}:{d:>3}", .{ logical_core.logical_id, usage_int }) catch {};
-    }
-
-    return .{
-        .text = buf[0..stream.pos],
-        .hot = hot,
+fn efficiencyAccentColor(theme: ztop.config.Theme, class: CpuEfficiencyClass) Tui.Color {
+    return switch (class) {
+        .performance => theme.cpu_title,
+        .efficiency => theme.memory_low,
+        .balanced => theme.memory_mid,
+        .unknown => theme.muted,
     };
 }
 
@@ -301,24 +532,26 @@ fn collectLogicalIndicesForPhysical(
 fn renderTopologyHeaderLine(app_tui: *Tui, theme: ztop.config.Theme, column_width: u16, header_row: TopologyPhysicalRow, topology: CpuTopology) !void {
     var header_buf: [64]u8 = undefined;
     const label = buildTopologyHeaderText(&header_buf, header_row, topology);
-
-    // Format: "┈ <label> ┈" and fill to the column width.
-    const left = "┈ ";
-    const right = " ┈";
-    const fixed = left.len + right.len;
+    const fixed = 4; // "╺" + chip padding + "╸"
     const available_label: usize = if (column_width > fixed) @as(usize, @intCast(column_width - fixed)) else 0;
     const visible_label = label[0..@min(label.len, available_label)];
 
-    try app_tui.printStyled(.{ .fg = theme.muted }, "{s}", .{left});
-    try app_tui.printStyled(.{ .fg = theme.cpu_title, .bold = true }, "{s}", .{visible_label});
-    try app_tui.printStyled(.{ .fg = theme.muted }, "{s}", .{right});
+    try app_tui.printStyled(.{ .fg = theme.muted }, "╺", .{});
+    _ = try writeChip(
+        app_tui,
+        .{
+            .fg = theme.selection_fg,
+            .bg = efficiencyAccentColor(theme, header_row.efficiency_class),
+            .bold = true,
+        },
+        visible_label,
+    );
+    try app_tui.printStyled(.{ .fg = theme.muted }, "╸", .{});
 
-    // Pad remainder with "┈" so headers look like section dividers.
     const used = fixed + visible_label.len;
     if (@as(usize, @intCast(column_width)) > used) {
-        var i: usize = 0;
-        while (i < (@as(usize, @intCast(column_width)) - used)) : (i += 1) {
-            try app_tui.printStyled(.{ .fg = theme.muted }, "┈", .{});
+        for (0..(@as(usize, @intCast(column_width)) - used)) |_| {
+            try app_tui.printStyled(.{ .fg = theme.muted }, "━", .{});
         }
     }
 }
@@ -333,54 +566,84 @@ fn renderTopologyPhysicalRowLine(
 ) !void {
     var logical_indices: [ztop.sysinfo.common.MAX_CORES]usize = undefined;
     const indices = collectLogicalIndicesForPhysical(topology, physical_row.physical_id, &logical_indices);
-
-    // Left label: "C00 │"
-    var prefix_buf: [8]u8 = undefined;
-    const prefix = std.fmt.bufPrint(&prefix_buf, "C{d:0>2}", .{physical_row.physical_id}) catch "C??";
-    var written: u16 = 0;
     if (column_width == 0) return;
 
-    try app_tui.printStyled(.{ .fg = theme.muted, .bold = true }, "{s}", .{prefix});
-    written +|= @as(u16, @intCast(@min(prefix.len, @as(usize, @intCast(column_width)))));
+    const core_usage = averageCoreUsage(cpu, topology, physical_row.physical_id);
+    const core_heat = usageColor(theme, core_usage);
+    var written: usize = 0;
+
+    written += try writeChip(
+        app_tui,
+        .{
+            .fg = theme.selection_fg,
+            .bg = efficiencyAccentColor(theme, physical_row.efficiency_class),
+            .bold = true,
+        },
+        efficiencyLabel(physical_row.efficiency_class),
+    );
     if (written >= column_width) return;
 
-    try app_tui.printStyled(.{ .fg = theme.muted }, " │ ", .{});
-    written +|= 3;
+    try app_tui.out.writeAll(" ");
+    written += 1;
     if (written >= column_width) return;
 
-    for (indices, 0..) |logical_idx, thread_i| {
-        const logical_core = topology.logical_cores[logical_idx];
-        const usage = if (@as(usize, logical_core.logical_id) < cpu.per_core_usage.len)
-            cpu.per_core_usage[logical_core.logical_id]
-        else
-            0.0;
-        const usage_int: u16 = @intFromFloat(@round(@max(usage, 0.0)));
+    var prefix_buf: [8]u8 = undefined;
+    const prefix = std.fmt.bufPrint(&prefix_buf, "C{d:0>2}", .{physical_row.physical_id}) catch "C??";
+    try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "{s}", .{prefix});
+    written += prefix.len;
+    if (written >= column_width) return;
 
-        // Per-thread chunk: "[tile] <pct>%"
-        // tile is a small heat-colored block with the logical id inside.
-        const chunk_width: u16 = 4 + 1 + 4; // " 00 " + " " + "100%"
-        const needs_space: u16 = if (thread_i > 0) 1 else 0;
-        const remaining = column_width -| written;
-        if (remaining < needs_space + chunk_width) break;
+    try app_tui.out.writeAll(" ");
+    written += 1;
+    if (written >= column_width) return;
 
-        if (thread_i > 0) {
-            try app_tui.printStyled(.{ .fg = theme.muted }, " ", .{});
-            written +|= 1;
+    const min_bar_width: usize = 6;
+    var hidden_threads: usize = 0;
+    var visible_threads: usize = indices.len;
+
+    while (true) {
+        var tail_width: usize = 5; // " 100%"
+        tail_width += visible_threads * 5; // " 00 " per thread
+        if (hidden_threads > 0) {
+            tail_width += 2 + std.fmt.count("{d}", .{hidden_threads});
         }
 
+        const available_for_bar = @as(usize, @intCast(column_width)) -| written -| tail_width;
+        if (available_for_bar >= min_bar_width or visible_threads == 0) break;
+        visible_threads -= 1;
+        hidden_threads += 1;
+    }
+
+    const bar_width: u16 = @intCast(@as(usize, @intCast(column_width)) -| written -| 5 -| (visible_threads * 5) -| if (hidden_threads > 0) 2 + std.fmt.count("{d}", .{hidden_threads}) else 0);
+    try renderMeter(
+        app_tui,
+        bar_width,
+        core_usage,
+        .{ .fg = core_heat, .bold = core_usage >= 70 },
+        .{ .fg = theme.muted, .dim = true },
+    );
+    written += bar_width;
+    if (written >= column_width) return;
+
+    const usage_int: u16 = @intFromFloat(@round(@max(core_usage, 0.0)));
+    try app_tui.printStyled(.{ .fg = core_heat, .bold = core_usage >= 70 }, " {d:>3}%", .{usage_int});
+    written += 5;
+
+    for (indices[0..visible_threads]) |logical_idx| {
+        const logical_core = topology.logical_cores[logical_idx];
+        const usage = logicalCoreUsage(cpu, logical_core.logical_id);
         const heat = usageColor(theme, usage);
         try app_tui.printStyled(
             .{ .fg = theme.selection_fg, .bg = heat, .bold = usage >= 70 },
             " {d:0>2} ",
             .{logical_core.logical_id},
         );
-        written +|= 4;
+        written += 5;
+        if (written >= column_width) return;
+    }
 
-        try app_tui.printStyled(.{ .fg = theme.muted }, " ", .{});
-        written +|= 1;
-
-        try app_tui.printStyled(.{ .fg = heat, .bold = usage >= 70 }, "{d:>3}%", .{usage_int});
-        written +|= 4;
+    if (hidden_threads > 0 and written < column_width) {
+        try app_tui.printStyled(.{ .fg = theme.muted }, " +{d}", .{hidden_threads});
     }
 }
 
@@ -415,7 +678,7 @@ pub fn renderCpuTopologyBox(
     topology: CpuTopology,
     history: *const MetricHistory,
 ) !void {
-    const title = if (topology.logical_cores.len > 0) "CPU Topology" else "CPU";
+    const title = if (topology.logical_cores.len > 0) "CPU Topology Map" else "CPU";
     try app_tui.drawBoxStyled(
         box_x,
         box_y,
@@ -436,13 +699,23 @@ pub fn renderCpuTopologyBox(
     } else {
         try app_tui.printStyled(.{ .fg = theme.muted }, " ({d} cores)", .{cpu.cores});
     }
-
     const content_x = box_x + 2;
     const content_width: u16 = box_width -| 4;
     const base_body_y = box_y + 2;
     const base_body_height: u16 = box_height -| 3;
     const graph_height = if (content_width >= 10 and history.len() > 1) historyGraphRows(box_height) else 0;
     const topology_height: u16 = base_body_height -| graph_height;
+
+    if (topology.logical_cores.len > 0 and topology.has_smt and content_width >= 48) {
+        try app_tui.printStyled(.{ .fg = theme.muted }, " | SMT ", .{});
+        try app_tui.printStyled(.{ .fg = theme.usage_good, .bold = true }, "ON", .{});
+    }
+    if (topology.logical_cores.len > 0 and topology.has_efficiency_classes and content_width >= 62) {
+        try app_tui.printStyled(.{ .fg = theme.muted }, " | hybrid", .{});
+    }
+    if (topology.logical_cores.len > 0 and topology.package_count > 1 and content_width >= 76) {
+        try app_tui.printStyled(.{ .fg = theme.muted }, " | {d} pkg", .{topology.package_count});
+    }
 
     if (graph_height > 0 and box_width >= 40) {
         try app_tui.printStyled(.{ .fg = theme.muted }, " | history", .{});
@@ -500,15 +773,15 @@ pub fn renderCpuTopologyBox(
     var header_buf: [64]u8 = undefined;
     for (rows[0..row_count]) |row| {
         const header = buildTopologyHeaderText(&header_buf, row, topology);
-        max_row_width = @max(max_row_width, header.len);
+        max_row_width = @max(max_row_width, header.len + 4);
 
         var threads: usize = 0;
         for (topology.logical_cores) |logical_core| {
             if (logical_core.physical_id == row.physical_id) threads += 1;
         }
-        // Layout estimate for the fancy map rows:
-        // "C00 │ " + threads * (" 00 " + " " + "100%") + (threads-1) spaces between chunks
-        const row_width = 6 + threads * 9 + (threads -| 1);
+        // Layout estimate for the core-card rows:
+        // " X  C00 " + meter + " 100%" + thread heat tiles.
+        const row_width = 14 + threads * 5;
         max_row_width = @max(max_row_width, row_width);
     }
 
