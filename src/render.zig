@@ -1,13 +1,18 @@
 const std = @import("std");
-const ztop = @import("ztop");
-const Tui = ztop.tui.Tui;
-const SysInfo = ztop.sysinfo.SysInfo;
-const CpuTopology = ztop.sysinfo.CpuTopology;
-const CpuEfficiencyClass = ztop.sysinfo.CpuEfficiencyClass;
-const MetricHistory = ztop.history.MetricHistory;
-const RateHistory = ztop.history.RateHistory;
+const tui = @import("tui.zig");
+const sysinfo = @import("sysinfo.zig");
+const config = @import("config.zig");
+const history_mod = @import("history.zig");
+const Tui = tui.Tui;
+const SysInfo = sysinfo.SysInfo;
+const CpuTopology = sysinfo.CpuTopology;
+const CpuEfficiencyClass = sysinfo.CpuEfficiencyClass;
+const MetricHistory = history_mod.MetricHistory;
+const RateHistory = history_mod.RateHistory;
+const ProcessColumn = config.ProcessColumn;
+const ProcessColumns = config.ProcessColumns;
 
-pub fn usageColor(theme: ztop.config.Theme, percent: f32) Tui.Color {
+pub fn usageColor(theme: config.Theme, percent: f32) Tui.Color {
     if (percent >= 90) return theme.usage_critical;
     if (percent >= 70) return theme.usage_warn;
     if (percent >= 40) return theme.usage_good;
@@ -32,11 +37,98 @@ pub fn formatUnit(bytes: u64) UnitValue {
     }
 }
 
-pub fn memoryColor(theme: ztop.config.Theme, percent: f32) Tui.Color {
+pub fn memoryColor(theme: config.Theme, percent: f32) Tui.Color {
     if (percent >= 80) return theme.memory_critical;
     if (percent >= 60) return theme.memory_warn;
     if (percent >= 35) return theme.memory_mid;
     return theme.memory_low;
+}
+
+pub fn procStateLabel(state: sysinfo.ProcState) []const u8 {
+    return switch (state) {
+        .running => "running",
+        .sleeping => "sleeping",
+        .disk_sleep => "disk_slp",
+        .stopped => "stopped",
+        .tracing_stop => "tracing",
+        .zombie => "zombie",
+        .dead => "dead",
+        .idle => "idle",
+        .unknown => "unknown",
+    };
+}
+
+pub fn procStateColor(theme: config.Theme, state: sysinfo.ProcState) Tui.Color {
+    return switch (state) {
+        .running => theme.usage_good,
+        .sleeping => theme.muted,
+        .disk_sleep => theme.usage_warn,
+        .stopped => theme.usage_critical,
+        .tracing_stop => theme.usage_warn,
+        .zombie => theme.usage_critical,
+        .dead => theme.usage_critical,
+        .idle => theme.memory_low,
+        .unknown => theme.muted,
+    };
+}
+
+pub fn processColumnWidth(column: ProcessColumn) usize {
+    return switch (column) {
+        .pid => 6,
+        .ppid => 6,
+        .state => 9,
+        .cpu => 10,
+        .mem => 10,
+        .threads => 8,
+        .disk_read => 11,
+        .disk_write => 11,
+    };
+}
+
+pub fn planProcessTableLayout(columns: ProcessColumns, available_width: usize) ProcessTableLayout {
+    var layout: ProcessTableLayout = .{};
+    var visible_columns: [config.process_column_order.len]ProcessColumn = undefined;
+    const visible = columns.visibleOrdered(&visible_columns);
+
+    var fixed_width: usize = 0;
+    for (visible) |column| {
+        fixed_width += processColumnWidth(column);
+    }
+
+    layout.count = visible.len;
+    while (layout.count > 0 and available_width < fixed_width + min_process_name_width) {
+        layout.count -= 1;
+        fixed_width -= processColumnWidth(visible[layout.count]);
+        layout.dropped_count += 1;
+    }
+
+    if (layout.count > 0) {
+        @memcpy(layout.columns[0..layout.count], visible[0..layout.count]);
+    }
+
+    layout.name_width = available_width -| fixed_width;
+    return layout;
+}
+
+pub fn writeAlignedCell(app_tui: *Tui, style: Tui.Style, width: usize, text_align: TextAlign, text: []const u8) !void {
+    if (width == 0) return;
+
+    const clipped = if (text.len > width) text[0..width] else text;
+    const padding = width - clipped.len;
+
+    if (text_align == .right) {
+        for (0..padding) |_| {
+            try app_tui.writeStyled(style, " ");
+        }
+    }
+
+    try app_tui.writeStyled(style, clipped);
+
+    if (text_align == .left) {
+        for (0..padding) |_| {
+            try app_tui.writeStyled(style, " ");
+        }
+    }
 }
 
 pub const MetricColorMode = enum {
@@ -56,7 +148,21 @@ pub const RateSeries = struct {
     color: Tui.Color,
 };
 
-fn metricGraphColor(theme: ztop.config.Theme, mode: MetricColorMode, percent: f32) Tui.Color {
+pub const TextAlign = enum {
+    left,
+    right,
+};
+
+pub const ProcessTableLayout = struct {
+    columns: [config.process_column_order.len]ProcessColumn = undefined,
+    count: usize = 0,
+    name_width: usize = 0,
+    dropped_count: usize = 0,
+};
+
+pub const min_process_name_width: usize = 8;
+
+fn metricGraphColor(theme: config.Theme, mode: MetricColorMode, percent: f32) Tui.Color {
     return switch (mode) {
         .cpu => usageColor(theme, percent),
         .memory => memoryColor(theme, percent),
@@ -84,7 +190,7 @@ fn historyGraphLevel(percent: f32, rows: usize) usize {
 
 pub fn renderHistoryGraph(
     app_tui: *Tui,
-    theme: ztop.config.Theme,
+    theme: config.Theme,
     x: u16,
     y: u16,
     width: u16,
@@ -157,7 +263,7 @@ fn rateGraphLevel(value: u64, max_value: u64, rows: usize) usize {
 
 fn renderRateHistoryGraph(
     app_tui: *Tui,
-    theme: ztop.config.Theme,
+    theme: config.Theme,
     x: u16,
     y: u16,
     width: u16,
@@ -203,7 +309,7 @@ fn writeChip(app_tui: *Tui, style: Tui.Style, label: []const u8) !usize {
 
 fn renderRateMetricRow(
     app_tui: *Tui,
-    theme: ztop.config.Theme,
+    theme: config.Theme,
     x: u16,
     y: u16,
     width: u16,
@@ -261,7 +367,7 @@ fn renderRateMetricRow(
 
 fn renderRateLane(
     app_tui: *Tui,
-    theme: ztop.config.Theme,
+    theme: config.Theme,
     x: u16,
     y: u16,
     width: u16,
@@ -288,7 +394,7 @@ fn renderRateLane(
 
 pub fn renderDualRateBox(
     app_tui: *Tui,
-    theme: ztop.config.Theme,
+    theme: config.Theme,
     box_x: u16,
     box_y: u16,
     box_width: u16,
@@ -388,7 +494,7 @@ fn sameTopologySection(a: TopologyPhysicalRow, b: TopologyPhysicalRow) bool {
         a.efficiency_class == b.efficiency_class;
 }
 
-fn collectTopologyRows(topology: CpuTopology, rows: *[ztop.sysinfo.common.MAX_CORES]TopologyPhysicalRow) usize {
+fn collectTopologyRows(topology: CpuTopology, rows: *[sysinfo.common.MAX_CORES]TopologyPhysicalRow) usize {
     var row_count: usize = 0;
 
     for (topology.logical_cores) |logical_core| {
@@ -465,14 +571,14 @@ fn buildTopologyHeaderText(buf: []u8, row: TopologyPhysicalRow, topology: CpuTop
     return writer.buffered();
 }
 
-fn logicalCoreUsage(cpu: ztop.sysinfo.CpuStats, logical_id: u16) f32 {
+fn logicalCoreUsage(cpu: sysinfo.CpuStats, logical_id: u16) f32 {
     return if (@as(usize, logical_id) < cpu.per_core_usage.len)
         cpu.per_core_usage[logical_id]
     else
         0.0;
 }
 
-fn averageCoreUsage(cpu: ztop.sysinfo.CpuStats, topology: CpuTopology, physical_id: u16) f32 {
+fn averageCoreUsage(cpu: sysinfo.CpuStats, topology: CpuTopology, physical_id: u16) f32 {
     var sum: f32 = 0.0;
     var count: usize = 0;
 
@@ -495,7 +601,7 @@ fn efficiencyLabel(class: CpuEfficiencyClass) []const u8 {
     };
 }
 
-fn efficiencyAccentColor(theme: ztop.config.Theme, class: CpuEfficiencyClass) Tui.Color {
+fn efficiencyAccentColor(theme: config.Theme, class: CpuEfficiencyClass) Tui.Color {
     return switch (class) {
         .performance => theme.cpu_title,
         .efficiency => theme.memory_low,
@@ -507,7 +613,7 @@ fn efficiencyAccentColor(theme: ztop.config.Theme, class: CpuEfficiencyClass) Tu
 fn collectLogicalIndicesForPhysical(
     topology: CpuTopology,
     physical_id: u16,
-    out: *[ztop.sysinfo.common.MAX_CORES]usize,
+    out: *[sysinfo.common.MAX_CORES]usize,
 ) []usize {
     var count: usize = 0;
     for (topology.logical_cores, 0..) |logical_core, idx| {
@@ -528,7 +634,7 @@ fn collectLogicalIndicesForPhysical(
     return out[0..count];
 }
 
-fn renderTopologyHeaderLine(app_tui: *Tui, theme: ztop.config.Theme, column_width: u16, header_row: TopologyPhysicalRow, topology: CpuTopology) !void {
+fn renderTopologyHeaderLine(app_tui: *Tui, theme: config.Theme, column_width: u16, header_row: TopologyPhysicalRow, topology: CpuTopology) !void {
     var header_buf: [64]u8 = undefined;
     const label = buildTopologyHeaderText(&header_buf, header_row, topology);
     const fixed = 4; // "╺" + chip padding + "╸"
@@ -557,13 +663,13 @@ fn renderTopologyHeaderLine(app_tui: *Tui, theme: ztop.config.Theme, column_widt
 
 fn renderTopologyPhysicalRowLine(
     app_tui: *Tui,
-    theme: ztop.config.Theme,
+    theme: config.Theme,
     column_width: u16,
     physical_row: TopologyPhysicalRow,
-    cpu: ztop.sysinfo.CpuStats,
+    cpu: sysinfo.CpuStats,
     topology: CpuTopology,
 ) !void {
-    var logical_indices: [ztop.sysinfo.common.MAX_CORES]usize = undefined;
+    var logical_indices: [sysinfo.common.MAX_CORES]usize = undefined;
     const indices = collectLogicalIndicesForPhysical(topology, physical_row.physical_id, &logical_indices);
     if (column_width == 0) return;
 
@@ -646,7 +752,7 @@ fn renderTopologyPhysicalRowLine(
     }
 }
 
-fn renderPerCoreUsageArea(app_tui: *Tui, theme: ztop.config.Theme, x: u16, y: u16, width: u16, height: u16, cpu: ztop.sysinfo.CpuStats) !void {
+fn renderPerCoreUsageArea(app_tui: *Tui, theme: config.Theme, x: u16, y: u16, width: u16, height: u16, cpu: sysinfo.CpuStats) !void {
     if (height == 0 or cpu.per_core_usage.len == 0) return;
 
     const rows_available: usize = height;
@@ -668,12 +774,12 @@ fn renderPerCoreUsageArea(app_tui: *Tui, theme: ztop.config.Theme, x: u16, y: u1
 
 pub fn renderCpuTopologyBox(
     app_tui: *Tui,
-    theme: ztop.config.Theme,
+    theme: config.Theme,
     box_x: u16,
     box_y: u16,
     box_width: u16,
     box_height: u16,
-    cpu: ztop.sysinfo.CpuStats,
+    cpu: sysinfo.CpuStats,
     topology: CpuTopology,
     history: *const MetricHistory,
 ) !void {
@@ -735,7 +841,7 @@ pub fn renderCpuTopologyBox(
         return;
     }
 
-    var rows: [ztop.sysinfo.common.MAX_CORES]TopologyPhysicalRow = undefined;
+    var rows: [sysinfo.common.MAX_CORES]TopologyPhysicalRow = undefined;
     const row_count = collectTopologyRows(topology, &rows);
     if (row_count == 0) {
         try renderPerCoreUsageArea(app_tui, theme, content_x, base_body_y, content_width, topology_height, cpu);
@@ -745,7 +851,7 @@ pub fn renderCpuTopologyBox(
         return;
     }
 
-    var lines: [ztop.sysinfo.common.MAX_CORES * 2]TopologyLine = undefined;
+    var lines: [sysinfo.common.MAX_CORES * 2]TopologyLine = undefined;
     var line_count: usize = 0;
     for (rows[0..row_count], 0..) |row, idx| {
         if (idx == 0 or !sameTopologySection(rows[idx - 1], row)) {
@@ -821,7 +927,7 @@ pub fn setStatus(status_buf: *[160]u8, status_len: *usize, comptime fmt: []const
 pub fn refreshConnections(
     allocator: std.mem.Allocator,
     sys_info: *SysInfo,
-    cached_connections: *[]ztop.sysinfo.common.NetConnection,
+    cached_connections: *[]sysinfo.common.NetConnection,
 ) !void {
     const next = try sys_info.getNetConnections(allocator);
     if (cached_connections.*.len > 0) {

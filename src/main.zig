@@ -1,6 +1,6 @@
 const std = @import("std");
 const ztop = @import("ztop");
-const render = @import("render.zig");
+const render = ztop.render;
 const input_handler = @import("input_handler.zig");
 const process_commands = ztop.process_commands;
 const Tui = ztop.tui.Tui;
@@ -57,6 +57,135 @@ fn nowMs(io: std.Io) i64 {
     return std.Io.Clock.now(.real, io).toMilliseconds();
 }
 
+fn activeProcessColumns(
+    current_tab: u8,
+    process_columns: *ztop.config.ProcessColumns,
+    io_process_columns: *ztop.config.ProcessColumns,
+) *ztop.config.ProcessColumns {
+    if (current_tab == 2) return io_process_columns;
+    return process_columns;
+}
+
+fn renderProcessNameCell(
+    app_tui: *Tui,
+    style: Tui.Style,
+    width: usize,
+    prefix: []const u8,
+    prefix_width: usize,
+    name: []const u8,
+) !void {
+    if (width == 0) return;
+
+    if (prefix_width >= width) {
+        const clipped_len = if (width > 2 and name.len > width - 2) width - 2 else @min(name.len, width);
+        try app_tui.writeStyled(style, name[0..clipped_len]);
+        if (width > 2 and name.len > clipped_len) {
+            try app_tui.writeStyled(style, "..");
+        }
+        const used = clipped_len + if (width > 2 and name.len > clipped_len) @as(usize, 2) else 0;
+        for (used..width) |_| try app_tui.writeStyled(style, " ");
+        return;
+    }
+
+    const available_name_width = width - prefix_width;
+    const clipped_name_len = if (available_name_width > 2 and name.len > available_name_width)
+        available_name_width - 2
+    else
+        @min(name.len, available_name_width);
+
+    try app_tui.writeStyled(style, prefix);
+    try app_tui.writeStyled(style, name[0..clipped_name_len]);
+    var used = prefix_width + clipped_name_len;
+
+    if (name.len > clipped_name_len and available_name_width > 2) {
+        try app_tui.writeStyled(style, "..");
+        used += 2;
+    }
+
+    for (used..width) |_| try app_tui.writeStyled(style, " ");
+}
+
+fn renderProcessRow(
+    app_tui: *Tui,
+    theme: ztop.config.Theme,
+    layout: render.ProcessTableLayout,
+    proc: ztop.sysinfo.ProcStats,
+    is_selected: bool,
+    prefix: []const u8,
+    prefix_width: usize,
+) !void {
+    var buf: [32]u8 = undefined;
+    const pid_style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.muted };
+    const ppid_style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.muted };
+    const name_style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text };
+
+    var rendered_name = false;
+    for (layout.columns[0..layout.count]) |column| {
+        if (!rendered_name and switch (column) {
+            .state, .cpu, .mem, .threads, .disk_read, .disk_write => true,
+            .pid, .ppid => false,
+        }) {
+            try renderProcessNameCell(app_tui, name_style, layout.name_width, prefix, prefix_width, proc.name());
+            rendered_name = true;
+        }
+
+        switch (column) {
+            .pid => {
+                const text = std.fmt.bufPrint(&buf, "{d}", .{proc.pid}) catch "";
+                try render.writeAlignedCell(app_tui, pid_style, render.processColumnWidth(.pid), .right, text);
+            },
+            .ppid => {
+                const text = std.fmt.bufPrint(&buf, "{d}", .{proc.ppid}) catch "";
+                try render.writeAlignedCell(app_tui, ppid_style, render.processColumnWidth(.ppid), .right, text);
+            },
+            .state => {
+                const style: Tui.Style = if (is_selected)
+                    .{ .bg = theme.selection_bg, .fg = render.procStateColor(theme, proc.state) }
+                else
+                    .{ .fg = render.procStateColor(theme, proc.state) };
+                try render.writeAlignedCell(app_tui, style, render.processColumnWidth(.state), .left, render.procStateLabel(proc.state));
+            },
+            .cpu => {
+                const text = std.fmt.bufPrint(&buf, "{d:4.1}% CPU", .{proc.cpu_percent}) catch "";
+                const style: Tui.Style = if (is_selected)
+                    .{ .bg = theme.selection_bg, .fg = render.usageColor(theme, proc.cpu_percent), .bold = proc.cpu_percent >= 70 }
+                else
+                    .{ .fg = render.usageColor(theme, proc.cpu_percent), .bold = proc.cpu_percent >= 70 };
+                try render.writeAlignedCell(app_tui, style, render.processColumnWidth(.cpu), .right, text);
+            },
+            .mem => {
+                const text = std.fmt.bufPrint(&buf, "{d:4.1}% MEM", .{proc.mem_percent}) catch "";
+                const style: Tui.Style = if (is_selected)
+                    .{ .bg = theme.selection_bg, .fg = render.memoryColor(theme, proc.mem_percent), .bold = proc.mem_percent >= 10 }
+                else
+                    .{ .fg = render.memoryColor(theme, proc.mem_percent), .bold = proc.mem_percent >= 10 };
+                try render.writeAlignedCell(app_tui, style, render.processColumnWidth(.mem), .right, text);
+            },
+            .threads => {
+                const text = std.fmt.bufPrint(&buf, "{d} THR", .{proc.threads}) catch "";
+                const style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.brand } else .{ .fg = theme.brand };
+                try render.writeAlignedCell(app_tui, style, render.processColumnWidth(.threads), .right, text);
+            },
+            .disk_read => {
+                const rate = render.formatUnit(proc.disk_read_ps);
+                const text = std.fmt.bufPrint(&buf, "R {d:4.1}{s}/s", .{ rate.value, rate.unit }) catch "";
+                const style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.disk_title } else .{ .fg = theme.disk_title };
+                try render.writeAlignedCell(app_tui, style, render.processColumnWidth(.disk_read), .right, text);
+            },
+            .disk_write => {
+                const rate = render.formatUnit(proc.disk_write_ps);
+                const text = std.fmt.bufPrint(&buf, "W {d:4.1}{s}/s", .{ rate.value, rate.unit }) catch "";
+                const style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.io_rate } else .{ .fg = theme.io_rate };
+                try render.writeAlignedCell(app_tui, style, render.processColumnWidth(.disk_write), .right, text);
+            },
+        }
+    }
+
+    if (!rendered_name) {
+        try renderProcessNameCell(app_tui, name_style, layout.name_width, prefix, prefix_width, proc.name());
+    }
+}
+
 pub fn main(main_init: std.process.Init) !void {
     const allocator = main_init.gpa;
     const io = main_init.io;
@@ -94,6 +223,9 @@ pub fn main(main_init: std.process.Init) !void {
     var selected_idx: usize = 0;
     var scroll_offset: usize = 0;
     var show_help: bool = app_config.show_help_on_startup;
+    var show_column_picker: bool = false;
+    var process_columns = app_config.process_columns;
+    var io_process_columns = app_config.io_process_columns;
 
     var filter_buf: [32]u8 = std.mem.zeroes([32]u8);
     var filter_len: usize = 0;
@@ -295,6 +427,7 @@ pub fn main(main_init: std.process.Init) !void {
                 const procs_box_y: u16 = if (is_small_width) mem_box_y + mem_box_height else 2 + top_boxes_height;
                 const procs_box_width: u16 = size.width;
                 const procs_box_height: u16 = size.height -| procs_box_y -| 1;
+                var process_layout: render.ProcessTableLayout = .{};
 
                 if (current_tab == 1) {
                     try render.renderCpuTopologyBox(&app_tui, theme, cpu_box_x, cpu_box_y, cpu_box_width, cpu_box_height, cpu, cpu_topology, &cpu_history);
@@ -738,6 +871,8 @@ pub fn main(main_init: std.process.Init) !void {
                             .pid => "PID",
                             .name => "NAME",
                         };
+                        const current_process_columns = activeProcessColumns(current_tab, &process_columns, &io_process_columns);
+                        const visible_column_count = current_process_columns.countVisible() + 1; // Name is always visible.
                         const title = if (show_zombie_parents)
                             std.fmt.bufPrint(
                                 &title_buf,
@@ -745,7 +880,7 @@ pub fn main(main_init: std.process.Init) !void {
                                 .{ zombie_summary.parent_count, zombie_summary.zombie_count },
                             ) catch "Zombie Parents"
                         else
-                            std.fmt.bufPrint(&title_buf, "Processes (Sort: {s})", .{sort_name}) catch "Processes";
+                            std.fmt.bufPrint(&title_buf, "Processes (Sort: {s} | Cols: {d})", .{ sort_name, visible_column_count }) catch "Processes";
 
                         try app_tui.drawBoxStyled(
                             procs_box_x,
@@ -821,6 +956,8 @@ pub fn main(main_init: std.process.Init) !void {
                             scroll_offset = selected_idx - visible_rows + 1;
                         }
 
+                        process_layout = render.planProcessTableLayout(current_process_columns.*, procs_box_width -| 4);
+
                         for (0..visible_rows) |row| {
                             const idx = scroll_offset + row;
                             if (idx >= filtered_count) break;
@@ -836,10 +973,6 @@ pub fn main(main_init: std.process.Init) !void {
                                 for (0..procs_box_width - 4) |_| try app_tui.out.writeStreamingAll(io, " ");
                                 try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1 + @as(u16, @intCast(row)));
                             }
-
-                            try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.muted }, "{d:5} ", .{proc.pid});
-
-                            const name_width: usize = if (procs_box_width > 40) 16 else 8;
 
                             var prefix_buf: [256]u8 = undefined;
                             var prefix_len: usize = 0;
@@ -863,33 +996,15 @@ pub fn main(main_init: std.process.Init) !void {
                                 }
                             }
 
-                            const total_name_width = prefix_width + proc.name().len;
-                            if (total_name_width > name_width) {
-                                const max_proc_len = if (name_width > prefix_width + 2) name_width - prefix_width - 2 else 0;
-                                if (max_proc_len > 0) {
-                                    try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s}{s}.. ", .{ prefix_buf[0..prefix_len], proc.name()[0..max_proc_len] });
-                                } else {
-                                    try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s}.. ", .{proc.name()[0..@min(proc.name().len, name_width - 2)]});
-                                }
-                            } else {
-                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s}{s} ", .{ prefix_buf[0..prefix_len], proc.name() });
-                                for (total_name_width..name_width) |_| try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg } else .{}, " ", .{});
-                            }
-
-                            if (current_tab == 2) {
-                                const dr = render.formatUnit(proc.disk_read_ps);
-                                const dw = render.formatUnit(proc.disk_write_ps);
-                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.disk_title } else .{ .fg = theme.disk_title }, "{d:5.1} {s}/s R ", .{ dr.value, dr.unit });
-                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.disk_title } else .{ .fg = theme.disk_title }, "{d:5.1} {s}/s W ", .{ dw.value, dw.unit });
-                            } else {
-                                const c_style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = render.usageColor(theme, proc.cpu_percent), .bold = proc.cpu_percent >= 70 } else .{ .fg = render.usageColor(theme, proc.cpu_percent), .bold = proc.cpu_percent >= 70 };
-                                try app_tui.printStyled(c_style, "{d:5.1}% CPU ", .{proc.cpu_percent});
-
-                                const m_style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = render.memoryColor(theme, proc.mem_percent), .bold = proc.mem_percent >= 10 } else .{ .fg = render.memoryColor(theme, proc.mem_percent), .bold = proc.mem_percent >= 10 };
-                                try app_tui.printStyled(m_style, "{d:5.1}% MEM ", .{proc.mem_percent});
-
-                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.brand } else .{ .fg = theme.brand }, "{d:4} THR", .{proc.threads});
-                            }
+                            try renderProcessRow(
+                                &app_tui,
+                                theme,
+                                process_layout,
+                                proc,
+                                is_selected,
+                                prefix_buf[0..prefix_len],
+                                prefix_width,
+                            );
 
                             if (is_selected) {
                                 try app_tui.resetStyle();
@@ -901,7 +1016,7 @@ pub fn main(main_init: std.process.Init) !void {
                 // Help Overlay
                 if (show_help) {
                     const help_width = 48;
-                    const help_height = 15;
+                    const help_height = 16;
                     const h_x = if (size.width > help_width) (size.width - help_width) / 2 else 1;
                     const h_y = if (size.height > help_height) (size.height - help_height) / 2 else 1;
 
@@ -929,35 +1044,71 @@ pub fn main(main_init: std.process.Init) !void {
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Toggle Tree View", .{});
 
                     try app_tui.moveCursor(h_x + 2, h_y + 6);
+                    try app_tui.printStyled(.{ .fg = theme.text }, "C:            ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Process column picker", .{});
+
+                    try app_tui.moveCursor(h_x + 2, h_y + 7);
                     try app_tui.printStyled(.{ .fg = theme.text }, "/:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Filter processes", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 7);
+                    try app_tui.moveCursor(h_x + 2, h_y + 8);
                     try app_tui.printStyled(.{ .fg = theme.text }, "Enter:        ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "View threads of selected", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 8);
+                    try app_tui.moveCursor(h_x + 2, h_y + 9);
                     try app_tui.printStyled(.{ .fg = theme.text }, "t:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Send SIGTERM to selected", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 9);
+                    try app_tui.moveCursor(h_x + 2, h_y + 10);
                     try app_tui.printStyled(.{ .fg = theme.text }, "K:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Send SIGKILL to selected", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 10);
+                    try app_tui.moveCursor(h_x + 2, h_y + 11);
                     try app_tui.printStyled(.{ .fg = theme.text }, "q:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Quit", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 11);
+                    try app_tui.moveCursor(h_x + 2, h_y + 12);
                     try app_tui.printStyled(.{ .fg = theme.text }, ":             ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Command mode (show zombie)", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 12);
+                    try app_tui.moveCursor(h_x + 2, h_y + 13);
                     try app_tui.printStyled(.{ .fg = theme.text }, "Repo: ", .{});
                     try app_tui.writeStyledHyperlink(.{ .fg = theme.tab_active, .underline = true }, repo_url, repo_label);
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 13);
+                    try app_tui.moveCursor(h_x + 2, h_y + 14);
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Press any key to close...", .{});
+                }
+
+                if (show_column_picker) {
+                    const picker_width = 40;
+                    const picker_height = 14;
+                    const picker_x = if (size.width > picker_width) (size.width - picker_width) / 2 else 1;
+                    const picker_y = if (size.height > picker_height) (size.height - picker_height) / 2 else 1;
+                    const picker_columns = activeProcessColumns(current_tab, &process_columns, &io_process_columns);
+                    const picker_title = if (current_tab == 2) "I/O Columns" else "Process Columns";
+
+                    for (0..picker_height) |i| {
+                        try app_tui.moveCursor(picker_x, picker_y + @as(u16, @intCast(i)));
+                        for (0..picker_width) |_| try app_tui.out.writeStreamingAll(io, " ");
+                    }
+
+                    try app_tui.drawBoxStyled(picker_x, picker_y, picker_width, picker_height, picker_title, .{ .fg = theme.border }, .{ .fg = theme.text, .bold = true });
+                    try app_tui.moveCursor(picker_x + 2, picker_y + 2);
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Name is always visible.", .{});
+
+                    for (ztop.config.process_column_order, 0..) |column, idx| {
+                        try app_tui.moveCursor(picker_x + 2, picker_y + 4 + @as(u16, @intCast(idx)));
+                        try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "{d}. ", .{idx + 1});
+                        try app_tui.printStyled(
+                            .{ .fg = if (picker_columns.isVisible(column)) theme.usage_good else theme.muted, .bold = picker_columns.isVisible(column) },
+                            "[{c}]",
+                            .{if (picker_columns.isVisible(column)) @as(u8, 'x') else @as(u8, ' ')},
+                        );
+                        try app_tui.printStyled(.{ .fg = theme.text }, " {s}", .{column.label()});
+                    }
+
+                    try app_tui.moveCursor(picker_x + 2, picker_y + 12);
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Press 1-8 to toggle, Enter/Esc to close", .{});
                 }
 
                 // Footer
@@ -970,6 +1121,12 @@ pub fn main(main_init: std.process.Init) !void {
                     try app_tui.printStyled(.{ .fg = theme.filter_prompt, .bold = true }, "Filter: ", .{});
                     try app_tui.printStyled(.{ .fg = theme.text }, "{s}", .{filter_buf[0..filter_len]});
                     try app_tui.printStyled(.{ .fg = theme.muted }, " (Press Enter to apply, Esc to cancel)", .{});
+                } else if (show_column_picker) {
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Process columns: ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "1-8", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, " toggle, ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "Enter/Esc", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, " close", .{});
                 } else if (filter_len > 0) {
                     try app_tui.printStyled(.{ .fg = theme.filter_prompt, .bold = true }, "Filter active: ", .{});
                     try app_tui.printStyled(.{ .fg = theme.text }, "{s}", .{filter_buf[0..filter_len]});
@@ -985,10 +1142,16 @@ pub fn main(main_init: std.process.Init) !void {
                     try app_tui.printStyled(.{ .fg = theme.muted }, " to go back", .{});
                 } else if (status_len > 0) {
                     try app_tui.printStyled(.{ .fg = theme.muted }, "{s}", .{status_buf[0..status_len]});
+                } else if (process_layout.dropped_count > 0) {
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "{d} column(s) hidden by width | Press ", .{process_layout.dropped_count});
+                    try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "'C'", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, " to adjust", .{});
                 } else {
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Press ", .{});
                     try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "'?'", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, " for help, ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "'C'", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, " for columns, ", .{});
                     try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "'q'", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, " to quit", .{});
                 }
@@ -1016,6 +1179,7 @@ pub fn main(main_init: std.process.Init) !void {
                 .selected_idx = &selected_idx,
                 .scroll_offset = &scroll_offset,
                 .show_help = &show_help,
+                .show_column_picker = &show_column_picker,
                 .filter_buf = &filter_buf,
                 .filter_len = &filter_len,
                 .is_filtering = &is_filtering,
@@ -1039,6 +1203,8 @@ pub fn main(main_init: std.process.Init) !void {
                 .quit_flag = &quit_flag,
                 .input_buf = &input_buf,
                 .input_len = &input_len,
+                .process_columns = &process_columns,
+                .io_process_columns = &io_process_columns,
             };
             force_redraw = try input_handler.handleAvailableInput(&input_ctx);
         }

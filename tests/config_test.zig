@@ -52,6 +52,36 @@ test "config parse supports launch command ignore substring list" {
     try std.testing.expectEqualStrings("Google Chrome, Chrome Helper, /Applications/Slack.app", parsed.ignoredLaunchCommandSubstr());
 }
 
+test "config parse supports process column selection" {
+    const parsed = try config.parse(
+        \\process_columns = pid, ppid, state, cpu, name
+        \\io_process_columns = disk_io, pid, mem
+    );
+
+    try std.testing.expectEqual(true, parsed.process_columns.pid);
+    try std.testing.expectEqual(true, parsed.process_columns.ppid);
+    try std.testing.expectEqual(true, parsed.process_columns.state);
+    try std.testing.expectEqual(true, parsed.process_columns.cpu);
+    try std.testing.expectEqual(false, parsed.process_columns.mem);
+    try std.testing.expectEqual(false, parsed.process_columns.threads);
+
+    try std.testing.expectEqual(true, parsed.io_process_columns.pid);
+    try std.testing.expectEqual(true, parsed.io_process_columns.mem);
+    try std.testing.expectEqual(true, parsed.io_process_columns.disk_read);
+    try std.testing.expectEqual(true, parsed.io_process_columns.disk_write);
+    try std.testing.expectEqual(false, parsed.io_process_columns.cpu);
+}
+
+test "config parse supports process column presets" {
+    const parsed = try config.parse(
+        \\process_columns = none
+        \\io_process_columns = all
+    );
+
+    try std.testing.expectEqual(@as(usize, 0), parsed.process_columns.countVisible());
+    try std.testing.expectEqual(@as(usize, config.process_column_order.len), parsed.io_process_columns.countVisible());
+}
+
 test "config parse rejects invalid options" {
     try std.testing.expectError(error.UnknownConfigKey, config.parse("not_real = value\n"));
     try std.testing.expectError(error.UnknownTheme, config.parse("theme = vaporwave\n"));
@@ -59,6 +89,7 @@ test "config parse rejects invalid options" {
     try std.testing.expectError(error.InvalidUpdateInterval, config.parse("update_interval_ms = 50\n"));
     try std.testing.expectError(error.InvalidBooleanValue, config.parse("default_tree_view = maybe\n"));
     try std.testing.expectError(error.UnknownColorKey, config.parse("color.nope = blue\n"));
+    try std.testing.expectError(error.UnknownProcessColumn, config.parse("process_columns = nope\n"));
 }
 
 test "config file loader reads explicit path" {

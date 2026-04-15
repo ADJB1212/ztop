@@ -34,6 +34,7 @@ It is built for people who want a focused dashboard in the terminal: quick enoug
   - AMD via DRM/sysfs counters exposed by `amdgpu`
   - Apple Silicon via IORegistry accelerator performance statistics
 - Keyboard-first navigation with fast filtering and command mode
+- Dynamic process-table columns with an in-app picker for PID, PPID, state, CPU, memory, threads, and disk rates
 - Built-in process actions:
   - Send `SIGTERM` or `SIGKILL` to the selected process
   - `:killall <name>` to send `SIGTERM` to matching processes
@@ -73,6 +74,7 @@ Common keys:
 | `1`, `2`, `3`, `4`      | Switch between `Main`, `I/O`, `Sensors`, and `Network` |
 | `j` / `k` or arrow keys | Move through the process list                          |
 | `c`, `m`, `p`, `n`      | Sort by CPU, memory, PID, or name                      |
+| `C`                     | Toggle process-table columns for the current view      |
 | `/`                     | Filter processes by name or PID                        |
 | `:`                     | Open command mode                                      |
 | `t`                     | Send `SIGTERM` to the selected process                 |
@@ -105,6 +107,8 @@ default_tab = network
 default_tree_view = false
 show_help_on_startup = false
 update_interval_ms = 500
+process_columns = pid,cpu,mem,threads,state
+io_process_columns = pid,disk_read,disk_write,ppid
 color.tab_active = bright_cyan
 ```
 
@@ -115,5 +119,10 @@ Additional startup options:
 - `default_tab = main|io|sensors|network` (or `1` through `4`)
 - `default_tree_view = true|false`
 - `show_help_on_startup = true|false`
+- `process_columns = pid,ppid,state,cpu,mem,threads,disk_read,disk_write`
+- `io_process_columns = ...` uses the same column names for the I/O tab
+- `process_columns = none|default|all` and `io_process_columns = none|default|all` are also supported
+
+The process name column is always shown. Press `C` inside the TUI to toggle columns interactively for the current process table.
 
 Boolean values also accept `yes`/`no` and `1`/`0`.

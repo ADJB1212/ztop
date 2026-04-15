@@ -4,3 +4,4 @@ pub const config = @import("config.zig");
 pub const process_commands = @import("process_commands.zig");
 pub const text_input = @import("text_input.zig");
 pub const history = @import("history.zig");
+pub const render = @import("render.zig");

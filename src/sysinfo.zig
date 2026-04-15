@@ -14,6 +14,7 @@ pub const GpuVendor = common.GpuVendor;
 pub const GpuBackend = common.GpuBackend;
 pub const BatteryStats = common.BatteryStats;
 pub const BatteryStatus = common.BatteryStatus;
+pub const ProcState = common.ProcState;
 pub const ProcStats = common.ProcStats;
 pub const ThreadStats = common.ThreadStats;
 pub const SortBy = common.SortBy;

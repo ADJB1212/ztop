@@ -1,6 +1,6 @@
 const std = @import("std");
 const ztop = @import("ztop");
-const render = @import("render.zig");
+const render = ztop.render;
 const process_commands = ztop.process_commands;
 const text_input = ztop.text_input;
 const Tui = ztop.tui.Tui;
@@ -61,6 +61,7 @@ pub const Context = struct {
     selected_idx: *usize,
     scroll_offset: *usize,
     show_help: *bool,
+    show_column_picker: *bool,
     filter_buf: *[32]u8,
     filter_len: *usize,
     is_filtering: *bool,
@@ -84,6 +85,8 @@ pub const Context = struct {
     quit_flag: *bool,
     input_buf: *[128]u8,
     input_len: *usize,
+    process_columns: *ztop.config.ProcessColumns,
+    io_process_columns: *ztop.config.ProcessColumns,
 };
 
 pub fn handleAvailableInput(ctx: *Context) !bool {
@@ -123,6 +126,8 @@ pub fn handleAvailableInput(ctx: *Context) !bool {
         if (ctx.show_help.*) {
             ctx.show_help.* = false;
             handled = true;
+        } else if (ctx.show_column_picker.*) {
+            handled = handleColumnPickerToken(ctx, token);
         } else if (ctx.is_cmd_mode.*) {
             handled = handleCommandModeToken(ctx, token);
         } else if (ctx.is_filtering.*) {
@@ -139,6 +144,34 @@ pub fn handleAvailableInput(ctx: *Context) !bool {
     }
 
     return handled_any or (!ctx.quit_flag.* and write_len > 0);
+}
+
+fn handleColumnPickerToken(ctx: *Context, token: Tui.InputToken) bool {
+    switch (token) {
+        .mouse, .arrow_up, .arrow_down => return true,
+        .enter, .escape => {
+            ctx.show_column_picker.* = false;
+            return true;
+        },
+        .byte => |ch| {
+            if (ch == 'C') {
+                ctx.show_column_picker.* = false;
+                return true;
+            }
+
+            if (ch < '1' or ch > '8') return false;
+
+            const column = ztop.config.process_column_order[@as(usize, ch - '1')];
+            const visible = activeColumns(ctx).toggle(column);
+            render.setStatus(
+                ctx.status_buf,
+                ctx.status_len,
+                "{s} {s} column",
+                .{ if (visible) "Showing" else "Hiding", column.label() },
+            );
+            return true;
+        },
+    }
 }
 
 fn handleCommandModeToken(ctx: *Context, token: Tui.InputToken) bool {
@@ -312,6 +345,12 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
                 }
                 return true;
             },
+            'C' => {
+                if (!ctx.thread_view.* and ctx.current_tab.* != 4) {
+                    ctx.show_column_picker.* = true;
+                }
+                return true;
+            },
             '/' => {
                 if (!ctx.thread_view.*) {
                     ctx.is_filtering.* = true;
@@ -335,6 +374,11 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
             else => return false,
         },
     }
+}
+
+fn activeColumns(ctx: *Context) *ztop.config.ProcessColumns {
+    if (ctx.current_tab.* == 2) return ctx.io_process_columns;
+    return ctx.process_columns;
 }
 
 fn executeCommand(ctx: *Context) void {

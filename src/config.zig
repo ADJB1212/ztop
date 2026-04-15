@@ -84,6 +84,136 @@ pub const ThemeOverrides = struct {
     }
 };
 
+pub const ProcessColumn = enum(u8) {
+    pid,
+    ppid,
+    state,
+    cpu,
+    mem,
+    threads,
+    disk_read,
+    disk_write,
+
+    pub fn label(self: ProcessColumn) []const u8 {
+        return switch (self) {
+            .pid => "PID",
+            .ppid => "PPID",
+            .state => "State",
+            .cpu => "CPU%",
+            .mem => "MEM%",
+            .threads => "Threads",
+            .disk_read => "Disk Read",
+            .disk_write => "Disk Write",
+        };
+    }
+};
+
+pub const process_column_order = [_]ProcessColumn{
+    .pid,
+    .ppid,
+    .state,
+    .cpu,
+    .mem,
+    .threads,
+    .disk_read,
+    .disk_write,
+};
+
+pub const ProcessColumns = struct {
+    pid: bool = false,
+    ppid: bool = false,
+    state: bool = false,
+    cpu: bool = false,
+    mem: bool = false,
+    threads: bool = false,
+    disk_read: bool = false,
+    disk_write: bool = false,
+
+    pub fn defaultsMain() ProcessColumns {
+        return .{
+            .pid = true,
+            .cpu = true,
+            .mem = true,
+            .threads = true,
+        };
+    }
+
+    pub fn defaultsIo() ProcessColumns {
+        return .{
+            .pid = true,
+            .disk_read = true,
+            .disk_write = true,
+        };
+    }
+
+    pub fn all() ProcessColumns {
+        return .{
+            .pid = true,
+            .ppid = true,
+            .state = true,
+            .cpu = true,
+            .mem = true,
+            .threads = true,
+            .disk_read = true,
+            .disk_write = true,
+        };
+    }
+
+    pub fn none() ProcessColumns {
+        return .{};
+    }
+
+    pub fn isVisible(self: ProcessColumns, column: ProcessColumn) bool {
+        return switch (column) {
+            .pid => self.pid,
+            .ppid => self.ppid,
+            .state => self.state,
+            .cpu => self.cpu,
+            .mem => self.mem,
+            .threads => self.threads,
+            .disk_read => self.disk_read,
+            .disk_write => self.disk_write,
+        };
+    }
+
+    pub fn setVisible(self: *ProcessColumns, column: ProcessColumn, visible: bool) void {
+        switch (column) {
+            .pid => self.pid = visible,
+            .ppid => self.ppid = visible,
+            .state => self.state = visible,
+            .cpu => self.cpu = visible,
+            .mem => self.mem = visible,
+            .threads => self.threads = visible,
+            .disk_read => self.disk_read = visible,
+            .disk_write => self.disk_write = visible,
+        }
+    }
+
+    pub fn toggle(self: *ProcessColumns, column: ProcessColumn) bool {
+        const next = !self.isVisible(column);
+        self.setVisible(column, next);
+        return next;
+    }
+
+    pub fn countVisible(self: ProcessColumns) usize {
+        var count: usize = 0;
+        for (process_column_order) |column| {
+            if (self.isVisible(column)) count += 1;
+        }
+        return count;
+    }
+
+    pub fn visibleOrdered(self: ProcessColumns, out: *[process_column_order.len]ProcessColumn) []const ProcessColumn {
+        var count: usize = 0;
+        for (process_column_order) |column| {
+            if (!self.isVisible(column)) continue;
+            out[count] = column;
+            count += 1;
+        }
+        return out[0..count];
+    }
+};
+
 pub const Config = struct {
     theme_name: ThemeName,
     theme: Theme,
@@ -93,6 +223,8 @@ pub const Config = struct {
     default_tree_view: bool,
     show_help_on_startup: bool,
     update_interval_ms: u32,
+    process_columns: ProcessColumns,
+    io_process_columns: ProcessColumns,
     ignore_launch_cmd_substr_buf: [256]u8,
     ignore_launch_cmd_substr_len: u16,
     nerd_fonts: bool,
@@ -107,6 +239,8 @@ pub const Config = struct {
             .default_tree_view = false,
             .show_help_on_startup = false,
             .update_interval_ms = 500,
+            .process_columns = ProcessColumns.defaultsMain(),
+            .io_process_columns = ProcessColumns.defaultsIo(),
             .ignore_launch_cmd_substr_buf = std.mem.zeroes([256]u8),
             .ignore_launch_cmd_substr_len = 0,
             .nerd_fonts = false,
@@ -357,6 +491,22 @@ fn applyEntry(config: *Config, raw_key: []const u8, raw_value: []const u8) !void
         return;
     }
 
+    if (std.mem.eql(u8, key, "process_columns") or
+        std.mem.eql(u8, key, "main_process_columns") or
+        std.mem.eql(u8, key, "process_table_columns"))
+    {
+        config.process_columns = try parseProcessColumns(value, ProcessColumns.defaultsMain());
+        return;
+    }
+
+    if (std.mem.eql(u8, key, "io_process_columns") or
+        std.mem.eql(u8, key, "process_io_columns") or
+        std.mem.eql(u8, key, "io_table_columns"))
+    {
+        config.io_process_columns = try parseProcessColumns(value, ProcessColumns.defaultsIo());
+        return;
+    }
+
     if (std.mem.eql(u8, key, "ignore_launch_cmd_substr") or
         std.mem.eql(u8, key, "ignore_launch_command_substr") or
         std.mem.eql(u8, key, "ignore_process_substr"))
@@ -447,6 +597,41 @@ fn parseBool(value: []const u8) !bool {
         return false;
     }
     return error.InvalidBooleanValue;
+}
+
+fn parseProcessColumns(value: []const u8, defaults: ProcessColumns) !ProcessColumns {
+    if (std.mem.eql(u8, value, "default")) return defaults;
+    if (std.mem.eql(u8, value, "all")) return ProcessColumns.all();
+    if (std.mem.eql(u8, value, "none")) return ProcessColumns.none();
+
+    var columns = ProcessColumns.none();
+    var parts = std.mem.splitScalar(u8, value, ',');
+    while (parts.next()) |part_raw| {
+        const part = std.mem.trim(u8, part_raw, " \t");
+        if (part.len == 0) continue;
+        if (std.mem.eql(u8, part, "name")) continue;
+
+        if (std.mem.eql(u8, part, "disk_io") or std.mem.eql(u8, part, "io")) {
+            columns.disk_read = true;
+            columns.disk_write = true;
+            continue;
+        }
+
+        columns.setVisible(try parseProcessColumn(part), true);
+    }
+
+    return columns;
+}
+
+fn parseProcessColumn(value: []const u8) !ProcessColumn {
+    if (std.mem.eql(u8, value, "parent_pid")) return .ppid;
+    if (std.mem.eql(u8, value, "status")) return .state;
+    if (std.mem.eql(u8, value, "cpu_percent")) return .cpu;
+    if (std.mem.eql(u8, value, "memory") or std.mem.eql(u8, value, "memory_percent") or std.mem.eql(u8, value, "mem_percent")) return .mem;
+    if (std.mem.eql(u8, value, "thread")) return .threads;
+    if (std.mem.eql(u8, value, "read")) return .disk_read;
+    if (std.mem.eql(u8, value, "write")) return .disk_write;
+    return std.meta.stringToEnum(ProcessColumn, value) orelse error.UnknownProcessColumn;
 }
 
 fn parseColor(value: []const u8) !tui.Tui.Color {
