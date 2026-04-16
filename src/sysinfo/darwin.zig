@@ -1230,22 +1230,26 @@ pub fn mapTcpState(state: c_int) common.NetConnState {
     };
 }
 
+var static_net_buf: []u8 = &[_]u8{};
+
 fn readNetTotals() !NetTotals {
     var mib = [_]c_int{ c.CTL_NET, c.PF_ROUTE, 0, 0, c.NET_RT_IFLIST2, 0 };
     var len: usize = 0;
     if (c.sysctl(&mib, mib.len, null, &len, null, 0) != 0) return error.SysctlFailed;
 
-    const buf = try std.heap.page_allocator.alloc(u8, len);
-    defer std.heap.page_allocator.free(buf);
+    if (len > static_net_buf.len) {
+        if (static_net_buf.len > 0) std.heap.page_allocator.free(static_net_buf);
+        static_net_buf = try std.heap.page_allocator.alloc(u8, len);
+    }
 
-    if (c.sysctl(&mib, mib.len, buf.ptr, &len, null, 0) != 0) return error.SysctlFailed;
+    if (c.sysctl(&mib, mib.len, static_net_buf.ptr, &len, null, 0) != 0) return error.SysctlFailed;
 
     var rx: u64 = 0;
     var tx: u64 = 0;
     var offset: usize = 0;
 
     while (offset + @sizeOf(c.struct_if_msghdr2) <= len) {
-        const hdr: *align(1) const c.struct_if_msghdr2 = @ptrCast(buf.ptr + offset);
+        const hdr: *align(1) const c.struct_if_msghdr2 = @ptrCast(static_net_buf.ptr + offset);
         const msg_len: usize = hdr.ifm_msglen;
         if (msg_len == 0) break;
 
@@ -1260,17 +1264,19 @@ fn readNetTotals() !NetTotals {
     return .{ .rx_bytes = rx, .tx_bytes = tx };
 }
 
+var static_argmax_buf: [64 * 1024]u8 = undefined;
+
 fn readLaunchCommand(pid: c_int, dest: []u8) ![]const u8 {
     var argmax: usize = 0;
     var argmax_len: usize = @sizeOf(usize);
-    if (sysctlbyname("kern.argmax", &argmax, &argmax_len, null, 0) == 0 and argmax > @sizeOf(c_int) and argmax <= 64 * 1024) {
+    if (sysctlbyname("kern.argmax", &argmax, &argmax_len, null, 0) == 0 and argmax > @sizeOf(c_int) and argmax <= static_argmax_buf.len) {
         const buf = try std.heap.page_allocator.alloc(u8, argmax);
         defer std.heap.page_allocator.free(buf);
 
         var mib = [_]c_int{ c.CTL_KERN, c.KERN_PROCARGS2, pid };
-        var len = buf.len;
-        if (c.sysctl(&mib, mib.len, buf.ptr, &len, null, 0) == 0) {
-            if (parseKernProcArgs(buf[0..len], dest)) |cmd| return cmd;
+        var len = argmax;
+        if (c.sysctl(&mib, mib.len, &static_argmax_buf, &len, null, 0) == 0) {
+            if (parseKernProcArgs(static_argmax_buf[0..len], dest)) |cmd| return cmd;
         }
     }
 

@@ -407,18 +407,19 @@ fn executeCommand(ctx: *Context) void {
     } else if (std.mem.startsWith(u8, cmd, "killall ")) {
         const target = cmd[8..];
         var matches: usize = 0;
+        // Pre-compute lowercased target once outside the loop
+        var l_target: [64]u8 = undefined;
+        const target_len = @min(target.len, 64);
+        @memcpy(l_target[0..target_len], target[0..target_len]);
+        for (l_target[0..target_len]) |*c| c.* = std.ascii.toLower(c.*);
+        const t_str = l_target[0..target_len];
+
+        var l_name: [64]u8 = undefined;
         for (ctx.cached_procs) |proc| {
-            var l_name: [64]u8 = undefined;
             const name_len = proc.name().len;
             @memcpy(l_name[0..name_len], proc.name());
             const n_str = l_name[0..name_len];
             for (n_str) |*c| c.* = std.ascii.toLower(c.*);
-
-            var l_target: [64]u8 = undefined;
-            const target_len = @min(target.len, 64);
-            @memcpy(l_target[0..target_len], target[0..target_len]);
-            const t_str = l_target[0..target_len];
-            for (t_str) |*c| c.* = std.ascii.toLower(c.*);
 
             if (std.mem.indexOf(u8, n_str, t_str) != null) {
                 _ = posix.kill(@intCast(proc.pid), posix.SIG.TERM) catch {};

@@ -134,6 +134,9 @@ pub const Tui = struct {
     cursor_style: CursorStyle,
     frame_active: bool,
     nerd_fonts: bool,
+    cursor_buf: [32]u8,
+    style_buf: [48]u8,
+    print_buf: [1024]u8,
 
     pub fn shouldEnableSynchronizedOutput(term_program: ?[]const u8) bool {
         if (term_program) |name| {
@@ -356,6 +359,9 @@ pub const Tui = struct {
             .cursor_style = .steady_block,
             .frame_active = false,
             .nerd_fonts = nerd_fonts,
+            .cursor_buf = undefined,
+            .style_buf = undefined,
+            .print_buf = undefined,
         };
     }
 
@@ -388,8 +394,7 @@ pub const Tui = struct {
     }
 
     pub fn moveCursor(self: *Tui, x: u16, y: u16) !void {
-        var buf: [32]u8 = undefined;
-        const seq = try std.fmt.bufPrint(&buf, "\x1b[{d};{d}H", .{ y, x });
+        const seq = try std.fmt.bufPrint(&self.cursor_buf, "\x1b[{d};{d}H", .{ y, x });
         _ = try self.out.writeStreamingAll(self.io, seq);
     }
 
@@ -408,15 +413,13 @@ pub const Tui = struct {
     }
 
     pub fn print(self: *Tui, comptime fmt: []const u8, args: anytype) !void {
-        var buf: [1024]u8 = undefined;
-        var w = self.out.writer(self.io, &buf);
+        var w = self.out.writer(self.io, &self.print_buf);
         try w.interface.print(fmt, args);
         try w.interface.flush();
     }
 
     pub fn setStyle(self: *Tui, style: Style) !void {
-        var buf: [48]u8 = undefined;
-        const seq = try styleSequence(&buf, style);
+        const seq = try styleSequence(&self.style_buf, style);
         try self.out.writeStreamingAll(self.io, seq);
     }
 

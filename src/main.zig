@@ -905,24 +905,27 @@ pub fn main(main_init: std.process.Init) !void {
                                 &filtered_is_lasts,
                             );
                         } else {
+                            var pid_buf2: [32]u8 = undefined;
+                            var l_name: [64]u8 = undefined;
+                            var l_filter: [32]u8 = undefined;
+                            // Pre-compute lowercased filter string once outside the loop
+                            if (filter_len > 0) {
+                                @memcpy(l_filter[0..filter_len], filter_str);
+                                for (l_filter[0..filter_len]) |*ch| ch.* = std.ascii.toLower(ch.*);
+                            }
+                            const f_str = l_filter[0..filter_len];
+
                             for (cached_procs, 0..) |proc, i| {
                                 if (show_zombie_parents and !process_commands.containsParentPid(zombie_parents[0..zombie_summary.parent_count], proc.pid)) {
                                     continue;
                                 }
 
                                 if (filter_len > 0) {
-                                    var pid_buf2: [32]u8 = undefined;
                                     const pid_str = std.fmt.bufPrint(&pid_buf2, "{d}", .{proc.pid}) catch "";
-                                    var l_name: [64]u8 = undefined;
                                     const name_len = proc.name().len;
                                     @memcpy(l_name[0..name_len], proc.name());
                                     const n_str = l_name[0..name_len];
                                     for (n_str) |*ch| ch.* = std.ascii.toLower(ch.*);
-
-                                    var l_filter: [32]u8 = undefined;
-                                    @memcpy(l_filter[0..filter_len], filter_str);
-                                    const f_str = l_filter[0..filter_len];
-                                    for (f_str) |*ch| ch.* = std.ascii.toLower(ch.*);
 
                                     const name_matches = std.mem.indexOf(u8, n_str, f_str) != null;
                                     const pid_matches = std.mem.indexOf(u8, pid_str, filter_str) != null;
@@ -958,6 +961,7 @@ pub fn main(main_init: std.process.Init) !void {
 
                         process_layout = render.planProcessTableLayout(current_process_columns.*, procs_box_width -| 4);
 
+                        var prefix_buf: [256]u8 = undefined;
                         for (0..visible_rows) |row| {
                             const idx = scroll_offset + row;
                             if (idx >= filtered_count) break;
@@ -974,7 +978,6 @@ pub fn main(main_init: std.process.Init) !void {
                                 try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1 + @as(u16, @intCast(row)));
                             }
 
-                            var prefix_buf: [256]u8 = undefined;
                             var prefix_len: usize = 0;
                             var prefix_width: usize = 0;
                             if (tree_view and filter_len == 0 and !show_zombie_parents) {
