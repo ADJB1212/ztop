@@ -1,10 +1,11 @@
 const std = @import("std");
-const ztop = @import("ztop");
-const render = ztop.render;
-const process_commands = ztop.process_commands;
-const text_input = ztop.text_input;
-const Tui = ztop.tui.Tui;
-const SysInfo = ztop.sysinfo.SysInfo;
+const render = @import("render.zig");
+const process_commands = @import("process_commands.zig");
+const tui_mod = @import("tui.zig");
+const Tui = tui_mod.Tui;
+const sysinfo = @import("sysinfo.zig");
+const SysInfo = sysinfo.SysInfo;
+const config = @import("config.zig");
 const posix = std.posix;
 
 pub const Rect = struct {
@@ -50,14 +51,38 @@ pub const MouseRegions = struct {
     }
 };
 
+pub const EditAction = enum {
+    none,
+    submit,
+    cancel,
+};
+
+pub fn applyInputBytes(dest: []u8, len: *usize, input: []const u8) EditAction {
+    for (input) |ch| {
+        switch (ch) {
+            '\r', '\n' => return .submit,
+            '\x1b' => return .cancel,
+            127, '\x08' => {
+                if (len.* > 0) len.* = len.* - 1;
+            },
+            else => if (ch >= 32 and ch <= 126 and len.* < dest.len) {
+                dest[len.*] = ch;
+                len.* += 1;
+            },
+        }
+    }
+
+    return .none;
+}
+
 pub const Context = struct {
     allocator: std.mem.Allocator,
     sys_info: *SysInfo,
     app_tui: *Tui,
-    cached_procs: []ztop.sysinfo.ProcStats,
-    cached_threads: *[]ztop.sysinfo.ThreadStats,
-    cached_connections: *[]ztop.sysinfo.common.NetConnection,
-    sort_by: *ztop.sysinfo.SortBy,
+    cached_procs: []sysinfo.ProcStats,
+    cached_threads: *[]sysinfo.ThreadStats,
+    cached_connections: *[]sysinfo.common.NetConnection,
+    sort_by: *sysinfo.SortBy,
     selected_idx: *usize,
     scroll_offset: *usize,
     show_help: *bool,
@@ -85,8 +110,8 @@ pub const Context = struct {
     quit_flag: *bool,
     input_buf: *[128]u8,
     input_len: *usize,
-    process_columns: *ztop.config.ProcessColumns,
-    io_process_columns: *ztop.config.ProcessColumns,
+    process_columns: *config.ProcessColumns,
+    io_process_columns: *config.ProcessColumns,
 };
 
 pub fn handleAvailableInput(ctx: *Context) !bool {
@@ -140,7 +165,7 @@ pub fn handleAvailableInput(ctx: *Context) !bool {
     }
 
     if (sort_dirty) {
-        ztop.sysinfo.sortProcStats(ctx.cached_procs, ctx.sort_by.*);
+        sysinfo.sortProcStats(ctx.cached_procs, ctx.sort_by.*);
     }
 
     return handled_any or (!ctx.quit_flag.* and write_len > 0);
@@ -161,7 +186,7 @@ fn handleColumnPickerToken(ctx: *Context, token: Tui.InputToken) bool {
 
             if (ch < '1' or ch > '8') return false;
 
-            const column = ztop.config.process_column_order[@as(usize, ch - '1')];
+            const column = config.process_column_order[@as(usize, ch - '1')];
             const visible = activeColumns(ctx).toggle(column);
             render.setStatus(
                 ctx.status_buf,
@@ -190,7 +215,7 @@ fn handleCommandModeToken(ctx: *Context, token: Tui.InputToken) bool {
         },
         .byte => |ch| {
             const input_byte = [1]u8{ch};
-            _ = text_input.applyInputBytes(ctx.cmd_buf, ctx.cmd_len, input_byte[0..]);
+            _ = applyInputBytes(ctx.cmd_buf, ctx.cmd_len, input_byte[0..]);
             return true;
         },
     }
@@ -210,7 +235,7 @@ fn handleFilterModeToken(ctx: *Context, token: Tui.InputToken) bool {
         },
         .byte => |ch| {
             const input_byte = [1]u8{ch};
-            _ = text_input.applyInputBytes(ctx.filter_buf, ctx.filter_len, input_byte[0..]);
+            _ = applyInputBytes(ctx.filter_buf, ctx.filter_len, input_byte[0..]);
             return true;
         },
     }
@@ -376,7 +401,7 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
     }
 }
 
-fn activeColumns(ctx: *Context) *ztop.config.ProcessColumns {
+fn activeColumns(ctx: *Context) *config.ProcessColumns {
     if (ctx.current_tab.* == 2) return ctx.io_process_columns;
     return ctx.process_columns;
 }
@@ -491,7 +516,7 @@ fn signalSelectedProcess(ctx: *Context, signal: posix.SIG) void {
 fn setCurrentTab(
     allocator: std.mem.Allocator,
     sys_info: *SysInfo,
-    cached_connections: *[]ztop.sysinfo.common.NetConnection,
+    cached_connections: *[]sysinfo.common.NetConnection,
     current_tab: *u8,
     selected_idx: *usize,
     scroll_offset: *usize,

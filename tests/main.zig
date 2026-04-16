@@ -7,7 +7,7 @@ test {
     _ = @import("history_test.zig");
     _ = @import("process_commands_test.zig");
     _ = @import("render_test.zig");
-    _ = @import("text_input_test.zig");
+    _ = @import("input_handler_test.zig");
     _ = @import("tui_test.zig");
     _ = @import("linux_test.zig");
     _ = @import("sysinfo_test.zig");

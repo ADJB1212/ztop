@@ -70,5 +70,12 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
 
     const run_tests = b.addRunArtifact(tests);
-    test_step.dependOn(&run_tests.step);
+
+    const print_success = b.addSystemCommand(&.{
+        "echo",
+        "\x1b[32m✔ All tests passed!\x1b[0m",
+    });
+    print_success.step.dependOn(&run_tests.step);
+
+    test_step.dependOn(&print_success.step);
 }
