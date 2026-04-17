@@ -9,6 +9,7 @@ test {
     _ = @import("render_test.zig");
     _ = @import("input_handler_test.zig");
     _ = @import("tui_test.zig");
+    _ = @import("version_test.zig");
     _ = @import("linux_test.zig");
     _ = @import("sysinfo_test.zig");
     if (builtin.target.os.tag == .macos) _ = @import("darwin_test.zig");

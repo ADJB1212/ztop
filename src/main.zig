@@ -1,5 +1,7 @@
 const std = @import("std");
 const ztop = @import("ztop");
+const build_options = @import("build_options");
+const cli = ztop.cli;
 const render = ztop.render;
 const input_handler = ztop.input_handler;
 const process_commands = ztop.process_commands;
@@ -189,6 +191,15 @@ fn renderProcessRow(
 pub fn main(main_init: std.process.Init) !void {
     const allocator = main_init.gpa;
     const io = main_init.io;
+    const args = try main_init.minimal.args.toSlice(main_init.arena.allocator());
+
+    if (cli.detectAction(args) == .print_version) {
+        var stdout_buffer: [64]u8 = undefined;
+        var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buffer);
+        try stdout_writer.interface.print("{s}\n", .{build_options.version});
+        try stdout_writer.interface.flush();
+        return;
+    }
 
     const app_config = ztop.config.load(allocator, io, main_init.environ_map) catch |err| {
         std.debug.print("ztop: failed to load config: {s}\n", .{@errorName(err)});

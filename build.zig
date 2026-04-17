@@ -1,10 +1,15 @@
 const std = @import("std");
+const manifest = @import("build.zig.zon");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
 
     const optimize = b.standardOptimizeOption(.{});
     const sdk_root = b.option([]const u8, "sdk-root", "Path to macOS SDK root (for cross-compilation)");
+    const version = std.SemanticVersion.parse(manifest.version) catch @panic("invalid version in build.zig.zon");
+
+    const build_options = b.addOptions();
+    build_options.addOption([]const u8, "version", manifest.version);
 
     const mod = b.addModule("ztop", .{
         .root_source_file = b.path("src/root.zig"),
@@ -14,6 +19,7 @@ pub fn build(b: *std.Build) void {
 
     const exe = b.addExecutable(.{
         .name = "ztop",
+        .version = version,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
 
@@ -25,6 +31,7 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+    exe.root_module.addOptions("build_options", build_options);
 
     const tests_module = b.createModule(.{
         .root_source_file = b.path("tests/main.zig"),
@@ -34,6 +41,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "ztop", .module = mod },
         },
     });
+    tests_module.addOptions("build_options", build_options);
 
     const tests = b.addTest(.{
         .root_module = tests_module,
