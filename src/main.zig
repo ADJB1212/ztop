@@ -297,7 +297,6 @@ pub fn main(main_init: std.process.Init) !void {
     net_tx_history.append(net.tx_bytes_ps);
 
     var last_fetch_time = nowMs(io);
-    const fetch_interval_ms: i64 = @intCast(app_config.update_interval_ms);
 
     var force_redraw = true;
     var current_tab: u8 = app_config.default_tab;
@@ -319,6 +318,7 @@ pub fn main(main_init: std.process.Init) !void {
 
         const current_time = nowMs(io);
         const elapsed = current_time - last_fetch_time;
+        const fetch_interval_ms: i64 = @intCast(app_config.effectiveIntervalMs(current_tab));
 
         if (elapsed >= fetch_interval_ms) {
             cpu = sys_info.getCpuStats();

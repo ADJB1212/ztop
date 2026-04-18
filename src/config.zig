@@ -229,6 +229,7 @@ pub const Config = struct {
     default_tree_view: bool,
     show_help_on_startup: bool,
     update_interval_ms: u32,
+    tab_interval_ms: [4]?u32,
     process_columns: ProcessColumns,
     io_process_columns: ProcessColumns,
     ignore_launch_cmd_substr_buf: [256]u8,
@@ -245,12 +246,20 @@ pub const Config = struct {
             .default_tree_view = false,
             .show_help_on_startup = false,
             .update_interval_ms = 500,
+            .tab_interval_ms = .{ null, null, null, null },
             .process_columns = ProcessColumns.defaultsMain(),
             .io_process_columns = ProcessColumns.defaultsIo(),
             .ignore_launch_cmd_substr_buf = std.mem.zeroes([256]u8),
             .ignore_launch_cmd_substr_len = 0,
             .nerd_fonts = false,
         };
+    }
+
+    pub fn effectiveIntervalMs(self: *const Config, tab: u8) u32 {
+        if (tab >= 1 and tab <= 4) {
+            if (self.tab_interval_ms[tab - 1]) |ms| return ms;
+        }
+        return self.update_interval_ms;
     }
 
     pub fn ignoredLaunchCommandSubstr(self: *const Config) []const u8 {
@@ -530,6 +539,34 @@ fn applyEntry(config: *Config, raw_key: []const u8, raw_value: []const u8) !void
         const interval_ms = try std.fmt.parseInt(u32, raw_value, 10);
         if (interval_ms < 100 or interval_ms > 10_000) return error.InvalidUpdateInterval;
         config.update_interval_ms = interval_ms;
+        return;
+    }
+
+    if (std.mem.eql(u8, key, "tab1_interval_ms") or std.mem.eql(u8, key, "main_interval_ms")) {
+        const ms = try std.fmt.parseInt(u32, raw_value, 10);
+        if (ms < 100 or ms > 10_000) return error.InvalidUpdateInterval;
+        config.tab_interval_ms[0] = ms;
+        return;
+    }
+
+    if (std.mem.eql(u8, key, "tab2_interval_ms") or std.mem.eql(u8, key, "io_interval_ms")) {
+        const ms = try std.fmt.parseInt(u32, raw_value, 10);
+        if (ms < 100 or ms > 10_000) return error.InvalidUpdateInterval;
+        config.tab_interval_ms[1] = ms;
+        return;
+    }
+
+    if (std.mem.eql(u8, key, "tab3_interval_ms") or std.mem.eql(u8, key, "sensors_interval_ms")) {
+        const ms = try std.fmt.parseInt(u32, raw_value, 10);
+        if (ms < 100 or ms > 10_000) return error.InvalidUpdateInterval;
+        config.tab_interval_ms[2] = ms;
+        return;
+    }
+
+    if (std.mem.eql(u8, key, "tab4_interval_ms") or std.mem.eql(u8, key, "network_interval_ms")) {
+        const ms = try std.fmt.parseInt(u32, raw_value, 10);
+        if (ms < 100 or ms > 10_000) return error.InvalidUpdateInterval;
+        config.tab_interval_ms[3] = ms;
         return;
     }
 
