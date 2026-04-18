@@ -1,7 +1,7 @@
 .{
     .name = .ztop,
 
-    .version = "0.0.1",
+    .version = "0.0.2",
 
     .fingerprint = 0xc45e593cecee3572,
 
