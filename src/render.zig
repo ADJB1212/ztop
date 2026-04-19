@@ -176,7 +176,8 @@ fn historyGraphRows(box_height: u16) u16 {
     return 0;
 }
 
-pub fn suggestedHistoryGraphRows(box_height: u16) u16 {
+pub fn suggestedHistoryGraphRows(box_height: u16, disable_history: bool) u16 {
+    if (disable_history) return 0;
     return historyGraphRows(box_height);
 }
 
@@ -403,6 +404,7 @@ pub fn renderDualRateBox(
     title_color: Tui.Color,
     primary: RateSeries,
     secondary: RateSeries,
+    disable_history: bool,
 ) !void {
     try app_tui.drawBoxStyled(
         box_x,
@@ -431,7 +433,7 @@ pub fn renderDualRateBox(
 
     try renderRateMetricRow(app_tui, theme, inner_x, inner_y + 1, inner_width, secondary, peak_rate);
 
-    const graph_rows = inner_height -| 2;
+    const graph_rows = if (disable_history) 0 else inner_height -| 2;
     if (graph_rows == 0) return;
 
     if (graph_rows == 1) {
@@ -782,6 +784,7 @@ pub fn renderCpuTopologyBox(
     cpu: sysinfo.CpuStats,
     topology: CpuTopology,
     history: *const MetricHistory,
+    disable_history: bool,
 ) !void {
     const title = if (topology.logical_cores.len > 0) "CPU Topology Map" else "CPU";
     try app_tui.drawBoxStyled(
@@ -808,7 +811,7 @@ pub fn renderCpuTopologyBox(
     const content_width: u16 = box_width -| 4;
     const base_body_y = box_y + 2;
     const base_body_height: u16 = box_height -| 3;
-    const graph_height = if (content_width >= 10 and history.len() > 1) historyGraphRows(box_height) else 0;
+    const graph_height = if (content_width >= 10 and history.len() > 1 and !disable_history) historyGraphRows(box_height) else 0;
     const topology_height: u16 = base_body_height -| graph_height;
 
     if (topology.logical_cores.len > 0 and topology.has_smt and content_width >= 48) {

@@ -235,6 +235,7 @@ pub const Config = struct {
     ignore_launch_cmd_substr_buf: [256]u8,
     ignore_launch_cmd_substr_len: u16,
     nerd_fonts: bool,
+    disable_history: bool,
 
     pub fn defaults() Config {
         return .{
@@ -252,6 +253,7 @@ pub const Config = struct {
             .ignore_launch_cmd_substr_buf = std.mem.zeroes([256]u8),
             .ignore_launch_cmd_substr_len = 0,
             .nerd_fonts = false,
+            .disable_history = false,
         };
     }
 
@@ -608,6 +610,11 @@ fn applyEntry(config: *Config, raw_key: []const u8, raw_value: []const u8) !void
 
     if (std.mem.eql(u8, key, "nerd_fonts") or std.mem.eql(u8, key, "nerd_font")) {
         config.nerd_fonts = try parseBool(value);
+        return;
+    }
+
+    if (std.mem.eql(u8, key, "disable_history")) {
+        config.disable_history = try parseBool(value);
         return;
     }
 

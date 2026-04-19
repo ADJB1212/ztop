@@ -12,6 +12,7 @@ test "config parse applies theme defaults and overrides" {
         \\update_interval_ms = 750
         \\color.brand = bright_magenta
         \\color.selection_bg = magenta
+        \\disable_history = true
     );
 
     try std.testing.expectEqual(config.ThemeName.nord, parsed.theme_name);
@@ -20,6 +21,7 @@ test "config parse applies theme defaults and overrides" {
     try std.testing.expectEqual(@as(u8, 3), parsed.default_tab);
     try std.testing.expectEqual(true, parsed.default_tree_view);
     try std.testing.expectEqual(true, parsed.show_help_on_startup);
+    try std.testing.expectEqual(true, parsed.disable_history);
     try std.testing.expectEqual(tui.Tui.Color.bright_magenta, parsed.theme.brand);
     try std.testing.expectEqual(tui.Tui.Color.magenta, parsed.theme.selection_bg);
     try std.testing.expectEqual(tui.Tui.Color{ .indexed = 67 }, parsed.theme.memory_title);

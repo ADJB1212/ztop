@@ -440,7 +440,7 @@ pub fn main(main_init: std.process.Init) !void {
                 var process_layout: render.ProcessTableLayout = .{};
 
                 if (current_tab == 1) {
-                    try render.renderCpuTopologyBox(&app_tui, theme, cpu_box_x, cpu_box_y, cpu_box_width, cpu_box_height, cpu, cpu_topology, &cpu_history);
+                    try render.renderCpuTopologyBox(&app_tui, theme, cpu_box_x, cpu_box_y, cpu_box_width, cpu_box_height, cpu, cpu_topology, &cpu_history, app_config.disable_history);
 
                     // Memory Box
                     try app_tui.drawBoxStyled(
@@ -470,7 +470,7 @@ pub fn main(main_init: std.process.Init) !void {
 
                         const stats_rows: u16 = if (mem.swap_total > 0 and mem_box_height >= 4) 3 else 2;
                         const graph_height = @min(
-                            render.suggestedHistoryGraphRows(mem_box_height),
+                            render.suggestedHistoryGraphRows(mem_box_height, app_config.disable_history),
                             mem_box_height -| (stats_rows + 2),
                         );
                         if (graph_height > 0 and mem_box_width > 10 and mem_history.len() > 1) {
@@ -510,6 +510,7 @@ pub fn main(main_init: std.process.Init) !void {
                             .history = &disk_write_history,
                             .color = theme.io_rate,
                         },
+                        app_config.disable_history,
                     );
 
                     try render.renderDualRateBox(
@@ -537,6 +538,7 @@ pub fn main(main_init: std.process.Init) !void {
                             .history = &net_tx_history,
                             .color = theme.io_rate,
                         },
+                        app_config.disable_history,
                     );
                 } else if (current_tab == 3) {
                     try app_tui.drawBoxStyled(
