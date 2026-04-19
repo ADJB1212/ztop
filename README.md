@@ -78,12 +78,13 @@ ztop [--version] [--help]
 | `1`, `2`, `3`, `4`      | Switch to `Main`, `I/O`, `Sensors`, `Network`                 |
 | `j` / `k` or arrow keys | Move through the process list                                 |
 | `Enter`                 | Drill into threads of the selected process                    |
-| `Esc`                   | Return from thread view; clear filter, status, or zombie view |
+| `Esc`                   | Return from thread view; clear follow, filter, status, or zombie view |
 | `c`, `m`, `p`, `n`      | Sort by CPU, memory, PID, or name                             |
 | `C`                     | Toggle process-table columns for the current view             |
 | `v`                     | Toggle tree view (process hierarchy)                          |
 | `/`                     | Filter processes by name or PID                               |
 | `:`                     | Open command mode                                             |
+| `l`                     | Follow selected process (lock view to it as it moves)         |
 | `t`                     | Send `SIGTERM` to the selected process                        |
 | `K`                     | Send `SIGKILL` to the selected process                        |
 | `?`                     | Open help overlay                                             |

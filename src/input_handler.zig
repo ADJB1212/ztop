@@ -103,6 +103,8 @@ pub const Context = struct {
     thread_view_pid: *u32,
     thread_view_name_buf: *[64]u8,
     thread_view_name_len: *u8,
+    is_following: *bool,
+    follow_pid: *u32,
     status_buf: *[160]u8,
     status_len: *usize,
     current_tab: *u8,
@@ -396,6 +398,18 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
                 signalSelectedProcess(ctx, posix.SIG.KILL);
                 return true;
             },
+            'l' => {
+                if (!ctx.thread_view.* and ctx.filtered_count.* > 0) {
+                    if (ctx.is_following.*) {
+                        ctx.is_following.* = false;
+                        ctx.follow_pid.* = 0;
+                    } else if (ctx.selected_idx.* < ctx.filtered_count.*) {
+                        ctx.follow_pid.* = ctx.cached_procs[ctx.filtered_indices[ctx.selected_idx.*]].pid;
+                        ctx.is_following.* = true;
+                    }
+                }
+                return true;
+            },
             else => return false,
         },
     }
@@ -498,6 +512,9 @@ fn clearCurrentView(ctx: *Context) void {
         }
         ctx.selected_idx.* = 0;
         ctx.scroll_offset.* = 0;
+    } else if (ctx.is_following.*) {
+        ctx.is_following.* = false;
+        ctx.follow_pid.* = 0;
     } else {
         ctx.filter_len.* = 0;
         ctx.status_len.* = 0;

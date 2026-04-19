@@ -255,6 +255,8 @@ pub fn main(main_init: std.process.Init) !void {
 
     var thread_view: bool = false;
     var thread_view_pid: u32 = 0;
+    var is_following: bool = false;
+    var follow_pid: u32 = 0;
     var thread_view_name_buf: [64]u8 = std.mem.zeroes([64]u8);
     var thread_view_name_len: u8 = 0;
     var cached_threads: []ztop.sysinfo.common.ThreadStats = &.{};
@@ -887,6 +889,8 @@ pub fn main(main_init: std.process.Init) !void {
                                 "Zombie Parents ({d} parents / {d} zombies)",
                                 .{ zombie_summary.parent_count, zombie_summary.zombie_count },
                             ) catch "Zombie Parents"
+                        else if (is_following)
+                            std.fmt.bufPrint(&title_buf, "Processes (Sort: {s} | Cols: {d}) [FOLLOW]", .{ sort_name, visible_column_count }) catch "Processes [FOLLOW]"
                         else
                             std.fmt.bufPrint(&title_buf, "Processes (Sort: {s} | Cols: {d})", .{ sort_name, visible_column_count }) catch "Processes";
 
@@ -944,6 +948,22 @@ pub fn main(main_init: std.process.Init) !void {
                                 filtered_is_lasts[filtered_count] = 0;
                                 filtered_count += 1;
                                 if (filtered_count >= filtered_indices.len) break;
+                            }
+                        }
+
+                        if (is_following and follow_pid != 0) {
+                            var found = false;
+                            for (0..filtered_count) |fi| {
+                                if (cached_procs[filtered_indices[fi]].pid == follow_pid) {
+                                    selected_idx = fi;
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if (!found) {
+                                is_following = false;
+                                follow_pid = 0;
+                                render.setStatus(&status_buf, &status_len, "Followed process no longer visible", .{});
                             }
                         }
 
@@ -1027,7 +1047,7 @@ pub fn main(main_init: std.process.Init) !void {
                 // Help Overlay
                 if (show_help) {
                     const help_width = 48;
-                    const help_height = 16;
+                    const help_height = 17;
                     const h_x = if (size.width > help_width) (size.width - help_width) / 2 else 1;
                     const h_y = if (size.height > help_height) (size.height - help_height) / 2 else 1;
 
@@ -1075,18 +1095,22 @@ pub fn main(main_init: std.process.Init) !void {
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Send SIGKILL to selected", .{});
 
                     try app_tui.moveCursor(h_x + 2, h_y + 11);
+                    try app_tui.printStyled(.{ .fg = theme.text }, "l:            ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Follow selected process", .{});
+
+                    try app_tui.moveCursor(h_x + 2, h_y + 12);
                     try app_tui.printStyled(.{ .fg = theme.text }, "q:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Quit", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 12);
+                    try app_tui.moveCursor(h_x + 2, h_y + 13);
                     try app_tui.printStyled(.{ .fg = theme.text }, ":             ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Command mode (show zombie)", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 13);
+                    try app_tui.moveCursor(h_x + 2, h_y + 14);
                     try app_tui.printStyled(.{ .fg = theme.text }, "Repo: ", .{});
                     try app_tui.writeStyledHyperlink(.{ .fg = theme.tab_active, .underline = true }, repo_url, repo_label);
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 14);
+                    try app_tui.moveCursor(h_x + 2, h_y + 15);
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Press any key to close...", .{});
                 }
 
@@ -1207,6 +1231,8 @@ pub fn main(main_init: std.process.Init) !void {
                 .thread_view_pid = &thread_view_pid,
                 .thread_view_name_buf = &thread_view_name_buf,
                 .thread_view_name_len = &thread_view_name_len,
+                .is_following = &is_following,
+                .follow_pid = &follow_pid,
                 .status_buf = &status_buf,
                 .status_len = &status_len,
                 .current_tab = &current_tab,
