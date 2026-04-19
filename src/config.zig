@@ -267,28 +267,38 @@ pub const Config = struct {
     }
 };
 
-pub fn load(allocator: std.mem.Allocator, io: std.Io, environ_map: *const std.process.Environ.Map) !Config {
+pub fn load(allocator: std.mem.Allocator, io: std.Io, environ_map: *const std.process.Environ.Map) Config {
     var config = Config.defaults();
-    const config_path = try defaultConfigPath(allocator, environ_map);
+    const config_path = defaultConfigPath(allocator, environ_map) catch return config;
     defer if (config_path) |path| allocator.free(path);
 
     const path = config_path orelse return config;
     parseFile(io, allocator, path, &config) catch |err| switch (err) {
-        error.FileNotFound => return config,
-        else => return err,
+        error.FileNotFound => {},
+        else => {
+            std.debug.print("ztop: warning: failed to read config file {s}: {s}\n", .{ path, @errorName(err) });
+        },
     };
     return config;
 }
 
-pub fn loadPath(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !Config {
+pub fn loadPath(allocator: std.mem.Allocator, io: std.Io, path: []const u8) Config {
     var config = Config.defaults();
-    try parseFile(io, allocator, path, &config);
+    parseFile(io, allocator, path, &config) catch |err| {
+        std.debug.print("ztop: warning: failed to read config file {s}: {s}\n", .{ path, @errorName(err) });
+    };
     return config;
 }
 
-pub fn parse(text: []const u8) !Config {
+pub fn parse(text: []const u8) Config {
     var config = Config.defaults();
-    try parseInto(text, &config);
+    parseInto(null, text, &config, null);
+    return config;
+}
+
+pub fn parseWithErrors(allocator: std.mem.Allocator, text: []const u8, errors: *std.ArrayList(DiagnosticError)) Config {
+    var config = Config.defaults();
+    parseInto(allocator, text, &config, errors);
     return config;
 }
 
@@ -489,25 +499,51 @@ pub fn themePreset(name: ThemeName) Theme {
     };
 }
 
+pub const DiagnosticError = struct {
+    line: usize,
+    err: anyerror,
+};
+
 fn parseFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, config: *Config) !void {
     const contents = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(64 * 1024));
     defer allocator.free(contents);
-    try parseInto(contents, config);
+    parseInto(null, contents, config, null);
 }
 
-fn parseInto(text: []const u8, config: *Config) !void {
+fn parseInto(allocator: ?std.mem.Allocator, text: []const u8, config: *Config, errors: ?*std.ArrayList(DiagnosticError)) void {
     var lines = std.mem.splitScalar(u8, text, '\n');
-    while (lines.next()) |raw_line| {
+    var line_num: usize = 1;
+    while (lines.next()) |raw_line| : (line_num += 1) {
         const line = std.mem.trim(u8, raw_line, " \t\r");
         if (line.len == 0) continue;
         if (line[0] == '#' or line[0] == ';') continue;
 
-        const equals_idx = std.mem.indexOfScalar(u8, line, '=') orelse return error.InvalidConfigLine;
+        const equals_idx = std.mem.indexOfScalar(u8, line, '=') orelse {
+            if (errors) |errs| {
+                if (allocator) |alloc| errs.append(alloc, .{ .line = line_num, .err = error.MissingEquals }) catch {};
+            } else {
+                std.debug.print("ztop: warning: invalid config at line {d}: missing '='\n", .{line_num});
+            }
+            continue;
+        };
         const raw_key = std.mem.trim(u8, line[0..equals_idx], " \t");
         const raw_value = std.mem.trim(u8, line[equals_idx + 1 ..], " \t");
-        if (raw_key.len == 0 or raw_value.len == 0) return error.InvalidConfigLine;
+        if (raw_key.len == 0 or raw_value.len == 0) {
+            if (errors) |errs| {
+                if (allocator) |alloc| errs.append(alloc, .{ .line = line_num, .err = error.MissingKeyOrValue }) catch {};
+            } else {
+                std.debug.print("ztop: warning: invalid config at line {d}: missing key or value\n", .{line_num});
+            }
+            continue;
+        }
 
-        try applyEntry(config, raw_key, stripQuotes(raw_value));
+        applyEntry(config, raw_key, stripQuotes(raw_value)) catch |err| {
+            if (errors) |errs| {
+                if (allocator) |alloc| errs.append(alloc, .{ .line = line_num, .err = err }) catch {};
+            } else {
+                std.debug.print("ztop: warning: failed to parse config at line {d}: {s}\n", .{ line_num, @errorName(err) });
+            }
+        };
     }
 }
 

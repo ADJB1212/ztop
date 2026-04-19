@@ -201,10 +201,7 @@ pub fn main(main_init: std.process.Init) !void {
         return;
     }
 
-    const app_config = ztop.config.load(allocator, io, main_init.environ_map) catch |err| {
-        std.debug.print("ztop: failed to load config: {s}\n", .{@errorName(err)});
-        return err;
-    };
+    const app_config = ztop.config.load(allocator, io, main_init.environ_map);
     const theme = app_config.theme;
 
     var act: posix.Sigaction = .{

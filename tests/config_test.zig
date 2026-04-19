@@ -3,7 +3,7 @@ const config = @import("ztop").config;
 const tui = @import("ztop").tui;
 
 test "config parse applies theme defaults and overrides" {
-    const parsed = try config.parse(
+    const parsed = config.parse(
         \\theme = nord
         \\default_sort = mem
         \\default_tab = sensors
@@ -26,7 +26,7 @@ test "config parse applies theme defaults and overrides" {
 }
 
 test "config parse supports aliases and quoted values" {
-    const parsed = try config.parse(
+    const parsed = config.parse(
         \\theme = "catppuccin-mocha"
         \\sort = process-name
         \\startup_tab = "network"
@@ -45,7 +45,7 @@ test "config parse supports aliases and quoted values" {
 }
 
 test "config parse supports 256 color themes and numeric overrides" {
-    const parsed = try config.parse(
+    const parsed = config.parse(
         \\theme = "default-light"
         \\color.command_prompt = 33
     );
@@ -54,14 +54,14 @@ test "config parse supports 256 color themes and numeric overrides" {
     try std.testing.expectEqual(tui.Tui.Color{ .indexed = 25 }, parsed.theme.brand);
     try std.testing.expectEqual(tui.Tui.Color{ .indexed = 33 }, parsed.theme.command_prompt);
 
-    const palenight = try config.parse("theme = palenight\n");
+    const palenight = config.parse("theme = palenight\n");
     try std.testing.expectEqual(config.ThemeName.palenight, palenight.theme_name);
     try std.testing.expectEqual(tui.Tui.Color{ .indexed = 141 }, palenight.theme.brand);
     try std.testing.expectEqual(tui.Tui.Color{ .indexed = 235 }, palenight.theme.selection_bg);
 }
 
 test "config parse supports launch command ignore substring list" {
-    const parsed = try config.parse(
+    const parsed = config.parse(
         \\ignore_launch_cmd_substr = "Google Chrome, Chrome Helper, /Applications/Slack.app"
     );
 
@@ -69,7 +69,7 @@ test "config parse supports launch command ignore substring list" {
 }
 
 test "config parse supports process column selection" {
-    const parsed = try config.parse(
+    const parsed = config.parse(
         \\process_columns = pid, ppid, state, cpu, name
         \\io_process_columns = disk_io, pid, mem
     );
@@ -89,7 +89,7 @@ test "config parse supports process column selection" {
 }
 
 test "config parse supports process column presets" {
-    const parsed = try config.parse(
+    const parsed = config.parse(
         \\process_columns = none
         \\io_process_columns = all
     );
@@ -99,13 +99,51 @@ test "config parse supports process column presets" {
 }
 
 test "config parse rejects invalid options" {
-    try std.testing.expectError(error.UnknownConfigKey, config.parse("not_real = value\n"));
-    try std.testing.expectError(error.UnknownTheme, config.parse("theme = vaporwave\n"));
-    try std.testing.expectError(error.UnknownTab, config.parse("default_tab = logs\n"));
-    try std.testing.expectError(error.InvalidUpdateInterval, config.parse("update_interval_ms = 50\n"));
-    try std.testing.expectError(error.InvalidBooleanValue, config.parse("default_tree_view = maybe\n"));
-    try std.testing.expectError(error.UnknownColorKey, config.parse("color.nope = blue\n"));
-    try std.testing.expectError(error.UnknownProcessColumn, config.parse("process_columns = nope\n"));
+    const default_cfg = config.Config.defaults();
+    var errors: std.ArrayList(config.DiagnosticError) = .empty;
+    defer errors.deinit(std.testing.allocator);
+
+    const parsed1 = config.parseWithErrors(std.testing.allocator, "not_real = value\n", &errors);
+    try std.testing.expectEqual(default_cfg.theme_name, parsed1.theme_name);
+    try std.testing.expectEqual(@as(usize, 1), errors.items.len);
+    try std.testing.expectEqual(error.UnknownConfigKey, errors.items[0].err);
+    errors.clearRetainingCapacity();
+
+    const parsed2 = config.parseWithErrors(std.testing.allocator, "theme = vaporwave\n", &errors);
+    try std.testing.expectEqual(default_cfg.theme_name, parsed2.theme_name);
+    try std.testing.expectEqual(@as(usize, 1), errors.items.len);
+    try std.testing.expectEqual(error.UnknownTheme, errors.items[0].err);
+    errors.clearRetainingCapacity();
+
+    const parsed3 = config.parseWithErrors(std.testing.allocator, "default_tab = logs\n", &errors);
+    try std.testing.expectEqual(default_cfg.default_tab, parsed3.default_tab);
+    try std.testing.expectEqual(@as(usize, 1), errors.items.len);
+    try std.testing.expectEqual(error.UnknownTab, errors.items[0].err);
+    errors.clearRetainingCapacity();
+
+    const parsed4 = config.parseWithErrors(std.testing.allocator, "update_interval_ms = 50\n", &errors);
+    try std.testing.expectEqual(default_cfg.update_interval_ms, parsed4.update_interval_ms);
+    try std.testing.expectEqual(@as(usize, 1), errors.items.len);
+    try std.testing.expectEqual(error.InvalidUpdateInterval, errors.items[0].err);
+    errors.clearRetainingCapacity();
+
+    const parsed5 = config.parseWithErrors(std.testing.allocator, "default_tree_view = maybe\n", &errors);
+    try std.testing.expectEqual(default_cfg.default_tree_view, parsed5.default_tree_view);
+    try std.testing.expectEqual(@as(usize, 1), errors.items.len);
+    try std.testing.expectEqual(error.InvalidBooleanValue, errors.items[0].err);
+    errors.clearRetainingCapacity();
+
+    const parsed6 = config.parseWithErrors(std.testing.allocator, "color.nope = blue\n", &errors);
+    try std.testing.expectEqual(default_cfg.theme.brand, parsed6.theme.brand);
+    try std.testing.expectEqual(@as(usize, 1), errors.items.len);
+    try std.testing.expectEqual(error.UnknownColorKey, errors.items[0].err);
+    errors.clearRetainingCapacity();
+
+    const parsed7 = config.parseWithErrors(std.testing.allocator, "process_columns = nope\n", &errors);
+    try std.testing.expectEqual(default_cfg.process_columns.countVisible(), parsed7.process_columns.countVisible());
+    try std.testing.expectEqual(@as(usize, 1), errors.items.len);
+    try std.testing.expectEqual(error.UnknownProcessColumn, errors.items[0].err);
+    errors.clearRetainingCapacity();
 }
 
 test "config file loader reads explicit path" {
@@ -117,7 +155,7 @@ test "config file loader reads explicit path" {
     const config_path = try absoluteTmpPath(std.testing.allocator, &tmp, "ztop.cfg");
     defer std.testing.allocator.free(config_path);
 
-    const loaded = try config.loadPath(std.testing.allocator, std.testing.io, config_path);
+    const loaded = config.loadPath(std.testing.allocator, std.testing.io, config_path);
 
     try std.testing.expectEqual(config.ThemeName.solarized, loaded.theme_name);
     try std.testing.expectEqual(tui.Tui.Color.bright_yellow, loaded.theme.command_prompt);
@@ -140,7 +178,7 @@ test "config loader resolves XDG_CONFIG_HOME from environ map" {
     defer environ_map.deinit();
     try environ_map.put("XDG_CONFIG_HOME", xdg_config_home);
 
-    const loaded = try config.load(std.testing.allocator, std.testing.io, &environ_map);
+    const loaded = config.load(std.testing.allocator, std.testing.io, &environ_map);
 
     try std.testing.expectEqual(config.ThemeName.gruvbox, loaded.theme_name);
     try std.testing.expectEqual(true, loaded.nerd_fonts);
@@ -163,7 +201,7 @@ test "config loader falls back to HOME from environ map" {
     defer environ_map.deinit();
     try environ_map.put("HOME", home);
 
-    const loaded = try config.load(std.testing.allocator, std.testing.io, &environ_map);
+    const loaded = config.load(std.testing.allocator, std.testing.io, &environ_map);
 
     try std.testing.expectEqual(config.ThemeName.catppuccin, loaded.theme_name);
     try std.testing.expectEqual(true, loaded.show_help_on_startup);
