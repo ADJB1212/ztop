@@ -60,6 +60,11 @@ test "config parse supports 256 color themes and numeric overrides" {
     try std.testing.expectEqual(config.ThemeName.palenight, palenight.theme_name);
     try std.testing.expectEqual(tui.Tui.Color{ .indexed = 141 }, palenight.theme.brand);
     try std.testing.expectEqual(tui.Tui.Color{ .indexed = 235 }, palenight.theme.selection_bg);
+
+    const colorblind = config.parse("theme = colorblind\n");
+    try std.testing.expectEqual(config.ThemeName.colorblind, colorblind.theme_name);
+    try std.testing.expectEqual(tui.Tui.Color{ .indexed = 33 }, colorblind.theme.brand);
+    try std.testing.expectEqual(tui.Tui.Color{ .indexed = 202 }, colorblind.theme.usage_critical);
 }
 
 test "config parse supports launch command ignore substring list" {

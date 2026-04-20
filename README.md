@@ -26,7 +26,7 @@ Built for people who want a focused dashboard in the terminal: quick enough to k
 - Built-in process actions: `SIGTERM`, `SIGKILL`, `:killall`, `:show zombie`, `:search`
 - Responsive layout for narrow terminals
 - Configurable refresh interval, default sort, theme, and per-color overrides
-- Themes: `default`, `default_dark`, `default_light`, `gruvbox`, `nord`, `solarized`, `catppuccin`, `palenight`
+- Themes: `default`, `default_dark`, `default_light`, `gruvbox`, `nord`, `solarized`, `catppuccin`, `palenight`, `colorblind`
 
 ## Installation
 
@@ -123,7 +123,7 @@ color.tab_active = 141
 
 | Key                    | Values                                                                                                                           |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `theme`                | `default`, `default_dark`, `default_light`, `gruvbox`, `nord`, `solarized`, `catppuccin`, `palenight`                            |
+| `theme`                | `default`, `default_dark`, `default_light`, `gruvbox`, `nord`, `solarized`, `catppuccin`, `palenight`, `colorblind`                            |
 | `default_sort`         | `cpu`, `mem`, `pid`, `name`                                                                                                      |
 | `default_tab`          | `main`, `io`, `sensors`, `network` (or `1`–`4`)                                                                                  |
 | `default_tree_view`    | `true` / `false` (also `yes`/`no`, `1`/`0`)                                                                                      |

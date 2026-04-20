@@ -11,6 +11,7 @@ pub const ThemeName = enum {
     solarized,
     catppuccin,
     palenight,
+    colorblind,
 
     pub fn label(self: ThemeName) []const u8 {
         return switch (self) {
@@ -22,6 +23,7 @@ pub const ThemeName = enum {
             .solarized => "Solarized",
             .catppuccin => "Catppuccin",
             .palenight => "Palenight",
+            .colorblind => "Colorblind",
         };
     }
 };
@@ -498,6 +500,33 @@ pub fn themePreset(name: ThemeName) Theme {
             .filter_prompt = c(186),
             .command_prompt = c(80),
         },
+        .colorblind => .{
+            .brand = c(33),
+            .text = c(253),
+            .muted = c(244),
+            .border = c(240),
+            .tab_active = c(33),
+            .cpu_title = c(33),
+            .memory_title = c(226),
+            .disk_title = c(111),
+            .network_title = c(36),
+            .sensor_title = c(202),
+            .battery_title = c(36),
+            .process_title = c(169),
+            .selection_bg = c(238),
+            .selection_fg = c(255),
+            .usage_idle = c(33),
+            .usage_good = c(36),
+            .usage_warn = c(226),
+            .usage_critical = c(202),
+            .memory_low = c(27),
+            .memory_mid = c(169),
+            .memory_warn = c(226),
+            .memory_critical = c(202),
+            .io_rate = c(254),
+            .filter_prompt = c(226),
+            .command_prompt = c(36),
+        },
     };
 }
 
@@ -718,6 +747,7 @@ fn parseThemeName(value: []const u8) !ThemeName {
     if (std.mem.eql(u8, value, "solarized") or std.mem.eql(u8, value, "solarized_dark")) return .solarized;
     if (std.mem.eql(u8, value, "catppuccin") or std.mem.eql(u8, value, "catppuccin_mocha")) return .catppuccin;
     if (std.mem.eql(u8, value, "palenight") or std.mem.eql(u8, value, "pale_night")) return .palenight;
+    if (std.mem.eql(u8, value, "colorblind")) return .colorblind;
     return error.UnknownTheme;
 }
 
