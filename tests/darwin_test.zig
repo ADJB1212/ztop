@@ -69,3 +69,16 @@ test "mapTcpState covers expected transitions" {
     try std.testing.expectEqual(common.NetConnState.time_wait, darwin.mapTcpState(c.TSI_S_TIME_WAIT));
     try std.testing.expectEqual(common.NetConnState.unknown, darwin.mapTcpState(999));
 }
+
+test "getBatteryStats does not crash" {
+    var si = darwin.SysInfo.init(std.testing.io);
+    const stats = si.getBatteryStats();
+    if (stats.charge_percent) |charge| {
+        try std.testing.expect(charge >= 0 and charge <= 100);
+    }
+}
+
+test "getThermalStats does not crash" {
+    var si = darwin.SysInfo.init(std.testing.io);
+    _ = si.getThermalStats();
+}
