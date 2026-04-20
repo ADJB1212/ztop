@@ -12,6 +12,8 @@ pub const c = struct {
     const __CFDictionary = opaque {};
     const __CFData = opaque {};
     const __CFNumber = opaque {};
+    const __CFArray = opaque {};
+    const __CFBoolean = opaque {};
     const __CFAllocator = opaque {};
 
     pub const struct_proc_fdinfo = sys_c.struct_proc_fdinfo;
@@ -60,6 +62,8 @@ pub const c = struct {
     pub const CFMutableDictionaryRef = *__CFDictionary;
     pub const CFDataRef = *const __CFData;
     pub const CFNumberRef = *const __CFNumber;
+    pub const CFArrayRef = *const __CFArray;
+    pub const CFBooleanRef = *const __CFBoolean;
     pub const CFAllocatorRef = *const __CFAllocator;
 
     pub const io_object_t = mach_port_t;
@@ -71,6 +75,7 @@ pub const c = struct {
     pub const kIOMainPortDefault: mach_port_t = 0;
     pub const kCFStringEncodingUTF8: CFStringEncoding = 0x08000100;
     pub const kCFNumberSInt64Type: CFNumberType = 4;
+    pub const kCFNumberSInt32Type: CFNumberType = 3;
     pub const kIOBlockStorageDriverClass = "IOBlockStorageDriver";
     pub const kIOBlockStorageDriverStatisticsKey = "Statistics";
     pub const kIOBlockStorageDriverStatisticsBytesReadKey = "Bytes (Read)";
@@ -89,12 +94,40 @@ pub const c = struct {
     pub extern fn CFStringGetTypeID() CFTypeID;
     pub extern fn CFDataGetTypeID() CFTypeID;
     pub extern fn CFNumberGetTypeID() CFTypeID;
+    pub extern fn CFBooleanGetTypeID() CFTypeID;
+    pub extern fn CFArrayGetTypeID() CFTypeID;
     pub extern fn CFStringGetCString(theString: CFStringRef, buffer: [*]u8, bufferSize: CFIndex, encoding: CFStringEncoding) Boolean;
     pub extern fn CFDataGetBytePtr(theData: CFDataRef) ?[*]const u8;
     pub extern fn CFDataGetLength(theData: CFDataRef) CFIndex;
     pub extern fn CFDictionaryGetValue(theDict: CFDictionaryRef, key: CFStringRef) ?*const anyopaque;
     pub extern fn CFNumberGetValue(number: CFNumberRef, theType: CFNumberType, valuePtr: *anyopaque) Boolean;
+    pub extern fn CFBooleanGetValue(boolean: CFBooleanRef) Boolean;
+    pub extern fn CFArrayGetCount(theArray: CFArrayRef) CFIndex;
+    pub extern fn CFArrayGetValueAtIndex(theArray: CFArrayRef, idx: CFIndex) ?*const anyopaque;
+
+    pub extern fn IOPSCopyPowerSourcesInfo() ?CFTypeRef;
+    pub extern fn IOPSCopyPowerSourcesList(blob: CFTypeRef) ?CFArrayRef;
+    pub extern fn IOPSGetPowerSourceDescription(blob: CFTypeRef, ps: *const anyopaque) ?CFTypeRef;
+    pub const kIOPSCurrentCapacityKey = "Current Capacity";
+    pub const kIOPSMaxCapacityKey = "Max Capacity";
+    pub const kIOPSPowerSourceStateKey = "Power Source State";
+    pub const kIOPSIsChargingKey = "Is Charging";
+
+    pub const IOHIDEventSystemClientRef = *anyopaque;
+    pub const IOHIDServiceClientRef = *anyopaque;
+    pub extern fn IOHIDEventSystemClientCreate(allocator: ?CFAllocatorRef) ?IOHIDEventSystemClientRef;
+    pub extern fn IOHIDEventSystemClientCopyServices(client: IOHIDEventSystemClientRef) ?CFArrayRef;
+    pub extern fn IOHIDServiceClientCopyProperty(service: IOHIDServiceClientRef, property: CFStringRef) ?CFTypeRef;
+    pub extern fn IOHIDServiceClientConformsTo(service: IOHIDServiceClientRef, usagePage: u32, usage: u32) i32;
+    pub extern fn IOHIDServiceClientCopyEvent(service: IOHIDServiceClientRef, event_type: i64, options: i32, reserved: i64) ?*anyopaque;
+    pub extern fn IOHIDEventGetFloatValue(event: *anyopaque, field: u32) f64;
 };
+
+const kIOHIDEventTypeTemperature: i64 = 15;
+const kIOHIDEventTypePower: i64 = 25;
+fn IOHIDEventFieldBase(t: i64) u32 {
+    return @intCast(t << 16);
+}
 
 const CpuStats = common.CpuStats;
 const CpuTopology = common.CpuTopology;
@@ -198,7 +231,6 @@ const rusage_info_v2 = extern struct {
     ri_child_user_time: u64,
     ri_child_system_time: u64,
     ri_child_pkg_idle_wkups: u64,
-    ri_child_interrupt_wkups: u64,
     ri_child_pageins: u64,
     ri_child_elapsed_abstime: u64,
     ri_diskio_bytesread: u64,
@@ -304,6 +336,7 @@ pub const SysInfo = struct {
     prev_ms: i64 = 0,
     prev_disk_ms: i64 = 0,
     prev_net_ms: i64 = 0,
+    hid_client: ?c.IOHIDEventSystemClientRef = null,
 
     pub fn init(io: std.Io) SysInfo {
         const host_port = mach_host_self();
@@ -334,6 +367,7 @@ pub const SysInfo = struct {
             .prev_ms = now,
             .prev_disk_ms = now,
             .prev_net_ms = now,
+            .hid_client = c.IOHIDEventSystemClientCreate(null),
         };
         self.loadTopology();
         return self;
@@ -563,52 +597,117 @@ pub const SysInfo = struct {
     }
 
     pub fn getThermalStats(self: *SysInfo) ThermalStats {
-        _ = self;
-        return .{};
+        var stats = ThermalStats{};
+        const client = self.hid_client orelse return stats;
+
+        const services = c.IOHIDEventSystemClientCopyServices(client) orelse return stats;
+        defer c.CFRelease(services);
+
+        const product_key = c.CFStringCreateWithCString(null, "Product", c.kCFStringEncodingUTF8) orelse return stats;
+        defer c.CFRelease(product_key);
+
+        var max_cpu_temp: f64 = 0;
+        var max_gpu_temp: f64 = 0;
+
+        const count = c.CFArrayGetCount(services);
+        for (0..@intCast(count)) |i| {
+            const service: c.IOHIDServiceClientRef = @ptrCast(@alignCast(@constCast(c.CFArrayGetValueAtIndex(services, @intCast(i)) orelse continue)));
+
+            if (c.IOHIDServiceClientConformsTo(service, 0xff00, 5) == 0) continue;
+
+            const event = c.IOHIDServiceClientCopyEvent(service, kIOHIDEventTypeTemperature, 0, 0) orelse continue;
+            defer c.CFRelease(event);
+
+            const val = c.IOHIDEventGetFloatValue(event, IOHIDEventFieldBase(kIOHIDEventTypeTemperature));
+            if (val <= 0) continue;
+
+            var name_buf: [64]u8 = undefined;
+            var name: []const u8 = "";
+            const prop = c.IOHIDServiceClientCopyProperty(service, product_key);
+            if (prop) |p| {
+                defer c.CFRelease(p);
+                if (copyCFStringLikeValue(p, &name_buf)) |len| {
+                    name = name_buf[0..len];
+                }
+            }
+
+            // Apple Silicon HID thermal sensor naming:
+            //   "PMU tdie*"  = SoC die cluster temps (CPU E/P-core clusters)
+            //   "PMU tdev*"  = thermal device sensors (GPU/ANE proximity)
+            //   "PMU tcal"   = PMU calibration reference — NOT a component temp, excluded
+            //   "PMU TP*"    = temperature probes (ambient/board)
+            if (std.mem.indexOf(u8, name, "tdie") != null or
+                std.mem.indexOf(u8, name, "Soc Die") != null or
+                std.mem.indexOf(u8, name, "TD0P") != null)
+            {
+                if (val > max_cpu_temp) max_cpu_temp = val;
+            } else if (std.mem.indexOf(u8, name, "tdev") != null or
+                std.mem.indexOf(u8, name, "GPU Die") != null or
+                std.mem.indexOf(u8, name, "TG0P") != null)
+            {
+                if (val > max_gpu_temp) max_gpu_temp = val;
+            }
+        }
+
+        if (max_cpu_temp > 0) stats.cpu_temp = @floatCast(max_cpu_temp);
+        if (max_gpu_temp > 0) stats.gpu_temp = @floatCast(max_gpu_temp);
+
+        return stats;
     }
 
     pub fn getBatteryStats(self: *SysInfo) BatteryStats {
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-        defer arena.deinit();
-        const allocator = arena.allocator();
+        _ = self;
+        var stats = BatteryStats{};
 
-        const result = std.process.run(allocator, self.io, .{
-            .argv = &.{ "pmset", "-g", "batt" },
-        }) catch return .{};
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
+        const blob = c.IOPSCopyPowerSourcesInfo() orelse return stats;
+        defer c.CFRelease(blob);
 
-        switch (result.term) {
-            .exited => |code| if (code != 0) return .{},
-            else => return .{},
-        }
+        const list = c.IOPSCopyPowerSourcesList(blob) orelse return stats;
+        defer c.CFRelease(list);
 
-        const out_str = result.stdout;
+        if (c.CFArrayGetCount(list) == 0) return stats;
 
-        var charge: ?f32 = null;
-        var status: BatteryStatus = .unknown;
+        const ps = c.CFArrayGetValueAtIndex(list, 0) orelse return stats;
+        const desc = c.IOPSGetPowerSourceDescription(blob, ps) orelse return stats;
+        const dict: c.CFDictionaryRef = @ptrCast(desc);
 
-        // Output looks like: " -InternalBattery-0 (id=...) 100%; charged; 0:00 remaining present: true"
-        if (std.mem.indexOf(u8, out_str, "%")) |pct_idx| {
-            var start = pct_idx;
-            while (start > 0 and out_str[start - 1] >= '0' and out_str[start - 1] <= '9') {
-                start -= 1;
-            }
-            if (start < pct_idx) {
-                const val = std.fmt.parseInt(u32, out_str[start..pct_idx], 10) catch 0;
-                charge = @as(f32, @floatFromInt(val));
-            }
-
-            if (std.mem.indexOf(u8, out_str, "charging")) |_| {
-                status = .charging;
-            } else if (std.mem.indexOf(u8, out_str, "discharging")) |_| {
-                status = .discharging;
-            } else if (std.mem.indexOf(u8, out_str, "charged")) |_| {
-                status = .full;
+        if (getCFDictionaryNumberFromCString(dict, c.kIOPSCurrentCapacityKey)) |cap| {
+            if (getCFDictionaryNumberFromCString(dict, c.kIOPSMaxCapacityKey)) |max| {
+                if (max > 0) {
+                    stats.charge_percent = @as(f32, @floatFromInt(cap)) / @as(f32, @floatFromInt(max)) * 100.0;
+                }
             }
         }
 
-        return .{ .charge_percent = charge, .power_draw_w = null, .status = status };
+        // Charge status
+        if (getCFDictionaryValueFromCString(dict, c.kIOPSPowerSourceStateKey)) |sr| {
+            var buf: [32]u8 = undefined;
+            if (copyCFStringLikeValue(sr, &buf)) |len| {
+                const state = buf[0..len];
+                if (std.mem.eql(u8, state, "AC Power")) {
+                    if (getCFDictionaryValueFromCString(dict, c.kIOPSIsChargingKey)) |cr| {
+                        if (c.CFGetTypeID(cr) == c.CFBooleanGetTypeID()) {
+                            stats.status = if (c.CFBooleanGetValue(@ptrCast(@alignCast(cr))) != 0) .charging else .full;
+                        }
+                    }
+                } else if (std.mem.eql(u8, state, "Battery Power")) {
+                    stats.status = .discharging;
+                }
+            }
+        }
+
+        const amp_raw = getCFDictionarySignedNumberFromCString(dict, "Amperage");
+        const volt_raw = getCFDictionaryNumberFromCString(dict, "Voltage");
+        if (amp_raw) |amp_ma| {
+            if (volt_raw) |volt_mv| {
+                if (volt_mv > 0) {
+                    const watts = @abs(@as(f64, @floatFromInt(amp_ma))) * @as(f64, @floatFromInt(volt_mv)) / 1_000_000.0;
+                    if (watts > 0) stats.power_draw_w = @floatCast(watts);
+                }
+            }
+        }
+
+        return stats;
     }
 
     pub fn getGpuStats(self: *SysInfo, allocator: std.mem.Allocator) ![]GpuStats {
@@ -954,13 +1053,13 @@ fn copyCFStringLikeValue(value_ref: *const anyopaque, dest: []u8) ?usize {
     if (type_id == c.CFDataGetTypeID()) {
         const data_ref: c.CFDataRef = @ptrCast(value_ref);
         const bytes = c.CFDataGetBytePtr(data_ref);
-        if (bytes == null) return null;
+        const b = bytes orelse return null;
 
         const data_len: usize = @intCast(@max(c.CFDataGetLength(data_ref), 0));
         const bounded_len = @min(data_len, dest.len - 1);
         if (bounded_len == 0) return null;
 
-        @memcpy(dest[0..bounded_len], bytes.?[0..bounded_len]);
+        @memcpy(dest[0..bounded_len], b[0..bounded_len]);
         return std.mem.indexOfScalar(u8, dest[0..bounded_len], 0) orelse bounded_len;
     }
 
@@ -1384,6 +1483,18 @@ fn getCFDictionaryNumber(dict: c.CFDictionaryRef, key: c.CFStringRef) ?u64 {
     return getCFNumberValue(value);
 }
 
+fn getCFDictionaryNumberFromCString(dict: c.CFDictionaryRef, key_ptr: [*:0]const u8) ?u64 {
+    const key = c.CFStringCreateWithCString(null, key_ptr, c.kCFStringEncodingUTF8) orelse return null;
+    defer c.CFRelease(key);
+    return getCFDictionaryNumber(dict, key);
+}
+
+fn getCFDictionaryValueFromCString(dict: c.CFDictionaryRef, key_ptr: [*:0]const u8) ?*const anyopaque {
+    const key = c.CFStringCreateWithCString(null, key_ptr, c.kCFStringEncodingUTF8) orelse return null;
+    defer c.CFRelease(key);
+    return c.CFDictionaryGetValue(dict, key);
+}
+
 fn getCFNumberValue(value: *const anyopaque) ?u64 {
     if (c.CFGetTypeID(value) != c.CFNumberGetTypeID()) return null;
 
@@ -1391,4 +1502,20 @@ fn getCFNumberValue(value: *const anyopaque) ?u64 {
     if (c.CFNumberGetValue(@ptrCast(value), c.kCFNumberSInt64Type, &raw) == 0 or raw < 0) return null;
 
     return @intCast(raw);
+}
+
+fn getCFSignedNumberValue(value: *const anyopaque) ?i64 {
+    if (c.CFGetTypeID(value) != c.CFNumberGetTypeID()) return null;
+
+    var raw: i64 = 0;
+    if (c.CFNumberGetValue(@ptrCast(value), c.kCFNumberSInt64Type, &raw) == 0) return null;
+
+    return raw;
+}
+
+fn getCFDictionarySignedNumberFromCString(dict: c.CFDictionaryRef, key_ptr: [*:0]const u8) ?i64 {
+    const key = c.CFStringCreateWithCString(null, key_ptr, c.kCFStringEncodingUTF8) orelse return null;
+    defer c.CFRelease(key);
+    const value = c.CFDictionaryGetValue(dict, key) orelse return null;
+    return getCFSignedNumberValue(value);
 }
