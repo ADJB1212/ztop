@@ -6,6 +6,7 @@ const Tui = tui_mod.Tui;
 const sysinfo = @import("sysinfo.zig");
 const SysInfo = sysinfo.SysInfo;
 const config = @import("config.zig");
+const timeline_mod = @import("timeline.zig");
 const posix = std.posix;
 
 pub const Rect = struct {
@@ -114,6 +115,9 @@ pub const Context = struct {
     input_len: *usize,
     process_columns: *config.ProcessColumns,
     io_process_columns: *config.ProcessColumns,
+    is_scrubbing: *bool,
+    scrub_offset: *usize,
+    timeline: *timeline_mod.Timeline,
 };
 
 pub fn handleAvailableInput(ctx: *Context) !bool {
@@ -175,7 +179,7 @@ pub fn handleAvailableInput(ctx: *Context) !bool {
 
 fn handleColumnPickerToken(ctx: *Context, token: Tui.InputToken) bool {
     switch (token) {
-        .mouse, .arrow_up, .arrow_down => return true,
+        .mouse, .arrow_up, .arrow_down, .arrow_left, .arrow_right => return true,
         .enter, .escape => {
             ctx.show_column_picker.* = false;
             return true;
@@ -203,7 +207,7 @@ fn handleColumnPickerToken(ctx: *Context, token: Tui.InputToken) bool {
 
 fn handleCommandModeToken(ctx: *Context, token: Tui.InputToken) bool {
     switch (token) {
-        .mouse, .arrow_up, .arrow_down => return true,
+        .mouse, .arrow_up, .arrow_down, .arrow_left, .arrow_right => return true,
         .enter => {
             ctx.is_cmd_mode.* = false;
             executeCommand(ctx);
@@ -225,7 +229,7 @@ fn handleCommandModeToken(ctx: *Context, token: Tui.InputToken) bool {
 
 fn handleFilterModeToken(ctx: *Context, token: Tui.InputToken) bool {
     switch (token) {
-        .mouse, .arrow_up, .arrow_down => return true,
+        .mouse, .arrow_up, .arrow_down, .arrow_left, .arrow_right => return true,
         .enter => {
             ctx.is_filtering.* = false;
             return true;
@@ -297,8 +301,23 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
             moveSelection(ctx.selected_idx, list_count, 1);
             return true;
         },
+        .arrow_left => {
+            // Scrub further into the past
+            if (ctx.is_scrubbing.*) {
+                const max_offset = ctx.timeline.snapshotCount() -| 1;
+                if (ctx.scrub_offset.* < max_offset) ctx.scrub_offset.* += 1;
+            }
+            return true;
+        },
+        .arrow_right => {
+            // Scrub toward the present
+            if (ctx.is_scrubbing.*) {
+                if (ctx.scrub_offset.* > 0) ctx.scrub_offset.* -= 1;
+            }
+            return true;
+        },
         .enter => {
-            try enterThreadView(ctx);
+            if (!ctx.is_scrubbing.*) try enterThreadView(ctx);
             return true;
         },
         .escape => {
@@ -339,67 +358,91 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
                 return true;
             },
             'c' => {
-                if (!ctx.thread_view.*) {
+                if (!ctx.thread_view.* and !ctx.is_scrubbing.*) {
                     ctx.sort_by.* = .cpu;
                     sort_dirty.* = true;
                 }
                 return true;
             },
             'm' => {
-                if (!ctx.thread_view.*) {
+                if (!ctx.thread_view.* and !ctx.is_scrubbing.*) {
                     ctx.sort_by.* = .mem;
                     sort_dirty.* = true;
                 }
                 return true;
             },
             'p' => {
-                if (!ctx.thread_view.*) {
+                if (!ctx.thread_view.* and !ctx.is_scrubbing.*) {
                     ctx.sort_by.* = .pid;
                     sort_dirty.* = true;
                 }
                 return true;
             },
             'n' => {
-                if (!ctx.thread_view.*) {
+                if (!ctx.thread_view.* and !ctx.is_scrubbing.*) {
                     ctx.sort_by.* = .name;
                     sort_dirty.* = true;
                 }
                 return true;
             },
             'v' => {
-                if (!ctx.thread_view.*) {
+                if (!ctx.thread_view.* and !ctx.is_scrubbing.*) {
                     ctx.tree_view.* = !ctx.tree_view.*;
                 }
                 return true;
             },
             'C' => {
-                if (!ctx.thread_view.* and ctx.current_tab.* != 4) {
+                if (!ctx.thread_view.* and !ctx.is_scrubbing.* and ctx.current_tab.* != 4) {
                     ctx.show_column_picker.* = true;
                 }
                 return true;
             },
             '/' => {
-                if (!ctx.thread_view.*) {
+                if (!ctx.thread_view.* and !ctx.is_scrubbing.*) {
                     ctx.is_filtering.* = true;
                 }
                 return true;
             },
             ':' => {
-                if (!ctx.thread_view.*) {
+                if (!ctx.thread_view.* and !ctx.is_scrubbing.*) {
                     ctx.is_cmd_mode.* = true;
                 }
                 return true;
             },
             't' => {
-                signalSelectedProcess(ctx, posix.SIG.TERM);
+                if (!ctx.is_scrubbing.*) signalSelectedProcess(ctx, posix.SIG.TERM);
                 return true;
             },
             'K' => {
-                signalSelectedProcess(ctx, posix.SIG.KILL);
+                if (!ctx.is_scrubbing.*) signalSelectedProcess(ctx, posix.SIG.KILL);
+                return true;
+            },
+            'T' => {
+                if (ctx.timeline.snapshotCount() >= 2) {
+                    ctx.is_scrubbing.* = !ctx.is_scrubbing.*;
+                    ctx.scrub_offset.* = 0;
+                } else {
+                    render.setStatus(ctx.status_buf, ctx.status_len, "Timeline: not enough data yet", .{});
+                }
+                return true;
+            },
+            '[' => {
+                // Fast scrub: jump 10 snapshots older
+                if (ctx.is_scrubbing.*) {
+                    const max_offset = ctx.timeline.snapshotCount() -| 1;
+                    ctx.scrub_offset.* = @min(ctx.scrub_offset.* + 10, max_offset);
+                }
+                return true;
+            },
+            ']' => {
+                // Fast scrub: jump 10 snapshots newer
+                if (ctx.is_scrubbing.*) {
+                    ctx.scrub_offset.* = ctx.scrub_offset.* -| 10;
+                }
                 return true;
             },
             'l' => {
-                if (!ctx.thread_view.* and ctx.filtered_count.* > 0) {
+                if (!ctx.thread_view.* and !ctx.is_scrubbing.* and ctx.filtered_count.* > 0) {
                     if (ctx.is_following.*) {
                         ctx.is_following.* = false;
                         ctx.follow_pid.* = 0;
@@ -504,7 +547,10 @@ fn enterThreadView(ctx: *Context) !void {
 }
 
 fn clearCurrentView(ctx: *Context) void {
-    if (ctx.thread_view.*) {
+    if (ctx.is_scrubbing.*) {
+        ctx.is_scrubbing.* = false;
+        ctx.scrub_offset.* = 0;
+    } else if (ctx.thread_view.*) {
         ctx.thread_view.* = false;
         if (ctx.cached_threads.*.len > 0) {
             ctx.allocator.free(ctx.cached_threads.*);

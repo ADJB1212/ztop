@@ -8,6 +8,7 @@ test {
     _ = @import("process_commands_test.zig");
     _ = @import("render_test.zig");
     _ = @import("input_handler_test.zig");
+    _ = @import("timeline_test.zig");
     _ = @import("tui_test.zig");
     _ = @import("version_test.zig");
     _ = @import("linux_test.zig");

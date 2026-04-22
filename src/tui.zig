@@ -100,6 +100,8 @@ pub const Tui = struct {
         escape,
         arrow_up,
         arrow_down,
+        arrow_left,
+        arrow_right,
         mouse: MouseEvent,
     };
 
@@ -227,6 +229,8 @@ pub const Tui = struct {
         switch (bytes[2]) {
             'A' => return .{ .parsed = .{ .token = .arrow_up, .used = 3 } },
             'B' => return .{ .parsed = .{ .token = .arrow_down, .used = 3 } },
+            'C' => return .{ .parsed = .{ .token = .arrow_right, .used = 3 } },
+            'D' => return .{ .parsed = .{ .token = .arrow_left, .used = 3 } },
             '<' => {
                 const cb_result = parseMouseNumber(bytes, 3);
                 const cb_end = switch (cb_result) {
