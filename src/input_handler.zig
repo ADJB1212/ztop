@@ -317,7 +317,7 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
             return true;
         },
         .enter => {
-            try enterThreadView(ctx);
+            if (!ctx.is_scrubbing.*) try enterThreadView(ctx);
             return true;
         },
         .escape => {
@@ -358,63 +358,63 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
                 return true;
             },
             'c' => {
-                if (!ctx.thread_view.*) {
+                if (!ctx.thread_view.* and !ctx.is_scrubbing.*) {
                     ctx.sort_by.* = .cpu;
                     sort_dirty.* = true;
                 }
                 return true;
             },
             'm' => {
-                if (!ctx.thread_view.*) {
+                if (!ctx.thread_view.* and !ctx.is_scrubbing.*) {
                     ctx.sort_by.* = .mem;
                     sort_dirty.* = true;
                 }
                 return true;
             },
             'p' => {
-                if (!ctx.thread_view.*) {
+                if (!ctx.thread_view.* and !ctx.is_scrubbing.*) {
                     ctx.sort_by.* = .pid;
                     sort_dirty.* = true;
                 }
                 return true;
             },
             'n' => {
-                if (!ctx.thread_view.*) {
+                if (!ctx.thread_view.* and !ctx.is_scrubbing.*) {
                     ctx.sort_by.* = .name;
                     sort_dirty.* = true;
                 }
                 return true;
             },
             'v' => {
-                if (!ctx.thread_view.*) {
+                if (!ctx.thread_view.* and !ctx.is_scrubbing.*) {
                     ctx.tree_view.* = !ctx.tree_view.*;
                 }
                 return true;
             },
             'C' => {
-                if (!ctx.thread_view.* and ctx.current_tab.* != 4) {
+                if (!ctx.thread_view.* and !ctx.is_scrubbing.* and ctx.current_tab.* != 4) {
                     ctx.show_column_picker.* = true;
                 }
                 return true;
             },
             '/' => {
-                if (!ctx.thread_view.*) {
+                if (!ctx.thread_view.* and !ctx.is_scrubbing.*) {
                     ctx.is_filtering.* = true;
                 }
                 return true;
             },
             ':' => {
-                if (!ctx.thread_view.*) {
+                if (!ctx.thread_view.* and !ctx.is_scrubbing.*) {
                     ctx.is_cmd_mode.* = true;
                 }
                 return true;
             },
             't' => {
-                signalSelectedProcess(ctx, posix.SIG.TERM);
+                if (!ctx.is_scrubbing.*) signalSelectedProcess(ctx, posix.SIG.TERM);
                 return true;
             },
             'K' => {
-                signalSelectedProcess(ctx, posix.SIG.KILL);
+                if (!ctx.is_scrubbing.*) signalSelectedProcess(ctx, posix.SIG.KILL);
                 return true;
             },
             'T' => {
@@ -426,8 +426,23 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
                 }
                 return true;
             },
+            '[' => {
+                // Fast scrub: jump 10 snapshots older
+                if (ctx.is_scrubbing.*) {
+                    const max_offset = ctx.timeline.snapshotCount() -| 1;
+                    ctx.scrub_offset.* = @min(ctx.scrub_offset.* + 10, max_offset);
+                }
+                return true;
+            },
+            ']' => {
+                // Fast scrub: jump 10 snapshots newer
+                if (ctx.is_scrubbing.*) {
+                    ctx.scrub_offset.* = ctx.scrub_offset.* -| 10;
+                }
+                return true;
+            },
             'l' => {
-                if (!ctx.thread_view.* and ctx.filtered_count.* > 0) {
+                if (!ctx.thread_view.* and !ctx.is_scrubbing.* and ctx.filtered_count.* > 0) {
                     if (ctx.is_following.*) {
                         ctx.is_following.* = false;
                         ctx.follow_pid.* = 0;

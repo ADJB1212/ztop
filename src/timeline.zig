@@ -4,6 +4,7 @@ const common = @import("sysinfo/common.zig");
 pub const MAX_SNAPSHOTS: usize = 180; // ~3 min at 1s intervals
 pub const MAX_EVENTS: usize = 500;
 pub const MAX_SNAPSHOT_PROCS: usize = 32;
+pub const MAX_BIRTH_DEATH_PER_TICK: usize = 8;
 
 pub const EventKind = enum(u8) {
     cpu_spike,
@@ -228,20 +229,26 @@ pub const Timeline = struct {
         }
 
         // Process births/deaths (skip on first tick when no baseline)
+        // Capped to MAX_BIRTH_DEATH_PER_TICK to prevent event flooding on large churn.
         if (self.prev_pid_count > 0 and procs.len > 0) {
+            var bd_count: usize = 0;
             // Deaths: PIDs in prev not in current
             outer_death: for (self.prev_pids[0..self.prev_pid_count]) |prev_pid| {
+                if (bd_count >= MAX_BIRTH_DEATH_PER_TICK) break;
                 for (procs) |p| {
                     if (p.pid == prev_pid) continue :outer_death;
                 }
                 self.appendEvent(makeEvent(.proc_death, ts, prev_pid, "PID {d} exited", .{prev_pid}));
+                bd_count += 1;
             }
             // Births: PIDs in current not in prev
             outer_birth: for (procs) |p| {
+                if (bd_count >= MAX_BIRTH_DEATH_PER_TICK) break;
                 for (self.prev_pids[0..self.prev_pid_count]) |prev_pid| {
                     if (p.pid == prev_pid) continue :outer_birth;
                 }
                 self.appendEvent(makeEvent(.proc_birth, ts, p.pid, "{s} ({d})", .{ p.name(), p.pid }));
+                bd_count += 1;
             }
         }
 
@@ -270,6 +277,20 @@ pub const Timeline = struct {
             }
         }
         return mask;
+    }
+
+    /// Format a duration in seconds as a compact human-readable string (e.g. "45s", "2m30s").
+    pub fn formatDuration(buf: []u8, seconds: i64) []const u8 {
+        const s: u64 = if (seconds < 0) 0 else @intCast(seconds);
+        if (s < 60) {
+            return std.fmt.bufPrint(buf, "{d}s", .{s}) catch "?s";
+        }
+        const m = s / 60;
+        const rem = s % 60;
+        if (rem == 0) {
+            return std.fmt.bufPrint(buf, "{d}m", .{m}) catch "?m";
+        }
+        return std.fmt.bufPrint(buf, "{d}m{d}s", .{ m, rem }) catch "?";
     }
 
     /// Collect events near a snapshot (within ±1 second). Returns count written.

@@ -1059,14 +1059,18 @@ pub fn renderTimelineBar(
         if (tl.getSnapshot(0)) |newest| {
             if (tl.getSnapshot(scrub_offset)) |cur| {
                 const delta_s = @divTrunc(newest.timestamp_ms - cur.timestamp_ms, 1000);
-                var tbuf: [16]u8 = undefined;
-                const label = std.fmt.bufPrint(&tbuf, "  T-{d}s", .{delta_s}) catch "  T-?s";
+                var dur_buf: [16]u8 = undefined;
+                const dur = timeline_mod.Timeline.formatDuration(&dur_buf, delta_s);
+                var tbuf: [24]u8 = undefined;
+                const label = std.fmt.bufPrint(&tbuf, "  T-{s}", .{dur}) catch "  T-?";
                 try app_tui.writeStyled(.{ .fg = theme.usage_warn, .bold = true }, label);
             }
         }
     } else if (snap_count > 0) {
-        var tbuf: [16]u8 = undefined;
-        const label = std.fmt.bufPrint(&tbuf, "  {d}s", .{snap_count}) catch "  ?s";
+        var dur_buf: [16]u8 = undefined;
+        const dur = timeline_mod.Timeline.formatDuration(&dur_buf, @intCast(snap_count));
+        var tbuf: [24]u8 = undefined;
+        const label = std.fmt.bufPrint(&tbuf, "  {s}", .{dur}) catch "  ?";
         try app_tui.writeStyled(.{ .fg = theme.muted }, label);
     }
 }

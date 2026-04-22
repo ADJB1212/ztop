@@ -953,7 +953,9 @@ pub fn main(main_init: std.process.Init) !void {
                             const cur = timeline.getSnapshot(scrub_offset);
                             if (newest != null and cur != null) {
                                 const delta_s = @divTrunc(newest.?.timestamp_ms - cur.?.timestamp_ms, 1000);
-                                break :blk std.fmt.bufPrint(&title_buf, "Processes [SCRUB T-{d}s] ({d} procs)", .{ delta_s, scrub_proc_count }) catch "Processes [SCRUB]";
+                                var dur_buf: [16]u8 = undefined;
+                                const dur = timeline_mod.Timeline.formatDuration(&dur_buf, delta_s);
+                                break :blk std.fmt.bufPrint(&title_buf, "Processes [SCRUB T-{s}] ({d} procs)", .{ dur, scrub_proc_count }) catch "Processes [SCRUB]";
                             }
                             break :blk @as([]const u8, "Processes [SCRUB]");
                         } else if (show_zombie_parents)
@@ -1184,7 +1186,7 @@ pub fn main(main_init: std.process.Init) !void {
 
                     try app_tui.moveCursor(h_x + 2, h_y + 12);
                     try app_tui.printStyled(.{ .fg = theme.text }, "T:            ", .{});
-                    try app_tui.printStyled(.{ .fg = theme.muted }, "Timeline scrubber (← → to scrub)", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Timeline scrub (←→ step, [] jump)", .{});
 
                     try app_tui.moveCursor(h_x + 2, h_y + 13);
                     try app_tui.printStyled(.{ .fg = theme.text }, "q:            ", .{});
@@ -1252,11 +1254,25 @@ pub fn main(main_init: std.process.Init) !void {
                 try app_tui.moveCursor(1, size.height);
                 if (is_scrubbing) {
                     try app_tui.printStyled(.{ .fg = theme.usage_warn, .bold = true }, "◀◀ SCRUB  ", .{});
-                    try app_tui.printStyled(.{ .fg = theme.muted }, "← older  → newer  ", .{});
+                    // Show events near scrub cursor
+                    var ev_out: [4]timeline_mod.TimelineEvent = undefined;
+                    const ev_n = timeline.getEventsNearSnapshot(scrub_offset, &ev_out);
+                    if (ev_n > 0) {
+                        for (ev_out[0..ev_n]) |ev| {
+                            try app_tui.printStyled(.{ .fg = theme.usage_warn }, "[", .{});
+                            try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "{s}", .{ev.kindLabel()});
+                            if (ev.detail_len > 0) {
+                                try app_tui.printStyled(.{ .fg = theme.muted }, " {s}", .{ev.detail()});
+                            }
+                            try app_tui.printStyled(.{ .fg = theme.usage_warn }, "] ", .{});
+                        }
+                    } else {
+                        try app_tui.printStyled(.{ .fg = theme.muted }, "←/→ scrub  [/] fast  ", .{});
+                    }
                     try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "T", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "/", .{});
                     try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "Esc", .{});
-                    try app_tui.printStyled(.{ .fg = theme.muted }, " resume live", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, " resume", .{});
                 } else if (is_cmd_mode) {
                     try app_tui.printStyled(.{ .fg = theme.command_prompt, .bold = true }, ":", .{});
                     try app_tui.printStyled(.{ .fg = theme.text }, "{s}", .{cmd_buf[0..cmd_len]});
