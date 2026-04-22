@@ -597,7 +597,7 @@ pub fn main(main_init: std.process.Init) !void {
                         mem_box_y,
                         mem_box_width,
                         mem_box_height,
-                        "GPU Monitoring",
+                        "GPU",
                         .{ .fg = theme.border },
                         .{ .fg = theme.sensor_title, .bold = true },
                     );
@@ -678,7 +678,7 @@ pub fn main(main_init: std.process.Init) !void {
                         cpu_box_y,
                         size.width, // Full width for top box
                         cpu_box_height,
-                        "Network Overview",
+                        "Network",
                         .{ .fg = theme.border },
                         .{ .fg = theme.sensor_title, .bold = true },
                     );
@@ -704,7 +704,7 @@ pub fn main(main_init: std.process.Init) !void {
                             procs_box_y,
                             procs_box_width,
                             procs_box_height,
-                            "Network Connections",
+                            "Connections",
                             .{ .fg = theme.border },
                             .{ .fg = theme.process_title, .bold = true },
                         );
