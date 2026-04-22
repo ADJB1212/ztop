@@ -23,6 +23,7 @@ Built for people who want a focused dashboard in the terminal: quick enough to k
   - Apple Silicon via IORegistry accelerator performance statistics
 - Dynamic process-table columns with an in-app picker (PID, PPID, state, CPU, memory, threads, disk rates)
 - Mouse support for tab switching, list navigation, and scrolling
+- Timeline scrubbing mode to inspect recent snapshots without pausing live collection
 - Built-in process actions: `SIGTERM`, `SIGKILL`, `:killall`, `:show zombie`, `:search`
 - Responsive layout for narrow terminals
 - Configurable refresh interval, default sort, theme, and per-color overrides
@@ -73,22 +74,28 @@ ztop [--version] [--help]
 
 ### Key Bindings
 
-| Key                     | Action                                                        |
-| ----------------------- | ------------------------------------------------------------- |
-| `1`, `2`, `3`, `4`      | Switch to `Main`, `I/O`, `Sensors`, `Network`                 |
-| `j` / `k` or arrow keys | Move through the process list                                 |
-| `Enter`                 | Drill into threads of the selected process                    |
+| Key                     | Action                                                                |
+| ----------------------- | --------------------------------------------------------------------- |
+| `1`, `2`, `3`, `4`      | Switch to `Main`, `I/O`, `Sensors`, `Network`                         |
+| `j` / `k` or arrow keys | Move through the process list                                         |
+| `Enter`                 | Drill into threads of the selected process                            |
 | `Esc`                   | Return from thread view; clear follow, filter, status, or zombie view |
-| `c`, `m`, `p`, `n`      | Sort by CPU, memory, PID, or name                             |
-| `C`                     | Toggle process-table columns for the current view             |
-| `v`                     | Toggle tree view (process hierarchy)                          |
-| `/`                     | Filter processes by name or PID                               |
-| `:`                     | Open command mode                                             |
-| `l`                     | Follow selected process (lock view to it as it moves)         |
-| `t`                     | Send `SIGTERM` to the selected process                        |
-| `K`                     | Send `SIGKILL` to the selected process                        |
-| `?`                     | Open help overlay                                             |
-| `q`                     | Quit                                                          |
+| `c`, `m`, `p`, `n`      | Sort by CPU, memory, PID, or name                                     |
+| `C`                     | Toggle process-table columns for the current view                     |
+| `v`                     | Toggle tree view (process hierarchy)                                  |
+| `/`                     | Filter processes by name or PID                                       |
+| `:`                     | Open command mode                                                     |
+| `l`                     | Follow selected process (lock view to it as it moves)                 |
+| `T`                     | Toggle timeline scrubbing mode (requires enough collected history)    |
+| `←` / `→`               | While scrubbing: move older/newer by one snapshot                     |
+| `[` / `]`               | While scrubbing: jump older/newer by 10 snapshots                     |
+| `t`                     | Send `SIGTERM` to the selected process                                |
+| `K`                     | Send `SIGKILL` to the selected process                                |
+| `?`                     | Open help overlay                                                     |
+| `q`                     | Quit                                                                  |
+
+While scrubbing is active, destructive process actions and view-mutating actions are disabled until you exit scrubbing.
+Press `Esc` to leave scrubbing and return to live view.
 
 ### Command Mode
 
@@ -123,7 +130,7 @@ color.tab_active = 141
 
 | Key                    | Values                                                                                                                           |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `theme`                | `default`, `default_dark`, `default_light`, `gruvbox`, `nord`, `solarized`, `catppuccin`, `palenight`, `colorblind`                            |
+| `theme`                | `default`, `default_dark`, `default_light`, `gruvbox`, `nord`, `solarized`, `catppuccin`, `palenight`, `colorblind`              |
 | `default_sort`         | `cpu`, `mem`, `pid`, `name`                                                                                                      |
 | `default_tab`          | `main`, `io`, `sensors`, `network` (or `1`–`4`)                                                                                  |
 | `default_tree_view`    | `true` / `false` (also `yes`/`no`, `1`/`0`)                                                                                      |
