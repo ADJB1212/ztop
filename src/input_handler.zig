@@ -6,6 +6,7 @@ const Tui = tui_mod.Tui;
 const sysinfo = @import("sysinfo.zig");
 const SysInfo = sysinfo.SysInfo;
 const config = @import("config.zig");
+const timeline_mod = @import("timeline.zig");
 const posix = std.posix;
 
 pub const Rect = struct {
@@ -114,6 +115,9 @@ pub const Context = struct {
     input_len: *usize,
     process_columns: *config.ProcessColumns,
     io_process_columns: *config.ProcessColumns,
+    is_scrubbing: *bool,
+    scrub_offset: *usize,
+    timeline: *timeline_mod.Timeline,
 };
 
 pub fn handleAvailableInput(ctx: *Context) !bool {
@@ -175,7 +179,7 @@ pub fn handleAvailableInput(ctx: *Context) !bool {
 
 fn handleColumnPickerToken(ctx: *Context, token: Tui.InputToken) bool {
     switch (token) {
-        .mouse, .arrow_up, .arrow_down => return true,
+        .mouse, .arrow_up, .arrow_down, .arrow_left, .arrow_right => return true,
         .enter, .escape => {
             ctx.show_column_picker.* = false;
             return true;
@@ -203,7 +207,7 @@ fn handleColumnPickerToken(ctx: *Context, token: Tui.InputToken) bool {
 
 fn handleCommandModeToken(ctx: *Context, token: Tui.InputToken) bool {
     switch (token) {
-        .mouse, .arrow_up, .arrow_down => return true,
+        .mouse, .arrow_up, .arrow_down, .arrow_left, .arrow_right => return true,
         .enter => {
             ctx.is_cmd_mode.* = false;
             executeCommand(ctx);
@@ -225,7 +229,7 @@ fn handleCommandModeToken(ctx: *Context, token: Tui.InputToken) bool {
 
 fn handleFilterModeToken(ctx: *Context, token: Tui.InputToken) bool {
     switch (token) {
-        .mouse, .arrow_up, .arrow_down => return true,
+        .mouse, .arrow_up, .arrow_down, .arrow_left, .arrow_right => return true,
         .enter => {
             ctx.is_filtering.* = false;
             return true;
@@ -295,6 +299,21 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
         },
         .arrow_down => {
             moveSelection(ctx.selected_idx, list_count, 1);
+            return true;
+        },
+        .arrow_left => {
+            // Scrub further into the past
+            if (ctx.is_scrubbing.*) {
+                const max_offset = ctx.timeline.snapshotCount() -| 1;
+                if (ctx.scrub_offset.* < max_offset) ctx.scrub_offset.* += 1;
+            }
+            return true;
+        },
+        .arrow_right => {
+            // Scrub toward the present
+            if (ctx.is_scrubbing.*) {
+                if (ctx.scrub_offset.* > 0) ctx.scrub_offset.* -= 1;
+            }
             return true;
         },
         .enter => {
@@ -396,6 +415,15 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
             },
             'K' => {
                 signalSelectedProcess(ctx, posix.SIG.KILL);
+                return true;
+            },
+            'T' => {
+                if (ctx.timeline.snapshotCount() >= 2) {
+                    ctx.is_scrubbing.* = !ctx.is_scrubbing.*;
+                    ctx.scrub_offset.* = 0;
+                } else {
+                    render.setStatus(ctx.status_buf, ctx.status_len, "Timeline: not enough data yet", .{});
+                }
                 return true;
             },
             'l' => {
@@ -504,7 +532,10 @@ fn enterThreadView(ctx: *Context) !void {
 }
 
 fn clearCurrentView(ctx: *Context) void {
-    if (ctx.thread_view.*) {
+    if (ctx.is_scrubbing.*) {
+        ctx.is_scrubbing.* = false;
+        ctx.scrub_offset.* = 0;
+    } else if (ctx.thread_view.*) {
         ctx.thread_view.* = false;
         if (ctx.cached_threads.*.len > 0) {
             ctx.allocator.free(ctx.cached_threads.*);

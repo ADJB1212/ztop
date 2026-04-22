@@ -3,6 +3,7 @@ const tui = @import("tui.zig");
 const sysinfo = @import("sysinfo.zig");
 const config = @import("config.zig");
 const history_mod = @import("history.zig");
+const timeline_mod = @import("timeline.zig");
 const Tui = tui.Tui;
 const SysInfo = sysinfo.SysInfo;
 const CpuTopology = sysinfo.CpuTopology;
@@ -958,4 +959,121 @@ pub fn updateFooterCursor(app_tui: *Tui, width: u16, height: u16, is_cmd_mode: b
         try app_tui.setCursorStyle(.steady_block);
         try app_tui.setCursorVisible(false);
     }
+}
+
+/// Render the timeline scrubber bar.
+pub fn renderTimelineBar(
+    app_tui: *Tui,
+    theme: config.Theme,
+    x: u16,
+    y: u16,
+    width: u16,
+    tl: *const timeline_mod.Timeline,
+    scrub_offset: usize,
+    is_scrubbing: bool,
+) !void {
+    if (width < 12) return;
+    const snap_count = tl.snapshotCount();
+
+    try app_tui.moveCursor(x, y);
+
+    // Left nav indicator
+    const can_go_older = is_scrubbing and scrub_offset + 1 < snap_count;
+    try app_tui.writeStyled(
+        if (can_go_older) .{ .fg = theme.tab_active, .bold = true } else .{ .fg = theme.muted },
+        "◀",
+    );
+
+    const suffix_reserve: u16 = 12;
+    const bar_width: usize = if (width > 4 + suffix_reserve) @as(usize, width) - 4 - @as(usize, suffix_reserve) else 2;
+
+    try app_tui.out.writeStreamingAll(app_tui.io, " ");
+
+    if (snap_count == 0) {
+        try app_tui.writeStyled(.{ .fg = theme.muted }, "Recording...");
+    } else {
+        // Determine the visible window: last bar_width snapshots (newest on right)
+        const visible_snaps = @min(snap_count, bar_width);
+        const oldest_visible_abs = snap_count -| visible_snaps;
+
+        // Scrub cursor absolute index (from oldest)
+        const scrub_abs: usize = if (snap_count > 0) snap_count - 1 - scrub_offset else 0;
+
+        for (0..bar_width) |col| {
+            // col 0 = oldest visible, col bar_width-1 = newest
+            const abs_idx = oldest_visible_abs + col;
+            const in_range = abs_idx < snap_count;
+            const is_cursor = is_scrubbing and in_range and abs_idx == scrub_abs;
+
+            if (!in_range) {
+                // Left-pad area before history starts
+                try app_tui.out.writeStreamingAll(app_tui.io, " ");
+                continue;
+            }
+
+            if (is_cursor) {
+                try app_tui.writeStyled(.{ .bg = theme.selection_bg, .fg = theme.selection_fg, .bold = true }, "|");
+                continue;
+            }
+
+            // Get the snapshot and look up any events at that moment
+            const snap = tl.getSnapshotAtIndex(abs_idx) orelse {
+                try app_tui.out.writeStreamingAll(app_tui.io, " ");
+                continue;
+            };
+            const ts = snap.timestamp_ms;
+            const ev_mask = tl.eventMaskInRange(ts - 600, ts + 600);
+
+            if (ev_mask & (@as(u8, 1) << @intFromEnum(timeline_mod.EventKind.thermal_high)) != 0) {
+                try app_tui.writeStyled(.{ .fg = theme.usage_critical, .bold = true }, "T");
+            } else if (ev_mask & (@as(u8, 1) << @intFromEnum(timeline_mod.EventKind.cpu_spike)) != 0) {
+                try app_tui.writeStyled(.{ .fg = theme.usage_warn, .bold = true }, "C");
+            } else if (ev_mask & (@as(u8, 1) << @intFromEnum(timeline_mod.EventKind.mem_pressure)) != 0) {
+                try app_tui.writeStyled(.{ .fg = theme.memory_critical, .bold = true }, "M");
+            } else if (ev_mask & (@as(u8, 1) << @intFromEnum(timeline_mod.EventKind.disk_spike)) != 0) {
+                try app_tui.writeStyled(.{ .fg = theme.disk_title }, "D");
+            } else if (ev_mask & (@as(u8, 1) << @intFromEnum(timeline_mod.EventKind.net_spike)) != 0) {
+                try app_tui.writeStyled(.{ .fg = theme.network_title }, "N");
+            } else if (ev_mask & (@as(u8, 1) << @intFromEnum(timeline_mod.EventKind.proc_birth)) != 0) {
+                try app_tui.writeStyled(.{ .fg = theme.usage_good }, "+");
+            } else if (ev_mask & (@as(u8, 1) << @intFromEnum(timeline_mod.EventKind.proc_death)) != 0) {
+                try app_tui.writeStyled(.{ .fg = theme.muted }, "-");
+            } else {
+                // No event: show CPU density block
+                const ch: []const u8 = cpuDensityChar(snap.cpu_usage_pct);
+                try app_tui.writeStyled(.{ .fg = theme.muted }, ch);
+            }
+        }
+    }
+
+    // Right nav indicator
+    try app_tui.out.writeStreamingAll(app_tui.io, " ");
+    const can_go_newer = is_scrubbing and scrub_offset > 0;
+    try app_tui.writeStyled(
+        if (can_go_newer) .{ .fg = theme.tab_active, .bold = true } else .{ .fg = theme.muted },
+        "▶",
+    );
+
+    // Time label
+    if (is_scrubbing) {
+        if (tl.getSnapshot(0)) |newest| {
+            if (tl.getSnapshot(scrub_offset)) |cur| {
+                const delta_s = @divTrunc(newest.timestamp_ms - cur.timestamp_ms, 1000);
+                var tbuf: [16]u8 = undefined;
+                const label = std.fmt.bufPrint(&tbuf, "  T-{d}s", .{delta_s}) catch "  T-?s";
+                try app_tui.writeStyled(.{ .fg = theme.usage_warn, .bold = true }, label);
+            }
+        }
+    } else if (snap_count > 0) {
+        var tbuf: [16]u8 = undefined;
+        const label = std.fmt.bufPrint(&tbuf, "  {d}s", .{snap_count}) catch "  ?s";
+        try app_tui.writeStyled(.{ .fg = theme.muted }, label);
+    }
+}
+
+fn cpuDensityChar(cpu_pct: f32) []const u8 {
+    if (cpu_pct >= 75.0) return "▓";
+    if (cpu_pct >= 50.0) return "▒";
+    if (cpu_pct >= 25.0) return "░";
+    return "·";
 }

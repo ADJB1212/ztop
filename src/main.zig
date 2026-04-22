@@ -5,6 +5,7 @@ const cli = ztop.cli;
 const render = ztop.render;
 const input_handler = ztop.input_handler;
 const process_commands = ztop.process_commands;
+const timeline_mod = ztop.timeline;
 const Tui = ztop.tui.Tui;
 const SysInfo = ztop.sysinfo.SysInfo;
 const posix = std.posix;
@@ -278,6 +279,16 @@ pub fn main(main_init: std.process.Init) !void {
     var net_rx_history: ztop.history.RateHistory = .{};
     var net_tx_history: ztop.history.RateHistory = .{};
 
+    // Timeline scrubber: heap-allocated (~2MB struct)
+    const timeline = try allocator.create(timeline_mod.Timeline);
+    defer allocator.destroy(timeline);
+    timeline.* = timeline_mod.Timeline.init();
+    var is_scrubbing: bool = false;
+    var scrub_offset: usize = 0;
+    // Buffer for snapshot procs when displaying scrubbed view
+    var scrub_proc_buf: [timeline_mod.MAX_SNAPSHOT_PROCS]ztop.sysinfo.ProcStats = undefined;
+    var scrub_proc_count: usize = 0;
+
     var cpu = sys_info.getCpuStats();
     var cpu_topology = sys_info.getCpuTopology();
     var mem = sys_info.getMemStats();
@@ -331,12 +342,14 @@ pub fn main(main_init: std.process.Init) !void {
             }
             cached_gpus = try sys_info.getGpuStats(allocator);
             battery = sys_info.getBatteryStats();
-            cpu_history.append(cpu.usage_percent);
-            mem_history.append(memoryUsagePercent(mem));
-            disk_read_history.append(disk.read_bytes_ps);
-            disk_write_history.append(disk.write_bytes_ps);
-            net_rx_history.append(net.rx_bytes_ps);
-            net_tx_history.append(net.tx_bytes_ps);
+            if (!is_scrubbing) {
+                cpu_history.append(cpu.usage_percent);
+                mem_history.append(memoryUsagePercent(mem));
+                disk_read_history.append(disk.read_bytes_ps);
+                disk_write_history.append(disk.write_bytes_ps);
+                net_rx_history.append(net.rx_bytes_ps);
+                net_tx_history.append(net.tx_bytes_ps);
+            }
 
             if (cached_procs.len > 0) {
                 allocator.free(cached_procs);
@@ -357,6 +370,25 @@ pub fn main(main_init: std.process.Init) !void {
 
             last_fetch_time = current_time;
             force_redraw = true;
+
+            // Record snapshot for timeline scrubber
+            const tl_snap = timeline_mod.SystemSnapshot{
+                .timestamp_ms = current_time,
+                .cpu_usage_pct = cpu.usage_percent,
+                .cpu_cores = cpu.cores,
+                .mem = mem,
+                .mem_usage_pct = memoryUsagePercent(mem),
+                .disk = disk,
+                .net = net,
+                .thermal = thermal,
+                .battery = battery,
+            };
+            timeline.detectAndRecordEvents(&tl_snap, cached_procs);
+            // Only grow ring when not scrubbing; scrub_offset is relative to
+            // snap_count, so adding snapshots while scrubbing drifts the view.
+            if (!is_scrubbing) {
+                timeline.recordSnapshot(tl_snap, cached_procs);
+            }
         }
 
         if (force_redraw) {
@@ -436,11 +468,42 @@ pub fn main(main_init: std.process.Init) !void {
                 const procs_box_x: u16 = 1;
                 const procs_box_y: u16 = if (is_small_width) mem_box_y + mem_box_height else 2 + top_boxes_height;
                 const procs_box_width: u16 = size.width;
-                const procs_box_height: u16 = size.height -| procs_box_y -| 1;
+                // Reserve 1 row for the timeline bar when we have snapshot data
+                const timeline_bar_active = timeline.snapshotCount() >= 2;
+                const timeline_bar_y: u16 = size.height -| 1;
+                const procs_box_height: u16 = size.height -| procs_box_y -| 1 -| @as(u16, if (timeline_bar_active) 1 else 0);
                 var process_layout: render.ProcessTableLayout = .{};
 
+                // Build display state (live or from scrubbed snapshot)
+                var display_cpu = cpu;
+                var display_mem = mem;
+                var display_disk = disk;
+                var display_net = net;
+                var display_thermal = thermal;
+                var display_battery = battery;
+                scrub_proc_count = 0;
+
+                if (is_scrubbing) {
+                    if (timeline.getSnapshot(scrub_offset)) |snap| {
+                        display_cpu = .{
+                            .usage_percent = snap.cpu_usage_pct,
+                            .cores = snap.cpu_cores,
+                            .per_core_usage = &.{},
+                        };
+                        display_mem = snap.mem;
+                        display_disk = snap.disk;
+                        display_net = snap.net;
+                        display_thermal = snap.thermal;
+                        display_battery = snap.battery;
+                        scrub_proc_count = snap.proc_count;
+                        for (0..scrub_proc_count) |i| {
+                            scrub_proc_buf[i] = snap.procs[i];
+                        }
+                    }
+                }
+
                 if (current_tab == 1) {
-                    try render.renderCpuTopologyBox(&app_tui, theme, cpu_box_x, cpu_box_y, cpu_box_width, cpu_box_height, cpu, cpu_topology, &cpu_history, app_config.disable_history);
+                    try render.renderCpuTopologyBox(&app_tui, theme, cpu_box_x, cpu_box_y, cpu_box_width, cpu_box_height, display_cpu, cpu_topology, &cpu_history, app_config.disable_history);
 
                     // Memory Box
                     try app_tui.drawBoxStyled(
@@ -454,21 +517,21 @@ pub fn main(main_init: std.process.Init) !void {
                     );
 
                     if (mem_box_height >= 3) {
-                        const mem_used_percent = memoryUsagePercent(mem);
+                        const mem_used_percent = memoryUsagePercent(display_mem);
                         try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 1);
                         try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Used: ", .{});
-                        try app_tui.printStyled(.{ .fg = render.memoryColor(theme, mem_used_percent), .bold = true }, "{d} GB", .{mem.used / 1024 / 1024 / 1024});
-                        try app_tui.printStyled(.{ .fg = theme.muted }, " (C: {d}M B: {d}M)", .{ mem.cached / 1024 / 1024, mem.buffered / 1024 / 1024 });
+                        try app_tui.printStyled(.{ .fg = render.memoryColor(theme, mem_used_percent), .bold = true }, "{d} GB", .{display_mem.used / 1024 / 1024 / 1024});
+                        try app_tui.printStyled(.{ .fg = theme.muted }, " (C: {d}M B: {d}M)", .{ display_mem.cached / 1024 / 1024, display_mem.buffered / 1024 / 1024 });
                         try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 2);
                         try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Free: ", .{});
-                        try app_tui.printStyled(.{ .fg = theme.usage_good, .bold = true }, "{d} GB", .{mem.free / 1024 / 1024 / 1024});
-                        if (mem.swap_total > 0 and mem_box_height >= 4) {
+                        try app_tui.printStyled(.{ .fg = theme.usage_good, .bold = true }, "{d} GB", .{display_mem.free / 1024 / 1024 / 1024});
+                        if (display_mem.swap_total > 0 and mem_box_height >= 4) {
                             try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 3);
                             try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Swap: ", .{});
-                            try app_tui.printStyled(.{ .fg = theme.memory_mid }, "{d} MB / {d} MB", .{ mem.swap_used / 1024 / 1024, mem.swap_total / 1024 / 1024 });
+                            try app_tui.printStyled(.{ .fg = theme.memory_mid }, "{d} MB / {d} MB", .{ display_mem.swap_used / 1024 / 1024, display_mem.swap_total / 1024 / 1024 });
                         }
 
-                        const stats_rows: u16 = if (mem.swap_total > 0 and mem_box_height >= 4) 3 else 2;
+                        const stats_rows: u16 = if (display_mem.swap_total > 0 and mem_box_height >= 4) 3 else 2;
                         const graph_height = @min(
                             render.suggestedHistoryGraphRows(mem_box_height, app_config.disable_history),
                             mem_box_height -| (stats_rows + 2),
@@ -499,14 +562,14 @@ pub fn main(main_init: std.process.Init) !void {
                         .{
                             .label = "READ",
                             .short_label = "R ",
-                            .rate_bytes_ps = disk.read_bytes_ps,
+                            .rate_bytes_ps = display_disk.read_bytes_ps,
                             .history = &disk_read_history,
                             .color = theme.disk_title,
                         },
                         .{
                             .label = "WRITE",
                             .short_label = "W ",
-                            .rate_bytes_ps = disk.write_bytes_ps,
+                            .rate_bytes_ps = display_disk.write_bytes_ps,
                             .history = &disk_write_history,
                             .color = theme.io_rate,
                         },
@@ -525,16 +588,16 @@ pub fn main(main_init: std.process.Init) !void {
                         .{
                             .label = "RX",
                             .short_label = "RX ",
-                            .rate_bytes_ps = net.rx_bytes_ps,
-                            .total_bytes = net.rx_bytes,
+                            .rate_bytes_ps = display_net.rx_bytes_ps,
+                            .total_bytes = display_net.rx_bytes,
                             .history = &net_rx_history,
                             .color = theme.network_title,
                         },
                         .{
                             .label = "TX",
                             .short_label = "TX ",
-                            .rate_bytes_ps = net.tx_bytes_ps,
-                            .total_bytes = net.tx_bytes,
+                            .rate_bytes_ps = display_net.tx_bytes_ps,
+                            .total_bytes = display_net.tx_bytes,
                             .history = &net_tx_history,
                             .color = theme.io_rate,
                         },
@@ -553,7 +616,7 @@ pub fn main(main_init: std.process.Init) !void {
                     if (cpu_box_height >= 3) {
                         try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 1);
                         try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "CPU Temp: ", .{});
-                        if (thermal.cpu_temp) |t| {
+                        if (display_thermal.cpu_temp) |t| {
                             try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} C", .{t});
                         } else {
                             try app_tui.printStyled(.{ .fg = theme.muted }, "N/A", .{});
@@ -561,7 +624,7 @@ pub fn main(main_init: std.process.Init) !void {
                         if (cpu_box_height >= 4) {
                             try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 2);
                             try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "GPU Temp: ", .{});
-                            if (aggregateGpuTemp(thermal, cached_gpus)) |t| {
+                            if (aggregateGpuTemp(display_thermal, cached_gpus)) |t| {
                                 try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} C", .{t});
                             } else {
                                 try app_tui.printStyled(.{ .fg = theme.muted }, "N/A", .{});
@@ -570,7 +633,7 @@ pub fn main(main_init: std.process.Init) !void {
                         if (cpu_box_height >= 5) {
                             try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 3);
                             try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Charge: ", .{});
-                            if (battery.charge_percent) |c| {
+                            if (display_battery.charge_percent) |c| {
                                 try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1}%", .{c});
                             } else {
                                 try app_tui.printStyled(.{ .fg = theme.muted }, "N/A", .{});
@@ -579,7 +642,7 @@ pub fn main(main_init: std.process.Init) !void {
                         if (cpu_box_height >= 6) {
                             try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 4);
                             try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Power: ", .{});
-                            if (battery.power_draw_w) |w| {
+                            if (display_battery.power_draw_w) |w| {
                                 try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.2} W", .{w});
                             } else {
                                 try app_tui.printStyled(.{ .fg = theme.muted }, "N/A", .{});
@@ -588,7 +651,7 @@ pub fn main(main_init: std.process.Init) !void {
                         if (cpu_box_height >= 7) {
                             try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 5);
                             try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Status: ", .{});
-                            try app_tui.printStyled(.{ .fg = theme.text }, "{s}", .{batteryStatusLabel(battery.status)});
+                            try app_tui.printStyled(.{ .fg = theme.text }, "{s}", .{batteryStatusLabel(display_battery.status)});
                         }
                     }
 
@@ -685,12 +748,12 @@ pub fn main(main_init: std.process.Init) !void {
                     if (cpu_box_height >= 3) {
                         try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 1);
                         try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Rx: ", .{});
-                        const rx_ps = render.formatUnit(net.rx_bytes_ps);
+                        const rx_ps = render.formatUnit(display_net.rx_bytes_ps);
                         try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} {s}/s", .{ rx_ps.value, rx_ps.unit });
 
                         try app_tui.moveCursor(cpu_box_x + 22, cpu_box_y + 1);
                         try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Tx: ", .{});
-                        const tx_ps = render.formatUnit(net.tx_bytes_ps);
+                        const tx_ps = render.formatUnit(display_net.tx_bytes_ps);
                         try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} {s}/s", .{ tx_ps.value, tx_ps.unit });
                     }
                 }
@@ -885,7 +948,15 @@ pub fn main(main_init: std.process.Init) !void {
                         };
                         const current_process_columns = activeProcessColumns(current_tab, &process_columns, &io_process_columns);
                         const visible_column_count = current_process_columns.countVisible() + 1; // Name is always visible.
-                        const title = if (show_zombie_parents)
+                        const title = if (is_scrubbing) blk: {
+                            const newest = timeline.getSnapshot(0);
+                            const cur = timeline.getSnapshot(scrub_offset);
+                            if (newest != null and cur != null) {
+                                const delta_s = @divTrunc(newest.?.timestamp_ms - cur.?.timestamp_ms, 1000);
+                                break :blk std.fmt.bufPrint(&title_buf, "Processes [SCRUB T-{d}s] ({d} procs)", .{ delta_s, scrub_proc_count }) catch "Processes [SCRUB]";
+                            }
+                            break :blk @as([]const u8, "Processes [SCRUB]");
+                        } else if (show_zombie_parents)
                             std.fmt.bufPrint(
                                 &title_buf,
                                 "Zombie Parents ({d} parents / {d} zombies)",
@@ -906,66 +977,77 @@ pub fn main(main_init: std.process.Init) !void {
                             .{ .fg = theme.process_title, .bold = true },
                         );
 
-                        // Filtering
+                        // Filtering / proc source selection
                         filtered_count = 0;
-                        const filter_str = filter_buf[0..filter_len];
 
-                        if (tree_view and filter_len == 0 and !show_zombie_parents) {
-                            filtered_count = process_commands.buildTreeView(
-                                allocator,
-                                cached_procs,
-                                &filtered_indices,
-                                &filtered_depths,
-                                &filtered_is_lasts,
-                            );
+                        if (is_scrubbing) {
+                            // In scrub mode: show snapshot procs directly, no filtering
+                            for (0..scrub_proc_count) |i| {
+                                filtered_indices[i] = i;
+                                filtered_depths[i] = 0;
+                                filtered_is_lasts[i] = 0;
+                            }
+                            filtered_count = scrub_proc_count;
                         } else {
-                            var pid_buf2: [32]u8 = undefined;
-                            var l_name: [64]u8 = undefined;
-                            var l_filter: [32]u8 = undefined;
-                            // Pre-compute lowercased filter string once outside the loop
-                            if (filter_len > 0) {
-                                @memcpy(l_filter[0..filter_len], filter_str);
-                                for (l_filter[0..filter_len]) |*ch| ch.* = std.ascii.toLower(ch.*);
-                            }
-                            const f_str = l_filter[0..filter_len];
+                            const filter_str = filter_buf[0..filter_len];
 
-                            for (cached_procs, 0..) |proc, i| {
-                                if (show_zombie_parents and !process_commands.containsParentPid(zombie_parents[0..zombie_summary.parent_count], proc.pid)) {
-                                    continue;
-                                }
-
+                            if (tree_view and filter_len == 0 and !show_zombie_parents) {
+                                filtered_count = process_commands.buildTreeView(
+                                    allocator,
+                                    cached_procs,
+                                    &filtered_indices,
+                                    &filtered_depths,
+                                    &filtered_is_lasts,
+                                );
+                            } else {
+                                var pid_buf2: [32]u8 = undefined;
+                                var l_name: [64]u8 = undefined;
+                                var l_filter: [32]u8 = undefined;
+                                // Pre-compute lowercased filter string once outside the loop
                                 if (filter_len > 0) {
-                                    const pid_str = std.fmt.bufPrint(&pid_buf2, "{d}", .{proc.pid}) catch "";
-                                    const name_len = proc.name().len;
-                                    @memcpy(l_name[0..name_len], proc.name());
-                                    const n_str = l_name[0..name_len];
-                                    for (n_str) |*ch| ch.* = std.ascii.toLower(ch.*);
-
-                                    const name_matches = std.mem.indexOf(u8, n_str, f_str) != null;
-                                    const pid_matches = std.mem.indexOf(u8, pid_str, filter_str) != null;
-                                    if (!name_matches and !pid_matches) continue;
+                                    @memcpy(l_filter[0..filter_len], filter_str);
+                                    for (l_filter[0..filter_len]) |*ch| ch.* = std.ascii.toLower(ch.*);
                                 }
-                                filtered_indices[filtered_count] = i;
-                                filtered_depths[filtered_count] = 0;
-                                filtered_is_lasts[filtered_count] = 0;
-                                filtered_count += 1;
-                                if (filtered_count >= filtered_indices.len) break;
-                            }
-                        }
+                                const f_str = l_filter[0..filter_len];
 
-                        if (is_following and follow_pid != 0) {
-                            var found = false;
-                            for (0..filtered_count) |fi| {
-                                if (cached_procs[filtered_indices[fi]].pid == follow_pid) {
-                                    selected_idx = fi;
-                                    found = true;
-                                    break;
+                                for (cached_procs, 0..) |proc, i| {
+                                    if (show_zombie_parents and !process_commands.containsParentPid(zombie_parents[0..zombie_summary.parent_count], proc.pid)) {
+                                        continue;
+                                    }
+
+                                    if (filter_len > 0) {
+                                        const pid_str = std.fmt.bufPrint(&pid_buf2, "{d}", .{proc.pid}) catch "";
+                                        const name_len = proc.name().len;
+                                        @memcpy(l_name[0..name_len], proc.name());
+                                        const n_str = l_name[0..name_len];
+                                        for (n_str) |*ch| ch.* = std.ascii.toLower(ch.*);
+
+                                        const name_matches = std.mem.indexOf(u8, n_str, f_str) != null;
+                                        const pid_matches = std.mem.indexOf(u8, pid_str, filter_str) != null;
+                                        if (!name_matches and !pid_matches) continue;
+                                    }
+                                    filtered_indices[filtered_count] = i;
+                                    filtered_depths[filtered_count] = 0;
+                                    filtered_is_lasts[filtered_count] = 0;
+                                    filtered_count += 1;
+                                    if (filtered_count >= filtered_indices.len) break;
                                 }
                             }
-                            if (!found) {
-                                is_following = false;
-                                follow_pid = 0;
-                                render.setStatus(&status_buf, &status_len, "Followed process no longer visible", .{});
+
+                            if (is_following and follow_pid != 0) {
+                                var found = false;
+                                for (0..filtered_count) |fi| {
+                                    if (cached_procs[filtered_indices[fi]].pid == follow_pid) {
+                                        selected_idx = fi;
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if (!found) {
+                                    is_following = false;
+                                    follow_pid = 0;
+                                    render.setStatus(&status_buf, &status_len, "Followed process no longer visible", .{});
+                                }
                             }
                         }
 
@@ -996,7 +1078,7 @@ pub fn main(main_init: std.process.Init) !void {
                             const idx = scroll_offset + row;
                             if (idx >= filtered_count) break;
                             const proc_idx = filtered_indices[idx];
-                            const proc = cached_procs[proc_idx];
+                            const proc = if (is_scrubbing) scrub_proc_buf[proc_idx] else cached_procs[proc_idx];
 
                             const is_selected = (idx == selected_idx) and !show_help;
 
@@ -1049,7 +1131,7 @@ pub fn main(main_init: std.process.Init) !void {
                 // Help Overlay
                 if (show_help) {
                     const help_width = 48;
-                    const help_height = 17;
+                    const help_height = 18;
                     const h_x = if (size.width > help_width) (size.width - help_width) / 2 else 1;
                     const h_y = if (size.height > help_height) (size.height - help_height) / 2 else 1;
 
@@ -1101,18 +1183,22 @@ pub fn main(main_init: std.process.Init) !void {
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Follow selected process", .{});
 
                     try app_tui.moveCursor(h_x + 2, h_y + 12);
+                    try app_tui.printStyled(.{ .fg = theme.text }, "T:            ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Timeline scrubber (← → to scrub)", .{});
+
+                    try app_tui.moveCursor(h_x + 2, h_y + 13);
                     try app_tui.printStyled(.{ .fg = theme.text }, "q:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Quit", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 13);
+                    try app_tui.moveCursor(h_x + 2, h_y + 14);
                     try app_tui.printStyled(.{ .fg = theme.text }, ":             ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Command mode (show zombie)", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 14);
+                    try app_tui.moveCursor(h_x + 2, h_y + 15);
                     try app_tui.printStyled(.{ .fg = theme.text }, "Repo: ", .{});
                     try app_tui.writeStyledHyperlink(.{ .fg = theme.tab_active, .underline = true }, repo_url, repo_label);
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 15);
+                    try app_tui.moveCursor(h_x + 2, h_y + 16);
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Press any key to close...", .{});
                 }
 
@@ -1148,9 +1234,30 @@ pub fn main(main_init: std.process.Init) !void {
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Press 1-8 to toggle, Enter/Esc to close", .{});
                 }
 
+                // Timeline bar (above footer when snapshot data exists)
+                if (timeline_bar_active) {
+                    try render.renderTimelineBar(
+                        &app_tui,
+                        theme,
+                        1,
+                        timeline_bar_y,
+                        size.width,
+                        timeline,
+                        scrub_offset,
+                        is_scrubbing,
+                    );
+                }
+
                 // Footer
                 try app_tui.moveCursor(1, size.height);
-                if (is_cmd_mode) {
+                if (is_scrubbing) {
+                    try app_tui.printStyled(.{ .fg = theme.usage_warn, .bold = true }, "◀◀ SCRUB  ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "← older  → newer  ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "T", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "/", .{});
+                    try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "Esc", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, " resume live", .{});
+                } else if (is_cmd_mode) {
                     try app_tui.printStyled(.{ .fg = theme.command_prompt, .bold = true }, ":", .{});
                     try app_tui.printStyled(.{ .fg = theme.text }, "{s}", .{cmd_buf[0..cmd_len]});
                     try app_tui.printStyled(.{ .fg = theme.muted }, " (Press Enter to execute, Esc to cancel)", .{});
@@ -1244,6 +1351,9 @@ pub fn main(main_init: std.process.Init) !void {
                 .input_len = &input_len,
                 .process_columns = &process_columns,
                 .io_process_columns = &io_process_columns,
+                .is_scrubbing = &is_scrubbing,
+                .scrub_offset = &scrub_offset,
+                .timeline = timeline,
             };
             force_redraw = try input_handler.handleAvailableInput(&input_ctx);
         }
