@@ -6,3 +6,4 @@ pub const process_commands = @import("process_commands.zig");
 pub const input_handler = @import("input_handler.zig");
 pub const history = @import("history.zig");
 pub const render = @import("render.zig");
+pub const timeline = @import("timeline.zig");
