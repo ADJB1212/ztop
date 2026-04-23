@@ -23,7 +23,7 @@ Built for people who want a focused dashboard in the terminal: quick enough to k
   - Apple Silicon via IORegistry accelerator performance statistics
 - Dynamic process-table columns with an in-app picker (PID, PPID, state, CPU, memory, threads, disk rates)
 - Mouse support for tab switching, list navigation, and scrolling
-- Timeline scrubbing mode to inspect recent snapshots without pausing live collection
+- Timeline scrubbing with incident bookmarks: pause live view, scrub through recent history, and drop named markers to jump back to interesting moments
 - Built-in process actions: `SIGTERM`, `SIGKILL`, `:killall`, `:show zombie`, `:search`
 - Responsive layout for narrow terminals
 - Configurable refresh interval, default sort, theme, and per-color overrides
@@ -89,13 +89,18 @@ ztop [--version] [--help]
 | `T`                     | Toggle timeline scrubbing mode (requires enough collected history)    |
 | `←` / `→`               | While scrubbing: move older/newer by one snapshot                     |
 | `[` / `]`               | While scrubbing: jump older/newer by 10 snapshots                     |
+| `b`                     | While scrubbing: drop a bookmark at the current position              |
+| `B`                     | While scrubbing: remove the nearest bookmark                          |
+| `{` / `}`               | While scrubbing: jump to previous/next bookmark                       |
 | `t`                     | Send `SIGTERM` to the selected process                                |
 | `K`                     | Send `SIGKILL` to the selected process                                |
 | `?`                     | Open help overlay                                                     |
 | `q`                     | Quit                                                                  |
 
 While scrubbing is active, destructive process actions and view-mutating actions are disabled until you exit scrubbing.
-Press `Esc` to leave scrubbing and return to live view.
+Press `Esc` or `T` to leave scrubbing and return to live view.
+
+Bookmarks persist for the session (up to 10). They appear as `▼` markers on the timeline bar. Use `b` to mark a moment of interest, `{`/`}` to hop between them, and `B` to remove the one nearest the cursor.
 
 ### Command Mode
 

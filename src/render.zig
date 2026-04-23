@@ -1012,7 +1012,18 @@ pub fn renderTimelineBar(
             }
 
             if (is_cursor) {
-                try app_tui.writeStyled(.{ .bg = theme.selection_bg, .fg = theme.selection_fg, .bold = true }, "|");
+                // Show combined cursor+bookmark indicator if bookmarked
+                if (tl.hasBookmarkAtAbsIndex(abs_idx)) {
+                    try app_tui.writeStyled(.{ .bg = theme.tab_active, .fg = theme.selection_fg, .bold = true }, "▼");
+                } else {
+                    try app_tui.writeStyled(.{ .bg = theme.selection_bg, .fg = theme.selection_fg, .bold = true }, "|");
+                }
+                continue;
+            }
+
+            // Bookmark marker (priority over events)
+            if (tl.hasBookmarkAtAbsIndex(abs_idx)) {
+                try app_tui.writeStyled(.{ .fg = theme.tab_active, .bold = true }, "▼");
                 continue;
             }
 

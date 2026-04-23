@@ -5,6 +5,13 @@ pub const MAX_SNAPSHOTS: usize = 180; // ~3 min at 1s intervals
 pub const MAX_EVENTS: usize = 500;
 pub const MAX_SNAPSHOT_PROCS: usize = 32;
 pub const MAX_BIRTH_DEATH_PER_TICK: usize = 8;
+pub const MAX_BOOKMARKS: usize = 10;
+
+pub const Bookmark = struct {
+    timestamp_ms: i64 = 0,
+    /// Snapshot absolute index (from oldest = 0) at time of creation.
+    snap_abs_idx: usize = 0,
+};
 
 pub const EventKind = enum(u8) {
     cpu_spike,
@@ -96,6 +103,10 @@ pub const Timeline = struct {
     disk_spike_cooldown: u8,
     net_spike_cooldown: u8,
 
+    // Incident bookmarks
+    bookmarks: [MAX_BOOKMARKS]Bookmark,
+    bookmark_count: usize,
+
     pub fn init() Timeline {
         return .{
             .snapshots = undefined,
@@ -112,6 +123,8 @@ pub const Timeline = struct {
             .thermal_cooldown = 0,
             .disk_spike_cooldown = 0,
             .net_spike_cooldown = 0,
+            .bookmarks = undefined,
+            .bookmark_count = 0,
         };
     }
 
@@ -291,6 +304,120 @@ pub const Timeline = struct {
             return std.fmt.bufPrint(buf, "{d}m", .{m}) catch "?m";
         }
         return std.fmt.bufPrint(buf, "{d}m{d}s", .{ m, rem }) catch "?";
+    }
+
+    /// Add a bookmark at the given scrub offset (0 = newest).
+    /// Returns true if added, false if full or duplicate.
+    pub fn addBookmark(self: *Timeline, scrub_offset: usize) bool {
+        if (self.bookmark_count >= MAX_BOOKMARKS or self.snap_count == 0) return false;
+        if (scrub_offset >= self.snap_count) return false;
+
+        const snap = self.getSnapshot(scrub_offset) orelse return false;
+        const ts = snap.timestamp_ms;
+
+        // Reject duplicate: same timestamp within 1s of existing bookmark
+        for (self.bookmarks[0..self.bookmark_count]) |bm| {
+            const diff = if (ts > bm.timestamp_ms) ts - bm.timestamp_ms else bm.timestamp_ms - ts;
+            if (diff < 1000) return false;
+        }
+
+        self.bookmarks[self.bookmark_count] = .{
+            .timestamp_ms = ts,
+            .snap_abs_idx = self.snap_count - 1 - scrub_offset,
+        };
+        self.bookmark_count += 1;
+        return true;
+    }
+
+    /// Remove the bookmark nearest to the given scrub offset.
+    /// Returns true if a bookmark was removed.
+    pub fn removeBookmarkNearest(self: *Timeline, scrub_offset: usize) bool {
+        if (self.bookmark_count == 0 or self.snap_count == 0) return false;
+        const snap = self.getSnapshot(scrub_offset) orelse return false;
+        const ts = snap.timestamp_ms;
+
+        var best_idx: usize = 0;
+        var best_diff: i64 = std.math.maxInt(i64);
+        for (self.bookmarks[0..self.bookmark_count], 0..) |bm, i| {
+            const diff = if (ts > bm.timestamp_ms) ts - bm.timestamp_ms else bm.timestamp_ms - ts;
+            if (diff < best_diff) {
+                best_diff = diff;
+                best_idx = i;
+            }
+        }
+
+        // Remove by swapping with last
+        self.bookmark_count -= 1;
+        if (best_idx < self.bookmark_count) {
+            self.bookmarks[best_idx] = self.bookmarks[self.bookmark_count];
+        }
+        return true;
+    }
+
+    /// Convert a bookmark's timestamp to a current scrub offset.
+    /// Returns null if the snapshot has been evicted from the ring buffer.
+    fn bookmarkToOffset(self: *const Timeline, bm: Bookmark) ?usize {
+        if (self.snap_count == 0) return null;
+        // Find snapshot closest to bookmark timestamp
+        var best_offset: usize = 0;
+        var best_diff: i64 = std.math.maxInt(i64);
+        for (0..self.snap_count) |offset| {
+            const snap = self.getSnapshot(offset) orelse continue;
+            const diff = if (snap.timestamp_ms > bm.timestamp_ms)
+                snap.timestamp_ms - bm.timestamp_ms
+            else
+                bm.timestamp_ms - snap.timestamp_ms;
+            if (diff < best_diff) {
+                best_diff = diff;
+                best_offset = offset;
+            }
+        }
+        // Only match if within 2s (snapshot may have been evicted)
+        if (best_diff > 2000) return null;
+        return best_offset;
+    }
+
+    /// Jump to next bookmark (toward present / lower offset) from current scrub_offset.
+    /// Returns new scrub_offset, or null if no bookmark toward present.
+    pub fn nextBookmarkOffset(self: *const Timeline, current_offset: usize) ?usize {
+        var best: ?usize = null;
+        for (self.bookmarks[0..self.bookmark_count]) |bm| {
+            const offset = self.bookmarkToOffset(bm) orelse continue;
+            if (offset < current_offset) {
+                if (best == null or offset > best.?) {
+                    best = offset;
+                }
+            }
+        }
+        return best;
+    }
+
+    /// Jump to prev bookmark (toward past / higher offset) from current scrub_offset.
+    /// Returns new scrub_offset, or null if no bookmark toward past.
+    pub fn prevBookmarkOffset(self: *const Timeline, current_offset: usize) ?usize {
+        var best: ?usize = null;
+        for (self.bookmarks[0..self.bookmark_count]) |bm| {
+            const offset = self.bookmarkToOffset(bm) orelse continue;
+            if (offset > current_offset) {
+                if (best == null or offset < best.?) {
+                    best = offset;
+                }
+            }
+        }
+        return best;
+    }
+
+    /// Check if a bookmark exists at a given absolute snapshot index.
+    /// Used by the timeline bar renderer to show bookmark markers.
+    pub fn hasBookmarkAtAbsIndex(self: *const Timeline, abs_idx: usize) bool {
+        if (self.snap_count == 0) return false;
+        const snap = self.getSnapshotAtIndex(abs_idx) orelse return false;
+        const ts = snap.timestamp_ms;
+        for (self.bookmarks[0..self.bookmark_count]) |bm| {
+            const diff = if (ts > bm.timestamp_ms) ts - bm.timestamp_ms else bm.timestamp_ms - ts;
+            if (diff < 1000) return true;
+        }
+        return false;
     }
 
     /// Collect events near a snapshot (within ±1 second). Returns count written.

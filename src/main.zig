@@ -1133,7 +1133,7 @@ pub fn main(main_init: std.process.Init) !void {
                 // Help Overlay
                 if (show_help) {
                     const help_width = 48;
-                    const help_height = 18;
+                    const help_height = 19;
                     const h_x = if (size.width > help_width) (size.width - help_width) / 2 else 1;
                     const h_y = if (size.height > help_height) (size.height - help_height) / 2 else 1;
 
@@ -1189,18 +1189,22 @@ pub fn main(main_init: std.process.Init) !void {
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Timeline scrub (←→ step, [] jump)", .{});
 
                     try app_tui.moveCursor(h_x + 2, h_y + 13);
+                    try app_tui.printStyled(.{ .fg = theme.text }, "b/B, {{}}/{{}}:   ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Bookmark add/del, jump prev/next", .{});
+
+                    try app_tui.moveCursor(h_x + 2, h_y + 14);
                     try app_tui.printStyled(.{ .fg = theme.text }, "q:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Quit", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 14);
+                    try app_tui.moveCursor(h_x + 2, h_y + 15);
                     try app_tui.printStyled(.{ .fg = theme.text }, ":             ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Command mode (show zombie)", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 15);
+                    try app_tui.moveCursor(h_x + 2, h_y + 16);
                     try app_tui.printStyled(.{ .fg = theme.text }, "Repo: ", .{});
                     try app_tui.writeStyledHyperlink(.{ .fg = theme.tab_active, .underline = true }, repo_url, repo_label);
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 16);
+                    try app_tui.moveCursor(h_x + 2, h_y + 17);
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Press any key to close...", .{});
                 }
 
@@ -1268,6 +1272,14 @@ pub fn main(main_init: std.process.Init) !void {
                         }
                     } else {
                         try app_tui.printStyled(.{ .fg = theme.muted }, "←/→ scrub  [/] fast  ", .{});
+                        try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "b", .{});
+                        try app_tui.printStyled(.{ .fg = theme.muted }, " mark  ", .{});
+                        if (timeline.bookmark_count > 0) {
+                            try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "B", .{});
+                            try app_tui.printStyled(.{ .fg = theme.muted }, " del  ", .{});
+                            try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "{{}}", .{});
+                            try app_tui.printStyled(.{ .fg = theme.muted }, " jump  ", .{});
+                        }
                     }
                     try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "T", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "/", .{});

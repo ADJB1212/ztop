@@ -441,6 +441,52 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
                 }
                 return true;
             },
+            'b' => {
+                // Drop bookmark at current scrub position
+                if (ctx.is_scrubbing.*) {
+                    if (ctx.timeline.addBookmark(ctx.scrub_offset.*)) {
+                        render.setStatus(ctx.status_buf, ctx.status_len, "Bookmark added ({d}/{d})", .{ ctx.timeline.bookmark_count, timeline_mod.MAX_BOOKMARKS });
+                    } else if (ctx.timeline.bookmark_count >= timeline_mod.MAX_BOOKMARKS) {
+                        render.setStatus(ctx.status_buf, ctx.status_len, "Max bookmarks reached ({d})", .{timeline_mod.MAX_BOOKMARKS});
+                    } else {
+                        render.setStatus(ctx.status_buf, ctx.status_len, "Bookmark already exists here", .{});
+                    }
+                }
+                return true;
+            },
+            'B' => {
+                // Remove nearest bookmark
+                if (ctx.is_scrubbing.*) {
+                    if (ctx.timeline.removeBookmarkNearest(ctx.scrub_offset.*)) {
+                        render.setStatus(ctx.status_buf, ctx.status_len, "Bookmark removed ({d} remaining)", .{ctx.timeline.bookmark_count});
+                    } else {
+                        render.setStatus(ctx.status_buf, ctx.status_len, "No bookmarks to remove", .{});
+                    }
+                }
+                return true;
+            },
+            '{' => {
+                // Jump to previous bookmark (further into past)
+                if (ctx.is_scrubbing.*) {
+                    if (ctx.timeline.prevBookmarkOffset(ctx.scrub_offset.*)) |offset| {
+                        ctx.scrub_offset.* = offset;
+                    } else {
+                        render.setStatus(ctx.status_buf, ctx.status_len, "No older bookmark", .{});
+                    }
+                }
+                return true;
+            },
+            '}' => {
+                // Jump to next bookmark (toward present)
+                if (ctx.is_scrubbing.*) {
+                    if (ctx.timeline.nextBookmarkOffset(ctx.scrub_offset.*)) |offset| {
+                        ctx.scrub_offset.* = offset;
+                    } else {
+                        render.setStatus(ctx.status_buf, ctx.status_len, "No newer bookmark", .{});
+                    }
+                }
+                return true;
+            },
             'l' => {
                 if (!ctx.thread_view.* and !ctx.is_scrubbing.* and ctx.filtered_count.* > 0) {
                     if (ctx.is_following.*) {
