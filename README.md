@@ -23,7 +23,7 @@ Built for people who want a focused dashboard in the terminal: quick enough to k
   - Apple Silicon via IORegistry accelerator performance statistics
 - Dynamic process-table columns with an in-app picker (PID, PPID, state, CPU, memory, threads, disk rates)
 - Mouse support for tab switching, list navigation, and scrolling
-- Timeline scrubbing with incident bookmarks: pause live view, scrub through recent history, and drop named markers to jump back to interesting moments
+- Timeline scrubbing with incident bookmarks and before/after diff: pause live view, scrub through recent history, drop markers to jump back to interesting moments, and compare two captured snapshots side-by-side
 - Built-in process actions: `SIGTERM`, `SIGKILL`, `:killall`, `:show zombie`, `:search`
 - Responsive layout for narrow terminals
 - Configurable refresh interval, default sort, theme, and per-color overrides
@@ -92,6 +92,7 @@ ztop [--version] [--help]
 | `b`                     | While scrubbing: drop a bookmark at the current position              |
 | `B`                     | While scrubbing: remove the nearest bookmark                          |
 | `{` / `}`               | While scrubbing: jump to previous/next bookmark                       |
+| `d`                     | While scrubbing: toggle diff view (set anchor, then navigate to compare) |
 | `t`                     | Send `SIGTERM` to the selected process                                |
 | `K`                     | Send `SIGKILL` to the selected process                                |
 | `?`                     | Open help overlay                                                     |
@@ -101,6 +102,8 @@ While scrubbing is active, destructive process actions and view-mutating actions
 Press `Esc` or `T` to leave scrubbing and return to live view.
 
 Bookmarks persist for the session (up to 10). They appear as `▼` markers on the timeline bar. Use `b` to mark a moment of interest, `{`/`}` to hop between them, and `B` to remove the one nearest the cursor.
+
+Press `d` while scrubbing to set a diff anchor at the current position. Then navigate to another moment — the view changes to a before/after comparison showing CPU, memory, disk, network, temperature deltas and the processes that changed the most. The anchor appears as `◆` on the timeline bar. Press `d` or `Esc` to exit the diff view.
 
 ### Command Mode
 

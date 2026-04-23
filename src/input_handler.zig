@@ -118,6 +118,7 @@ pub const Context = struct {
     is_scrubbing: *bool,
     scrub_offset: *usize,
     timeline: *timeline_mod.Timeline,
+    diff_anchor: *?usize,
 };
 
 pub fn handleAvailableInput(ctx: *Context) !bool {
@@ -487,6 +488,19 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
                 }
                 return true;
             },
+            'd' => {
+                // Toggle diff anchor for before/after comparison
+                if (ctx.is_scrubbing.*) {
+                    if (ctx.diff_anchor.* != null) {
+                        ctx.diff_anchor.* = null;
+                        render.setStatus(ctx.status_buf, ctx.status_len, "Diff view closed", .{});
+                    } else {
+                        ctx.diff_anchor.* = ctx.scrub_offset.*;
+                        render.setStatus(ctx.status_buf, ctx.status_len, "Diff anchor set. Navigate to compare point", .{});
+                    }
+                }
+                return true;
+            },
             'l' => {
                 if (!ctx.thread_view.* and !ctx.is_scrubbing.* and ctx.filtered_count.* > 0) {
                     if (ctx.is_following.*) {
@@ -593,7 +607,9 @@ fn enterThreadView(ctx: *Context) !void {
 }
 
 fn clearCurrentView(ctx: *Context) void {
-    if (ctx.is_scrubbing.*) {
+    if (ctx.diff_anchor.* != null) {
+        ctx.diff_anchor.* = null;
+    } else if (ctx.is_scrubbing.*) {
         ctx.is_scrubbing.* = false;
         ctx.scrub_offset.* = 0;
     } else if (ctx.thread_view.*) {

@@ -285,6 +285,7 @@ pub fn main(main_init: std.process.Init) !void {
     timeline.* = timeline_mod.Timeline.init();
     var is_scrubbing: bool = false;
     var scrub_offset: usize = 0;
+    var diff_anchor: ?usize = null;
     // Buffer for snapshot procs when displaying scrubbed view
     var scrub_proc_buf: [timeline_mod.MAX_SNAPSHOT_PROCS]ztop.sysinfo.ProcStats = undefined;
     var scrub_proc_count: usize = 0;
@@ -502,7 +503,18 @@ pub fn main(main_init: std.process.Init) !void {
                     }
                 }
 
-                if (current_tab == 1) {
+                // Before/After Diff View (replaces normal content when active)
+                const diff_active = is_scrubbing and diff_anchor != null;
+                if (diff_active) {
+                    if (timeline.computeDiff(diff_anchor.?, scrub_offset)) |snap_diff| {
+                        const diff_box_height = size.height -| 2 -| 1 -| @as(u16, if (timeline_bar_active) 1 else 0);
+                        try render.renderDiffView(&app_tui, theme, 1, 2, size.width, diff_box_height, snap_diff);
+                    }
+                }
+
+                if (diff_active) {
+                    // Diff view already rendered above; skip normal tab content
+                } else if (current_tab == 1) {
                     try render.renderCpuTopologyBox(&app_tui, theme, cpu_box_x, cpu_box_y, cpu_box_width, cpu_box_height, display_cpu, cpu_topology, &cpu_history, app_config.disable_history);
 
                     // Memory Box
@@ -1133,7 +1145,7 @@ pub fn main(main_init: std.process.Init) !void {
                 // Help Overlay
                 if (show_help) {
                     const help_width = 48;
-                    const help_height = 19;
+                    const help_height = 20;
                     const h_x = if (size.width > help_width) (size.width - help_width) / 2 else 1;
                     const h_y = if (size.height > help_height) (size.height - help_height) / 2 else 1;
 
@@ -1193,18 +1205,22 @@ pub fn main(main_init: std.process.Init) !void {
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Bookmark add/del, jump prev/next", .{});
 
                     try app_tui.moveCursor(h_x + 2, h_y + 14);
+                    try app_tui.printStyled(.{ .fg = theme.text }, "d:            ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Diff view (compare two moments)", .{});
+
+                    try app_tui.moveCursor(h_x + 2, h_y + 15);
                     try app_tui.printStyled(.{ .fg = theme.text }, "q:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Quit", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 15);
+                    try app_tui.moveCursor(h_x + 2, h_y + 16);
                     try app_tui.printStyled(.{ .fg = theme.text }, ":             ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Command mode (show zombie)", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 16);
+                    try app_tui.moveCursor(h_x + 2, h_y + 17);
                     try app_tui.printStyled(.{ .fg = theme.text }, "Repo: ", .{});
                     try app_tui.writeStyledHyperlink(.{ .fg = theme.tab_active, .underline = true }, repo_url, repo_label);
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 17);
+                    try app_tui.moveCursor(h_x + 2, h_y + 18);
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Press any key to close...", .{});
                 }
 
@@ -1251,12 +1267,20 @@ pub fn main(main_init: std.process.Init) !void {
                         timeline,
                         scrub_offset,
                         is_scrubbing,
+                        diff_anchor,
                     );
                 }
 
                 // Footer
                 try app_tui.moveCursor(1, size.height);
-                if (is_scrubbing) {
+                if (diff_active) {
+                    try app_tui.printStyled(.{ .fg = theme.usage_warn, .bold = true }, "◆ DIFF  ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "←/→ move compare point  ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "d", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "/", .{});
+                    try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "Esc", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, " close diff", .{});
+                } else if (is_scrubbing) {
                     try app_tui.printStyled(.{ .fg = theme.usage_warn, .bold = true }, "◀◀ SCRUB  ", .{});
                     // Show events near scrub cursor
                     var ev_out: [4]timeline_mod.TimelineEvent = undefined;
@@ -1281,6 +1305,8 @@ pub fn main(main_init: std.process.Init) !void {
                             try app_tui.printStyled(.{ .fg = theme.muted }, " jump  ", .{});
                         }
                     }
+                    try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "d", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, " diff  ", .{});
                     try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "T", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "/", .{});
                     try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "Esc", .{});
@@ -1382,6 +1408,7 @@ pub fn main(main_init: std.process.Init) !void {
                 .is_scrubbing = &is_scrubbing,
                 .scrub_offset = &scrub_offset,
                 .timeline = timeline,
+                .diff_anchor = &diff_anchor,
             };
             force_redraw = try input_handler.handleAvailableInput(&input_ctx);
         }

@@ -13,6 +13,60 @@ pub const Bookmark = struct {
     snap_abs_idx: usize = 0,
 };
 
+pub const MAX_DIFF_PROCS: usize = 16;
+
+pub const ProcDiffKind = enum {
+    appeared,
+    disappeared,
+    changed,
+};
+
+pub const ProcDiffEntry = struct {
+    kind: ProcDiffKind,
+    name_buf: [64]u8 = std.mem.zeroes([64]u8),
+    name_len: u8 = 0,
+    pid: u32 = 0,
+    cpu_before: f32 = 0,
+    cpu_after: f32 = 0,
+    mem_before: f32 = 0,
+    mem_after: f32 = 0,
+
+    pub fn name(self: *const ProcDiffEntry) []const u8 {
+        return self.name_buf[0..self.name_len];
+    }
+
+    /// Absolute magnitude of change for sorting (CPU delta + mem delta).
+    pub fn magnitude(self: *const ProcDiffEntry) f32 {
+        return @abs(self.cpu_after - self.cpu_before) + @abs(self.mem_after - self.mem_before);
+    }
+};
+
+pub const SnapshotDiff = struct {
+    time_delta_ms: i64 = 0,
+
+    // System metric deltas (after - before)
+    cpu_before: f32 = 0,
+    cpu_after: f32 = 0,
+    mem_before_pct: f32 = 0,
+    mem_after_pct: f32 = 0,
+    mem_before: common.MemStats = .{ .total = 0, .used = 0, .free = 0 },
+    mem_after: common.MemStats = .{ .total = 0, .used = 0, .free = 0 },
+    disk_read_before: u64 = 0,
+    disk_read_after: u64 = 0,
+    disk_write_before: u64 = 0,
+    disk_write_after: u64 = 0,
+    net_rx_before: u64 = 0,
+    net_rx_after: u64 = 0,
+    net_tx_before: u64 = 0,
+    net_tx_after: u64 = 0,
+    temp_before: ?f32 = null,
+    temp_after: ?f32 = null,
+
+    // Process changes sorted by magnitude
+    proc_diffs: [MAX_DIFF_PROCS]ProcDiffEntry = undefined,
+    proc_diff_count: usize = 0,
+};
+
 pub const EventKind = enum(u8) {
     cpu_spike,
     mem_pressure,
@@ -439,5 +493,112 @@ pub const Timeline = struct {
             }
         }
         return count;
+    }
+
+    /// Compute a diff between two snapshots identified by scrub offsets.
+    /// anchor_offset is the "before" point, cursor_offset is the "after" point.
+    /// If anchor is more recent (lower offset), they are swapped so before < after in time.
+    pub fn computeDiff(self: *const Timeline, anchor_offset: usize, cursor_offset: usize) ?SnapshotDiff {
+        const before_snap = self.getSnapshot(@max(anchor_offset, cursor_offset)) orelse return null;
+        const after_snap = self.getSnapshot(@min(anchor_offset, cursor_offset)) orelse return null;
+
+        var diff: SnapshotDiff = .{};
+        diff.time_delta_ms = after_snap.timestamp_ms - before_snap.timestamp_ms;
+
+        // System metrics
+        diff.cpu_before = before_snap.cpu_usage_pct;
+        diff.cpu_after = after_snap.cpu_usage_pct;
+        diff.mem_before_pct = before_snap.mem_usage_pct;
+        diff.mem_after_pct = after_snap.mem_usage_pct;
+        diff.mem_before = before_snap.mem;
+        diff.mem_after = after_snap.mem;
+        diff.disk_read_before = before_snap.disk.read_bytes_ps;
+        diff.disk_read_after = after_snap.disk.read_bytes_ps;
+        diff.disk_write_before = before_snap.disk.write_bytes_ps;
+        diff.disk_write_after = after_snap.disk.write_bytes_ps;
+        diff.net_rx_before = before_snap.net.rx_bytes_ps;
+        diff.net_rx_after = after_snap.net.rx_bytes_ps;
+        diff.net_tx_before = before_snap.net.tx_bytes_ps;
+        diff.net_tx_after = after_snap.net.tx_bytes_ps;
+        diff.temp_before = before_snap.thermal.cpu_temp;
+        diff.temp_after = after_snap.thermal.cpu_temp;
+
+        // Process diffs
+        const before_procs = before_snap.procs[0..before_snap.proc_count];
+        const after_procs = after_snap.procs[0..after_snap.proc_count];
+
+        // Changed/disappeared: processes in before
+        for (before_procs) |bp| {
+            if (diff.proc_diff_count >= MAX_DIFF_PROCS) break;
+            var found = false;
+            for (after_procs) |ap| {
+                if (ap.pid == bp.pid) {
+                    found = true;
+                    // Only include if there's meaningful change
+                    const cpu_delta = @abs(ap.cpu_percent - bp.cpu_percent);
+                    const mem_delta = @abs(ap.mem_percent - bp.mem_percent);
+                    if (cpu_delta >= 1.0 or mem_delta >= 0.5) {
+                        var entry = ProcDiffEntry{
+                            .kind = .changed,
+                            .pid = bp.pid,
+                            .cpu_before = bp.cpu_percent,
+                            .cpu_after = ap.cpu_percent,
+                            .mem_before = bp.mem_percent,
+                            .mem_after = ap.mem_percent,
+                        };
+                        entry.name_len = bp.name_len;
+                        @memcpy(entry.name_buf[0..bp.name_len], bp.name_buf[0..bp.name_len]);
+                        diff.proc_diffs[diff.proc_diff_count] = entry;
+                        diff.proc_diff_count += 1;
+                    }
+                    break;
+                }
+            }
+            if (!found and diff.proc_diff_count < MAX_DIFF_PROCS) {
+                var entry = ProcDiffEntry{
+                    .kind = .disappeared,
+                    .pid = bp.pid,
+                    .cpu_before = bp.cpu_percent,
+                    .mem_before = bp.mem_percent,
+                };
+                entry.name_len = bp.name_len;
+                @memcpy(entry.name_buf[0..bp.name_len], bp.name_buf[0..bp.name_len]);
+                diff.proc_diffs[diff.proc_diff_count] = entry;
+                diff.proc_diff_count += 1;
+            }
+        }
+
+        // Appeared: processes in after but not in before
+        for (after_procs) |ap| {
+            if (diff.proc_diff_count >= MAX_DIFF_PROCS) break;
+            var found = false;
+            for (before_procs) |bp| {
+                if (bp.pid == ap.pid) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                var entry = ProcDiffEntry{
+                    .kind = .appeared,
+                    .pid = ap.pid,
+                    .cpu_after = ap.cpu_percent,
+                    .mem_after = ap.mem_percent,
+                };
+                entry.name_len = ap.name_len;
+                @memcpy(entry.name_buf[0..ap.name_len], ap.name_buf[0..ap.name_len]);
+                diff.proc_diffs[diff.proc_diff_count] = entry;
+                diff.proc_diff_count += 1;
+            }
+        }
+
+        // Sort by magnitude descending
+        std.mem.sort(ProcDiffEntry, diff.proc_diffs[0..diff.proc_diff_count], {}, struct {
+            fn lessThan(_: void, a: ProcDiffEntry, b: ProcDiffEntry) bool {
+                return a.magnitude() > b.magnitude();
+            }
+        }.lessThan);
+
+        return diff;
     }
 };
