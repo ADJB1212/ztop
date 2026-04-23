@@ -238,6 +238,7 @@ pub const Config = struct {
     ignore_launch_cmd_substr_len: u16,
     nerd_fonts: bool,
     disable_history: bool,
+    persist_session: bool,
 
     pub fn defaults() Config {
         return .{
@@ -256,6 +257,7 @@ pub const Config = struct {
             .ignore_launch_cmd_substr_len = 0,
             .nerd_fonts = false,
             .disable_history = false,
+            .persist_session = false,
         };
     }
 
@@ -647,6 +649,14 @@ fn applyEntry(config: *Config, raw_key: []const u8, raw_value: []const u8) !void
         return;
     }
 
+    if (std.mem.eql(u8, key, "persist_session") or
+        std.mem.eql(u8, key, "session_recovery") or
+        std.mem.eql(u8, key, "crash_recovery"))
+    {
+        config.persist_session = try parseBool(value);
+        return;
+    }
+
     if (std.mem.eql(u8, key, "default_tree_view") or
         std.mem.eql(u8, key, "tree_view") or
         std.mem.eql(u8, key, "start_in_tree_view"))
@@ -714,6 +724,19 @@ fn defaultConfigPath(allocator: std.mem.Allocator, environ_map: *const std.proce
         return try std.fs.path.join(allocator, &.{ home, ".config", "ztop.cfg" });
     }
 
+    return null;
+}
+
+/// Returns the default path for the session recovery file, or null if HOME is unavailable.
+/// Follows XDG_CACHE_HOME if set; otherwise uses `$HOME/.cache/ztop/session.bin`.
+/// Caller owns the returned slice and should free it with `allocator.free`.
+pub fn defaultSessionPath(allocator: std.mem.Allocator, environ_map: *const std.process.Environ.Map) !?[]u8 {
+    if (environ_map.get("XDG_CACHE_HOME")) |xdg_cache_home| {
+        return try std.fs.path.join(allocator, &.{ xdg_cache_home, "ztop", "session.bin" });
+    }
+    if (environ_map.get("HOME")) |home| {
+        return try std.fs.path.join(allocator, &.{ home, ".cache", "ztop", "session.bin" });
+    }
     return null;
 }
 

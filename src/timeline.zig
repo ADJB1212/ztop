@@ -601,4 +601,338 @@ pub const Timeline = struct {
 
         return diff;
     }
+
+    // ─── Persistence API (methods on Timeline) ────────────────────────────────
+
+    /// Serialize the full timeline to a freshly allocated byte slice.
+    /// Caller owns the returned memory and should free it with `allocator.free`.
+    pub fn toBytes(self: *const Timeline, allocator: std.mem.Allocator) ![]u8 {
+        var buf: std.ArrayList(u8) = .empty;
+        errdefer buf.deinit(allocator);
+
+        // Header: magic + version
+        try buf.appendSlice(allocator, &SESSION_MAGIC);
+        try appendU32(allocator, &buf, SESSION_VERSION);
+
+        // Snapshots oldest → newest
+        try appendU32(allocator, &buf, @intCast(self.snap_count));
+        for (0..self.snap_count) |i| {
+            const snap = self.getSnapshotAtIndex(i).?;
+            try serializeSnapshot(allocator, &buf, snap);
+        }
+
+        // Events oldest → newest
+        try appendU32(allocator, &buf, @intCast(self.ev_count));
+        for (0..self.ev_count) |i| {
+            const ev = self.getEvent(i).?;
+            try serializeEvent(allocator, &buf, ev);
+        }
+
+        // Bookmarks
+        try appendU32(allocator, &buf, @intCast(self.bookmark_count));
+        for (self.bookmarks[0..self.bookmark_count]) |bm| {
+            try appendI64(allocator, &buf, bm.timestamp_ms);
+            try appendU64(allocator, &buf, @intCast(bm.snap_abs_idx));
+        }
+
+        return buf.toOwnedSlice(allocator);
+    }
+
+    /// Reconstruct a Timeline from bytes previously produced by `toBytes`.
+    /// Writes into `self` on success; leaves `self` unchanged on error.
+    /// Returns error.InvalidSessionFile or error.UnsupportedSessionVersion on format mismatch.
+    pub fn fromBytes(self: *Timeline, data: []const u8) !void {
+        var r: ByteReader = .{ .data = data };
+
+        const magic = try r.readBytesFixed(4);
+        if (!std.mem.eql(u8, magic, &SESSION_MAGIC)) return error.InvalidSessionFile;
+        const version = try r.readU32();
+        if (version != SESSION_VERSION) return error.UnsupportedSessionVersion;
+
+        self.* = Timeline.init();
+
+        const snap_count = try r.readU32();
+        for (0..snap_count) |_| {
+            const snap = try deserializeSnapshot(&r);
+            self.recordSnapshot(snap, snap.procs[0..snap.proc_count]);
+        }
+
+        const ev_count = try r.readU32();
+        for (0..ev_count) |_| {
+            const ev = try deserializeEvent(&r);
+            self.appendEvent(ev);
+        }
+
+        const bm_count = try r.readU32();
+        for (0..bm_count) |_| {
+            const ts = try r.readI64();
+            const abs_idx = try r.readU64();
+            if (self.bookmark_count < MAX_BOOKMARKS) {
+                self.bookmarks[self.bookmark_count] = .{
+                    .timestamp_ms = ts,
+                    .snap_abs_idx = @intCast(@min(abs_idx, std.math.maxInt(usize))),
+                };
+                self.bookmark_count += 1;
+            }
+        }
+    }
+
+    /// Persist the timeline to a binary file at `path`.
+    /// Creates intermediate directories as needed.
+    /// Errors (disk full, permission denied, etc.) are returned to the caller.
+    pub fn saveToDisk(self: *const Timeline, io: std.Io, allocator: std.mem.Allocator, path: []const u8) !void {
+        const data = try self.toBytes(allocator);
+        defer allocator.free(data);
+
+        // Ensure the cache directory exists
+        if (std.fs.path.dirname(path)) |parent| {
+            std.Io.Dir.cwd().createDirPath(io, parent) catch |err| switch (err) {
+                error.PathAlreadyExists => {},
+                else => return err,
+            };
+        }
+
+        try std.Io.Dir.cwd().writeFile(io, .{
+            .sub_path = path,
+            .data = data,
+        });
+    }
+
+    /// Load a previously saved timeline from `path` into `self`.
+    /// Returns `error.FileNotFound` if the file does not exist.
+    /// Returns `error.InvalidSessionFile` / `error.UnsupportedSessionVersion` on format mismatch.
+    pub fn loadFromDisk(self: *Timeline, io: std.Io, allocator: std.mem.Allocator, path: []const u8) !void {
+        const data = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(SESSION_MAX_BYTES));
+        defer allocator.free(data);
+        try self.fromBytes(data);
+    }
 };
+
+/// Magic bytes identifying a ztop session file.
+pub const SESSION_MAGIC: [4]u8 = "ZTOP".*;
+/// Binary format version. Increment when the schema changes incompatibly.
+pub const SESSION_VERSION: u32 = 1;
+/// Maximum file size that loadFromDisk will accept (guards against corrupt/huge files).
+const SESSION_MAX_BYTES: usize = 4 * 1024 * 1024;
+
+// ─── Binary serialization helpers ────────────────────────────────────────────
+
+fn appendU32(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), val: u32) !void {
+    var bytes: [4]u8 = undefined;
+    std.mem.writeInt(u32, &bytes, val, .little);
+    try buf.appendSlice(gpa, &bytes);
+}
+
+fn appendI64(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), val: i64) !void {
+    var bytes: [8]u8 = undefined;
+    std.mem.writeInt(i64, &bytes, val, .little);
+    try buf.appendSlice(gpa, &bytes);
+}
+
+fn appendU64(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), val: u64) !void {
+    var bytes: [8]u8 = undefined;
+    std.mem.writeInt(u64, &bytes, val, .little);
+    try buf.appendSlice(gpa, &bytes);
+}
+
+fn appendF32(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), val: f32) !void {
+    var bytes: [4]u8 = undefined;
+    std.mem.writeInt(u32, &bytes, @bitCast(val), .little);
+    try buf.appendSlice(gpa, &bytes);
+}
+
+fn appendOptF32(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), val: ?f32) !void {
+    if (val) |v| {
+        try buf.append(gpa, 1);
+        try appendF32(gpa, buf, v);
+    } else {
+        try buf.append(gpa, 0);
+        try buf.appendSlice(gpa, &[4]u8{ 0, 0, 0, 0 });
+    }
+}
+
+fn serializeSnapshot(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), snap: *const SystemSnapshot) !void {
+    try appendI64(gpa, buf, snap.timestamp_ms);
+    try appendF32(gpa, buf, snap.cpu_usage_pct);
+    try appendU32(gpa, buf, snap.cpu_cores);
+    try appendU64(gpa, buf, snap.mem.total);
+    try appendU64(gpa, buf, snap.mem.used);
+    try appendU64(gpa, buf, snap.mem.free);
+    try appendU64(gpa, buf, snap.mem.cached);
+    try appendU64(gpa, buf, snap.mem.buffered);
+    try appendU64(gpa, buf, snap.mem.swap_total);
+    try appendU64(gpa, buf, snap.mem.swap_used);
+    try appendF32(gpa, buf, snap.mem_usage_pct);
+    try appendU64(gpa, buf, snap.disk.read_bytes_ps);
+    try appendU64(gpa, buf, snap.disk.write_bytes_ps);
+    try appendU64(gpa, buf, snap.net.rx_bytes_ps);
+    try appendU64(gpa, buf, snap.net.tx_bytes_ps);
+    try appendU64(gpa, buf, snap.net.rx_bytes);
+    try appendU64(gpa, buf, snap.net.tx_bytes);
+    try appendOptF32(gpa, buf, snap.thermal.cpu_temp);
+    try appendOptF32(gpa, buf, snap.thermal.gpu_temp);
+    try appendOptF32(gpa, buf, snap.battery.charge_percent);
+    try appendOptF32(gpa, buf, snap.battery.power_draw_w);
+    try buf.append(gpa, @intFromEnum(snap.battery.status));
+    try appendU32(gpa, buf, snap.proc_count);
+    for (snap.procs[0..snap.proc_count]) |p| {
+        try appendU32(gpa, buf, p.pid);
+        try appendU32(gpa, buf, p.ppid);
+        try buf.append(gpa, p.name_len);
+        try buf.appendSlice(gpa, p.name_buf[0..p.name_len]);
+        try buf.append(gpa, @intFromEnum(p.state));
+        try appendF32(gpa, buf, p.cpu_percent);
+        try appendF32(gpa, buf, p.mem_percent);
+        try appendU32(gpa, buf, p.threads);
+        try appendU64(gpa, buf, p.disk_read_ps);
+        try appendU64(gpa, buf, p.disk_write_ps);
+    }
+}
+
+fn serializeEvent(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), ev: *const TimelineEvent) !void {
+    try appendI64(gpa, buf, ev.timestamp_ms);
+    try buf.append(gpa, @intFromEnum(ev.kind));
+    try appendU32(gpa, buf, ev.pid);
+    try buf.append(gpa, ev.detail_len);
+    try buf.appendSlice(gpa, ev.detail_buf[0..ev.detail_len]);
+}
+
+// ─── Binary deserialization helpers ──────────────────────────────────────────
+
+const ByteReader = struct {
+    data: []const u8,
+    pos: usize = 0,
+
+    fn readByte(r: *ByteReader) !u8 {
+        if (r.pos >= r.data.len) return error.UnexpectedEndOfFile;
+        const val = r.data[r.pos];
+        r.pos += 1;
+        return val;
+    }
+
+    fn readBytesFixed(r: *ByteReader, comptime n: usize) !*const [n]u8 {
+        if (r.pos + n > r.data.len) return error.UnexpectedEndOfFile;
+        const ptr: *const [n]u8 = r.data[r.pos..][0..n];
+        r.pos += n;
+        return ptr;
+    }
+
+    fn readSlice(r: *ByteReader, n: usize) ![]const u8 {
+        if (r.pos + n > r.data.len) return error.UnexpectedEndOfFile;
+        const slice = r.data[r.pos .. r.pos + n];
+        r.pos += n;
+        return slice;
+    }
+
+    fn readU32(r: *ByteReader) !u32 {
+        return std.mem.readInt(u32, try r.readBytesFixed(4), .little);
+    }
+
+    fn readI64(r: *ByteReader) !i64 {
+        return std.mem.readInt(i64, try r.readBytesFixed(8), .little);
+    }
+
+    fn readU64(r: *ByteReader) !u64 {
+        return std.mem.readInt(u64, try r.readBytesFixed(8), .little);
+    }
+
+    fn readF32(r: *ByteReader) !f32 {
+        return @bitCast(try r.readU32());
+    }
+
+    fn readOptF32(r: *ByteReader) !?f32 {
+        const present = try r.readByte();
+        const val = try r.readF32();
+        return if (present != 0) val else null;
+    }
+};
+
+fn deserializeSnapshot(r: *ByteReader) !SystemSnapshot {
+    var snap: SystemSnapshot = .{
+        .timestamp_ms = try r.readI64(),
+        .cpu_usage_pct = try r.readF32(),
+        .cpu_cores = try r.readU32(),
+        .mem = .{
+            .total = try r.readU64(),
+            .used = try r.readU64(),
+            .free = try r.readU64(),
+            .cached = try r.readU64(),
+            .buffered = try r.readU64(),
+            .swap_total = try r.readU64(),
+            .swap_used = try r.readU64(),
+        },
+        .mem_usage_pct = try r.readF32(),
+        .disk = .{
+            .read_bytes_ps = try r.readU64(),
+            .write_bytes_ps = try r.readU64(),
+        },
+        .net = .{
+            .rx_bytes_ps = try r.readU64(),
+            .tx_bytes_ps = try r.readU64(),
+            .rx_bytes = try r.readU64(),
+            .tx_bytes = try r.readU64(),
+        },
+        .thermal = .{
+            .cpu_temp = try r.readOptF32(),
+            .gpu_temp = try r.readOptF32(),
+        },
+        .battery = .{
+            .charge_percent = try r.readOptF32(),
+            .power_draw_w = try r.readOptF32(),
+            .status = std.enums.fromInt(common.BatteryStatus, try r.readByte()) orelse .unknown,
+        },
+        .proc_count = 0,
+        .procs = undefined,
+    };
+
+    const proc_count = try r.readU32();
+    snap.proc_count = @intCast(@min(proc_count, MAX_SNAPSHOT_PROCS));
+    for (0..proc_count) |i| {
+        const pid = try r.readU32();
+        const ppid = try r.readU32();
+        const name_len = try r.readByte();
+        const name_data = try r.readSlice(name_len);
+        const state_raw = try r.readByte();
+        const cpu_percent = try r.readF32();
+        const mem_percent = try r.readF32();
+        const threads = try r.readU32();
+        const disk_read_ps = try r.readU64();
+        const disk_write_ps = try r.readU64();
+        if (i < MAX_SNAPSHOT_PROCS) {
+            var p: common.ProcStats = std.mem.zeroes(common.ProcStats);
+            p.pid = pid;
+            p.ppid = ppid;
+            p.name_len = name_len;
+            const copy_len = @min(name_len, @as(u8, 64));
+            @memcpy(p.name_buf[0..copy_len], name_data[0..copy_len]);
+            p.state = std.enums.fromInt(common.ProcState, state_raw) orelse .unknown;
+            p.cpu_percent = cpu_percent;
+            p.mem_percent = mem_percent;
+            p.threads = threads;
+            p.disk_read_ps = disk_read_ps;
+            p.disk_write_ps = disk_write_ps;
+            snap.procs[i] = p;
+        }
+    }
+
+    return snap;
+}
+
+fn deserializeEvent(r: *ByteReader) !TimelineEvent {
+    const ts = try r.readI64();
+    const kind_raw = try r.readByte();
+    const pid = try r.readU32();
+    const detail_len = try r.readByte();
+    const detail_data = try r.readSlice(detail_len);
+
+    var ev: TimelineEvent = .{
+        .timestamp_ms = ts,
+        .kind = std.enums.fromInt(EventKind, kind_raw) orelse .cpu_spike,
+        .pid = pid,
+        .detail_buf = std.mem.zeroes([64]u8),
+        .detail_len = detail_len,
+    };
+    const copy_len = @min(detail_len, @as(u8, 64));
+    @memcpy(ev.detail_buf[0..copy_len], detail_data[0..copy_len]);
+    return ev;
+}

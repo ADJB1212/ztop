@@ -290,6 +290,26 @@ pub fn main(main_init: std.process.Init) !void {
     var scrub_proc_buf: [timeline_mod.MAX_SNAPSHOT_PROCS]ztop.sysinfo.ProcStats = undefined;
     var scrub_proc_count: usize = 0;
 
+    // ── Crash-adjacent session recovery ──────────────────────────────────────
+    // Compute the session file path once; reused on clean exit to persist data.
+    const session_path: ?[]u8 = if (app_config.persist_session)
+        ztop.config.defaultSessionPath(allocator, main_init.environ_map) catch null
+    else
+        null;
+    defer if (session_path) |p| allocator.free(p);
+
+    // Try to restore the previous session. On success the user starts in scrub
+    // mode so they can inspect what happened before the last exit/crash.
+    if (session_path) |sp| {
+        timeline.loadFromDisk(io, allocator, sp) catch {};
+        if (timeline.snapshotCount() > 0) {
+            is_scrubbing = true;
+            scrub_offset = 0;
+            render.setStatus(&status_buf, &status_len, "Session recovered ({d} snapshots). Scrubbing — press Esc to resume live view.", .{timeline.snapshotCount()});
+        }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     var cpu = sys_info.getCpuStats();
     var cpu_topology = sys_info.getCpuTopology();
     var mem = sys_info.getMemStats();
@@ -1144,7 +1164,7 @@ pub fn main(main_init: std.process.Init) !void {
 
                 // Help Overlay
                 if (show_help) {
-                    const help_width = 48;
+                    const help_width = 60;
                     const help_height = 20;
                     const h_x = if (size.width > help_width) (size.width - help_width) / 2 else 1;
                     const h_y = if (size.height > help_height) (size.height - help_height) / 2 else 1;
@@ -1413,4 +1433,11 @@ pub fn main(main_init: std.process.Init) !void {
             force_redraw = try input_handler.handleAvailableInput(&input_ctx);
         }
     }
+
+    // ── Persist timeline on clean exit ────────────────────────────────────────
+    if (session_path) |sp| {
+        // Best-effort: ignore errors (disk full, permission denied, etc.)
+        timeline.saveToDisk(io, allocator, sp) catch {};
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 }
