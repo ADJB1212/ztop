@@ -104,6 +104,11 @@ pub const Context = struct {
     thread_view_pid: *u32,
     thread_view_name_buf: *[64]u8,
     thread_view_name_len: *u8,
+    causality_view: *bool,
+    causality_pid: *u32,
+    causality_name_buf: *[64]u8,
+    causality_name_len: *u8,
+    causality_connections: *[]sysinfo.common.NetConnection,
     is_following: *bool,
     follow_pid: *u32,
     status_buf: *[160]u8,
@@ -501,8 +506,14 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
                 }
                 return true;
             },
+            'g' => {
+                if (!ctx.thread_view.* and !ctx.causality_view.* and !ctx.is_scrubbing.* and ctx.current_tab.* != 4) {
+                    try enterCausalityView(ctx);
+                }
+                return true;
+            },
             'l' => {
-                if (!ctx.thread_view.* and !ctx.is_scrubbing.* and ctx.filtered_count.* > 0) {
+                if (!ctx.thread_view.* and !ctx.causality_view.* and !ctx.is_scrubbing.* and ctx.filtered_count.* > 0) {
                     if (ctx.is_following.*) {
                         ctx.is_following.* = false;
                         ctx.follow_pid.* = 0;
@@ -587,8 +598,50 @@ fn executeCommand(ctx: *Context) void {
     }
 }
 
+fn enterCausalityView(ctx: *Context) !void {
+    if (ctx.current_tab.* == 4 or ctx.causality_view.* or ctx.thread_view.* or ctx.filtered_count.* == 0 or ctx.selected_idx.* >= ctx.filtered_count.*) {
+        return;
+    }
+
+    const proc = ctx.cached_procs[ctx.filtered_indices[ctx.selected_idx.*]];
+    ctx.causality_pid.* = proc.pid;
+    ctx.causality_name_len.* = proc.name_len;
+    @memcpy(ctx.causality_name_buf.*[0..proc.name_len], proc.name());
+    ctx.causality_view.* = true;
+    ctx.selected_idx.* = 0;
+    ctx.scroll_offset.* = 0;
+
+    // Load connections for this process
+    if (ctx.causality_connections.*.len > 0) {
+        ctx.allocator.free(ctx.causality_connections.*);
+    }
+    ctx.causality_connections.* = fetchProcConnections(ctx.allocator, ctx.sys_info, proc.pid) catch &.{};
+}
+
+pub fn fetchProcConnections(allocator: std.mem.Allocator, sys_info: *SysInfo, pid: u32) ![]sysinfo.common.NetConnection {
+    const all_conns = try sys_info.getNetConnections(allocator);
+    defer allocator.free(all_conns);
+
+    var count: usize = 0;
+    for (all_conns) |conn| {
+        if (conn.pid == pid) count += 1;
+    }
+
+    if (count == 0) return &.{};
+
+    const result = try allocator.alloc(sysinfo.common.NetConnection, count);
+    var i: usize = 0;
+    for (all_conns) |conn| {
+        if (conn.pid == pid) {
+            result[i] = conn;
+            i += 1;
+        }
+    }
+    return result;
+}
+
 fn enterThreadView(ctx: *Context) !void {
-    if (ctx.current_tab.* == 4 or ctx.thread_view.* or ctx.filtered_count.* == 0 or ctx.selected_idx.* >= ctx.filtered_count.*) {
+    if (ctx.current_tab.* == 4 or ctx.thread_view.* or ctx.causality_view.* or ctx.filtered_count.* == 0 or ctx.selected_idx.* >= ctx.filtered_count.*) {
         return;
     }
 
@@ -612,6 +665,14 @@ fn clearCurrentView(ctx: *Context) void {
     } else if (ctx.is_scrubbing.*) {
         ctx.is_scrubbing.* = false;
         ctx.scrub_offset.* = 0;
+    } else if (ctx.causality_view.*) {
+        ctx.causality_view.* = false;
+        if (ctx.causality_connections.*.len > 0) {
+            ctx.allocator.free(ctx.causality_connections.*);
+            ctx.causality_connections.* = &.{};
+        }
+        ctx.selected_idx.* = 0;
+        ctx.scroll_offset.* = 0;
     } else if (ctx.thread_view.*) {
         ctx.thread_view.* = false;
         if (ctx.cached_threads.*.len > 0) {

@@ -263,6 +263,13 @@ pub fn main(main_init: std.process.Init) !void {
     var cached_threads: []ztop.sysinfo.common.ThreadStats = &.{};
     defer if (cached_threads.len > 0) allocator.free(cached_threads);
 
+    var causality_view: bool = false;
+    var causality_pid: u32 = 0;
+    var causality_name_buf: [64]u8 = std.mem.zeroes([64]u8);
+    var causality_name_len: u8 = 0;
+    var causality_connections: []ztop.sysinfo.common.NetConnection = &.{};
+    defer if (causality_connections.len > 0) allocator.free(causality_connections);
+
     var cached_connections: []ztop.sysinfo.common.NetConnection = &.{};
     defer if (cached_connections.len > 0) allocator.free(cached_connections);
 
@@ -387,6 +394,13 @@ pub fn main(main_init: std.process.Init) !void {
                     allocator.free(cached_threads);
                 }
                 cached_threads = try sys_info.getThreadStats(allocator, thread_view_pid);
+            }
+
+            if (causality_view) {
+                if (causality_connections.len > 0) {
+                    allocator.free(causality_connections);
+                }
+                causality_connections = input_handler.fetchProcConnections(allocator, &sys_info, causality_pid) catch &.{};
             }
 
             last_fetch_time = current_time;
@@ -874,6 +888,19 @@ pub fn main(main_init: std.process.Init) !void {
                             }
                         }
                     }
+                } else if (causality_view and procs_box_height >= 5) {
+                    try render.renderCausalityGraph(
+                        &app_tui,
+                        theme,
+                        procs_box_x,
+                        procs_box_y,
+                        procs_box_width,
+                        procs_box_height,
+                        causality_pid,
+                        causality_name_buf[0..causality_name_len],
+                        cached_procs,
+                        causality_connections,
+                    );
                 } else if (procs_box_height >= 3) {
                     var title_buf: [96]u8 = undefined;
 
@@ -1165,7 +1192,7 @@ pub fn main(main_init: std.process.Init) !void {
                 // Help Overlay
                 if (show_help) {
                     const help_width = 60;
-                    const help_height = 20;
+                    const help_height = 21;
                     const h_x = if (size.width > help_width) (size.width - help_width) / 2 else 1;
                     const h_y = if (size.height > help_height) (size.height - help_height) / 2 else 1;
 
@@ -1213,34 +1240,38 @@ pub fn main(main_init: std.process.Init) !void {
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Send SIGKILL to selected", .{});
 
                     try app_tui.moveCursor(h_x + 2, h_y + 11);
+                    try app_tui.printStyled(.{ .fg = theme.text }, "g:            ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Resource causality graph", .{});
+
+                    try app_tui.moveCursor(h_x + 2, h_y + 12);
                     try app_tui.printStyled(.{ .fg = theme.text }, "l:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Follow selected process", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 12);
+                    try app_tui.moveCursor(h_x + 2, h_y + 13);
                     try app_tui.printStyled(.{ .fg = theme.text }, "T:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Timeline scrub (←→ step, [] jump)", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 13);
+                    try app_tui.moveCursor(h_x + 2, h_y + 14);
                     try app_tui.printStyled(.{ .fg = theme.text }, "b/B, {{}}/{{}}:   ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Bookmark add/del, jump prev/next", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 14);
+                    try app_tui.moveCursor(h_x + 2, h_y + 15);
                     try app_tui.printStyled(.{ .fg = theme.text }, "d:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Diff view (compare two moments)", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 15);
+                    try app_tui.moveCursor(h_x + 2, h_y + 16);
                     try app_tui.printStyled(.{ .fg = theme.text }, "q:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Quit", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 16);
+                    try app_tui.moveCursor(h_x + 2, h_y + 17);
                     try app_tui.printStyled(.{ .fg = theme.text }, ":             ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Command mode (show zombie)", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 17);
+                    try app_tui.moveCursor(h_x + 2, h_y + 18);
                     try app_tui.printStyled(.{ .fg = theme.text }, "Repo: ", .{});
                     try app_tui.writeStyledHyperlink(.{ .fg = theme.tab_active, .underline = true }, repo_url, repo_label);
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 18);
+                    try app_tui.moveCursor(h_x + 2, h_y + 19);
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Press any key to close...", .{});
                 }
 
@@ -1414,6 +1445,11 @@ pub fn main(main_init: std.process.Init) !void {
                 .thread_view_pid = &thread_view_pid,
                 .thread_view_name_buf = &thread_view_name_buf,
                 .thread_view_name_len = &thread_view_name_len,
+                .causality_view = &causality_view,
+                .causality_pid = &causality_pid,
+                .causality_name_buf = &causality_name_buf,
+                .causality_name_len = &causality_name_len,
+                .causality_connections = &causality_connections,
                 .is_following = &is_following,
                 .follow_pid = &follow_pid,
                 .status_buf = &status_buf,
