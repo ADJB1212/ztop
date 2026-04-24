@@ -127,6 +127,8 @@ pub const Tui = struct {
         invalid: usize,
     };
 
+    const FRAME_BUF_SIZE = 128 * 1024; // 128KB frame buffer
+
     original_termios: posix.termios,
     io: std.Io,
     in: std.Io.File,
@@ -136,6 +138,10 @@ pub const Tui = struct {
     cursor_style: CursorStyle,
     frame_active: bool,
     nerd_fonts: bool,
+    current_style: ?Style,
+    frame_buf: []u8,
+    frame_len: usize,
+    allocator: std.mem.Allocator,
     cursor_buf: [32]u8,
     style_buf: [48]u8,
     print_buf: [1024]u8,
@@ -185,7 +191,6 @@ pub const Tui = struct {
         try writer.writeAll("\x1b\\");
         try writer.writeAll(label);
         try writer.writeAll("\x1b]8;;\x1b\\");
-        try writer.flush();
     }
 
     fn parseMouseNumber(bytes: []const u8, start: usize) MouseNumberParseResult {
@@ -323,7 +328,7 @@ pub const Tui = struct {
         }
     }
 
-    pub fn init(io: std.Io, nerd_fonts: bool, term_program: ?[]const u8) !Tui {
+    pub fn init(allocator: std.mem.Allocator, io: std.Io, nerd_fonts: bool, term_program: ?[]const u8) !Tui {
         const in = std.Io.File.stdin();
         const out = std.Io.File.stdout();
         const original_termios = try posix.tcgetattr(in.handle);
@@ -349,6 +354,8 @@ pub const Tui = struct {
             .synchronized_output = shouldEnableSynchronizedOutput(term_program),
         };
 
+        const frame_buf = try allocator.alloc(u8, FRAME_BUF_SIZE);
+
         // Enter alternate buffer, hide cursor, and enable mouse reporting.
         try out.writeStreamingAll(io, "\x1b[?1049h\x1b[?25l");
         try out.writeStreamingAll(io, mouseModeSequence(true));
@@ -363,6 +370,10 @@ pub const Tui = struct {
             .cursor_style = .steady_block,
             .frame_active = false,
             .nerd_fonts = nerd_fonts,
+            .current_style = null,
+            .frame_buf = frame_buf,
+            .frame_len = 0,
+            .allocator = allocator,
             .cursor_buf = undefined,
             .style_buf = undefined,
             .print_buf = undefined,
@@ -377,6 +388,7 @@ pub const Tui = struct {
         self.out.writeStreamingAll(self.io, mouseModeSequence(false)) catch {};
         self.out.writeStreamingAll(self.io, "\x1b[?1049l") catch {};
         posix.tcsetattr(self.in.handle, .FLUSH, self.original_termios) catch {};
+        self.allocator.free(self.frame_buf);
     }
 
     pub fn beginFrame(self: *Tui) !void {
@@ -389,70 +401,106 @@ pub const Tui = struct {
     pub fn endFrame(self: *Tui) !void {
         if (!self.frame_active) return;
 
+        // Flush buffered frame data then send sync-end marker
+        try self.flushBuffer();
         try self.out.writeStreamingAll(self.io, "\x1b[?2026l");
         self.frame_active = false;
     }
 
+    /// Append data to the frame buffer; auto-flushes when full.
+    pub fn bufWrite(self: *Tui, data: []const u8) !void {
+        if (!self.frame_active) {
+            // Outside a frame, write directly
+            try self.out.writeStreamingAll(self.io, data);
+            return;
+        }
+        if (self.frame_len + data.len > self.frame_buf.len) {
+            try self.flushBuffer();
+        }
+        if (data.len > self.frame_buf.len) {
+            // Larger than entire buffer — write directly
+            try self.out.writeStreamingAll(self.io, data);
+            return;
+        }
+        @memcpy(self.frame_buf[self.frame_len .. self.frame_len + data.len], data);
+        self.frame_len += data.len;
+    }
+
+    fn flushBuffer(self: *Tui) !void {
+        if (self.frame_len == 0) return;
+        try self.out.writeStreamingAll(self.io, self.frame_buf[0..self.frame_len]);
+        self.frame_len = 0;
+    }
+
     pub fn clear(self: *Tui) !void {
-        try self.out.writeStreamingAll(self.io, "\x1b[0m\x1b[2J\x1b[H");
+        try self.bufWrite("\x1b[0m\x1b[2J\x1b[H");
+        self.current_style = null;
     }
 
     pub fn moveCursor(self: *Tui, x: u16, y: u16) !void {
         const seq = try std.fmt.bufPrint(&self.cursor_buf, "\x1b[{d};{d}H", .{ y, x });
-        _ = try self.out.writeStreamingAll(self.io, seq);
+        try self.bufWrite(seq);
     }
 
     pub fn setCursorVisible(self: *Tui, visible: bool) !void {
         if (self.cursor_visible == visible) return;
 
-        try self.out.writeStreamingAll(self.io, if (visible) "\x1b[?25h" else "\x1b[?25l");
+        try self.bufWrite(if (visible) "\x1b[?25h" else "\x1b[?25l");
         self.cursor_visible = visible;
     }
 
     pub fn setCursorStyle(self: *Tui, style: CursorStyle) !void {
         if (self.cursor_style == style) return;
 
-        try self.out.writeStreamingAll(self.io, cursorStyleSequence(style));
+        try self.bufWrite(cursorStyleSequence(style));
         self.cursor_style = style;
     }
 
     pub fn print(self: *Tui, comptime fmt: []const u8, args: anytype) !void {
-        var w = self.out.writer(self.io, &self.print_buf);
-        try w.interface.print(fmt, args);
-        try w.interface.flush();
+        // Format into print_buf, then route through bufWrite
+        var writer: std.Io.Writer = .fixed(&self.print_buf);
+        try writer.print(fmt, args);
+        try self.bufWrite(writer.buffered());
     }
 
     pub fn setStyle(self: *Tui, style: Style) !void {
         const seq = try styleSequence(&self.style_buf, style);
-        try self.out.writeStreamingAll(self.io, seq);
+        try self.bufWrite(seq);
+        self.current_style = style;
+    }
+
+    fn setStyleIfChanged(self: *Tui, style: Style) !void {
+        if (self.current_style) |cur| {
+            if (std.meta.eql(cur, style)) return;
+        }
+        try self.setStyle(style);
     }
 
     pub fn resetStyle(self: *Tui) !void {
-        try self.out.writeStreamingAll(self.io, "\x1b[0m");
+        try self.bufWrite("\x1b[0m");
+        self.current_style = null;
     }
 
     pub fn writeStyled(self: *Tui, style: Style, text: []const u8) !void {
-        try self.setStyle(style);
-        defer self.resetStyle() catch {};
-        try self.out.writeStreamingAll(self.io, text);
+        try self.setStyleIfChanged(style);
+        try self.bufWrite(text);
     }
 
     pub fn printStyled(self: *Tui, style: Style, comptime fmt: []const u8, args: anytype) !void {
-        try self.setStyle(style);
-        defer self.resetStyle() catch {};
+        try self.setStyleIfChanged(style);
         try self.print(fmt, args);
     }
 
     pub fn writeHyperlink(self: *Tui, uri: []const u8, label: []const u8) !void {
         var buf: [1024]u8 = undefined;
-        var writer = self.out.writer(self.io, &buf);
+        var writer: std.Io.Writer = .fixed(&buf);
 
-        try writeHyperlinkTo(&writer.interface, uri, label);
+        try writeHyperlinkTo(&writer, uri, label);
+        try self.bufWrite(writer.buffered());
     }
 
     pub fn writeStyledHyperlink(self: *Tui, style: Style, uri: []const u8, label: []const u8) !void {
-        try self.setStyle(style);
-        defer self.resetStyle() catch {};
+        try self.setStyleIfChanged(style);
         try self.writeHyperlink(uri, label);
     }
 
@@ -461,27 +509,39 @@ pub const Tui = struct {
     }
 
     pub fn drawBoxStyled(self: *Tui, x: u16, y: u16, width: u16, height: u16, title: []const u8, border_style: Style, title_style: Style) !void {
-        try self.setStyle(border_style);
+        try self.setStyleIfChanged(border_style);
+
+        // Build horizontal border line ("─" repeated) once, reuse for top and bottom.
+        // "─" is 3 bytes in UTF-8. Max terminal width ~512 cols → 512*3 = 1536 bytes.
+        var h_border_buf: [512 * 3]u8 = undefined;
+        const repeat_count: usize = if (width >= 2) width - 2 else 0;
+        const h_border_len = repeat_count * 3;
+        for (0..repeat_count) |i| {
+            h_border_buf[i * 3] = 0xe2; // "─" = U+2500 = 0xE2 0x94 0x80
+            h_border_buf[i * 3 + 1] = 0x94;
+            h_border_buf[i * 3 + 2] = 0x80;
+        }
+        const h_border = h_border_buf[0..h_border_len];
 
         // Draw top border
         try self.moveCursor(x, y);
-        try self.out.writeStreamingAll(self.io, "╭");
-        for (0..width - 2) |_| try self.out.writeStreamingAll(self.io, "─");
-        try self.out.writeStreamingAll(self.io, "╮");
+        try self.bufWrite("╭");
+        try self.bufWrite(h_border);
+        try self.bufWrite("╮");
 
         // Draw sides
         for (1..height - 1) |i| {
             try self.moveCursor(x, y + @as(u16, @intCast(i)));
-            try self.out.writeStreamingAll(self.io, "│");
+            try self.bufWrite("│");
             try self.moveCursor(x + width - 1, y + @as(u16, @intCast(i)));
-            try self.out.writeStreamingAll(self.io, "│");
+            try self.bufWrite("│");
         }
 
         // Draw bottom border
         try self.moveCursor(x, y + height - 1);
-        try self.out.writeStreamingAll(self.io, "╰");
-        for (0..width - 2) |_| try self.out.writeStreamingAll(self.io, "─");
-        try self.out.writeStreamingAll(self.io, "╯");
+        try self.bufWrite("╰");
+        try self.bufWrite(h_border);
+        try self.bufWrite("╯");
         try self.resetStyle();
 
         // Draw title

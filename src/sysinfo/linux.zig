@@ -281,13 +281,25 @@ pub const SysInfo = struct {
     }
 
     fn findPrevProcEntry(self: *const SysInfo, pid: u32) ?ProcCpuEntry {
-        for (self.prev_procs[0..self.prev_proc_count]) |entry| {
-            if (entry.pid == pid) return entry;
+        // Binary search — prev_procs is kept sorted by PID
+        const slice = self.prev_procs[0..self.prev_proc_count];
+        var lo: usize = 0;
+        var hi: usize = slice.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            if (slice[mid].pid == pid) return slice[mid];
+            if (slice[mid].pid < pid) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
         }
         return null;
     }
 
-    pub fn getProcStats(self: *SysInfo, allocator: std.mem.Allocator, sort_by: common.SortBy) ![]ProcStats {
+    /// Fill `out_buf` with process stats, returning the used portion.
+    /// Caller owns `out_buf` — no heap allocation per call.
+    pub fn getProcStats(self: *SysInfo, out_buf: []ProcStats, sort_by: common.SortBy) ![]ProcStats {
         const snapshot = readCpuSnapshot(self.io) catch CpuSnapshot{};
         const total_tick_delta = if (self.prev_proc_total_ticks > 0) snapshot.overall.total -| self.prev_proc_total_ticks else 0;
 
@@ -298,7 +310,7 @@ pub const SysInfo = struct {
         defer proc_dir.close(self.io);
 
         var iter = proc_dir.iterate();
-        var result: std.ArrayList(ProcStats) = .empty;
+        var proc_count: usize = 0;
         var new_procs: [MAX_PROCS]ProcCpuEntry = undefined;
         var new_proc_count: usize = 0;
 
@@ -363,8 +375,10 @@ pub const SysInfo = struct {
             else
                 0;
 
+            if (proc_count >= out_buf.len) continue;
+
             const name = if (proc_info.name.len > 63) proc_info.name[0..63] else proc_info.name;
-            var proc_stat = ProcStats{
+            out_buf[proc_count] = ProcStats{
                 .pid = pid,
                 .ppid = proc_info.ppid,
                 .cpu_percent = cpu_percent,
@@ -375,25 +389,31 @@ pub const SysInfo = struct {
                 .name_len = @intCast(name.len),
                 .state = proc_info.state,
             };
-            @memcpy(proc_stat.name_buf[0..name.len], name);
+            @memcpy(out_buf[proc_count].name_buf[0..name.len], name);
 
             var cmdline_buf: [4096]u8 = undefined;
             if (readDirFile(self.io, &pid_dir, "cmdline", &cmdline_buf)) |cmdline_contents| {
-                const launch_cmd = compactLinuxCmdline(cmdline_contents, &proc_stat.launch_cmd_buf);
-                proc_stat.launch_cmd_len = @intCast(launch_cmd.len);
+                const launch_cmd = compactLinuxCmdline(cmdline_contents, &out_buf[proc_count].launch_cmd_buf);
+                out_buf[proc_count].launch_cmd_len = @intCast(launch_cmd.len);
             } else |_| {}
 
-            try result.append(allocator, proc_stat);
+            proc_count += 1;
         }
 
         @memcpy(self.prev_procs[0..new_proc_count], new_procs[0..new_proc_count]);
         self.prev_proc_count = new_proc_count;
+        // Sort by PID for binary search in findPrevProcEntry
+        std.mem.sort(ProcCpuEntry, self.prev_procs[0..new_proc_count], {}, struct {
+            fn lessThan(_: void, a: ProcCpuEntry, b: ProcCpuEntry) bool {
+                return a.pid < b.pid;
+            }
+        }.lessThan);
         self.prev_proc_total_ticks = snapshot.overall.total;
         self.prev_time = now;
 
-        const slice = try result.toOwnedSlice(allocator);
-        common.sortProcStats(slice, sort_by);
-        return slice;
+        const result = out_buf[0..proc_count];
+        common.sortProcStats(result, sort_by);
+        return result;
     }
 
     pub fn getThreadStats(self: *SysInfo, allocator: std.mem.Allocator, pid: u32) ![]common.ThreadStats {

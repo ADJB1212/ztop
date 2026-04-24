@@ -220,13 +220,15 @@ pub fn main(main_init: std.process.Init) !void {
     };
     posix.sigaction(posix.SIG.WINCH, &act_winch, null);
 
-    var app_tui = try Tui.init(io, app_config.nerd_fonts, main_init.environ_map.get("TERM_PROGRAM"));
+    var app_tui = try Tui.init(allocator, io, app_config.nerd_fonts, main_init.environ_map.get("TERM_PROGRAM"));
     defer app_tui.deinit();
 
     var sys_info = SysInfo.init(io);
 
+    // Pre-allocate proc buffer once — reused every tick, no per-tick alloc/free
+    const proc_buf = try allocator.alloc(ztop.sysinfo.ProcStats, ztop.sysinfo.common.MAX_PROCS);
+    defer allocator.free(proc_buf);
     var cached_procs: []ztop.sysinfo.ProcStats = &.{};
-    defer if (cached_procs.len > 0) allocator.free(cached_procs);
 
     var sort_by: ztop.sysinfo.SortBy = app_config.default_sort;
     var selected_idx: usize = 0;
@@ -325,7 +327,7 @@ pub fn main(main_init: std.process.Init) !void {
     var thermal = sys_info.getThermalStats();
     cached_gpus = try sys_info.getGpuStats(allocator);
     var battery = sys_info.getBatteryStats();
-    cached_procs = try sys_info.getProcStats(allocator, sort_by);
+    cached_procs = try sys_info.getProcStats(proc_buf, sort_by);
     cached_procs = ztop.sysinfo.common.filterProcStatsByLaunchCommandSubstring(cached_procs, app_config.ignoredLaunchCommandSubstr());
     cpu_history.append(cpu.usage_percent);
     mem_history.append(memoryUsagePercent(mem));
@@ -335,6 +337,13 @@ pub fn main(main_init: std.process.Init) !void {
     net_tx_history.append(net.tx_bytes_ps);
 
     var last_fetch_time = nowMs(io);
+
+    // Cache uname once — kernel info never changes at runtime
+    const uname = posix.uname();
+    const sysname = std.mem.sliceTo(&uname.sysname, 0);
+    const release = std.mem.sliceTo(&uname.release, 0);
+    const machine = std.mem.sliceTo(&uname.machine, 0);
+    const nodename = std.mem.sliceTo(&uname.nodename, 0);
 
     var force_redraw = true;
     var current_tab: u8 = app_config.default_tab;
@@ -346,7 +355,7 @@ pub fn main(main_init: std.process.Init) !void {
         try render.refreshConnections(allocator, &sys_info, &cached_connections);
     }
 
-    try app_tui.out.writeStreamingAll(io, "\x1b]2;ztop\x1b\\");
+    try app_tui.bufWrite("\x1b]2;ztop\x1b\\");
 
     while (!quit_flag) {
         if (sigwinch_flag) {
@@ -379,10 +388,7 @@ pub fn main(main_init: std.process.Init) !void {
                 net_tx_history.append(net.tx_bytes_ps);
             }
 
-            if (cached_procs.len > 0) {
-                allocator.free(cached_procs);
-            }
-            cached_procs = try sys_info.getProcStats(allocator, sort_by);
+            cached_procs = try sys_info.getProcStats(proc_buf, sort_by);
             cached_procs = ztop.sysinfo.common.filterProcStatsByLaunchCommandSubstring(cached_procs, app_config.ignoredLaunchCommandSubstr());
 
             if (current_tab == 4) {
@@ -444,12 +450,6 @@ pub fn main(main_init: std.process.Init) !void {
                 try app_tui.setCursorVisible(false);
             } else {
                 // Status Bar
-                const uname = posix.uname();
-                const sysname = std.mem.sliceTo(&uname.sysname, 0);
-                const release = std.mem.sliceTo(&uname.release, 0);
-                const machine = std.mem.sliceTo(&uname.machine, 0);
-                const nodename = std.mem.sliceTo(&uname.nodename, 0);
-
                 try app_tui.moveCursor(1, 1);
                 try app_tui.printStyled(.{ .fg = theme.brand, .bold = true }, " ztop ", .{});
                 try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "- {s} {s} {s} - {s}", .{ sysname, release, machine, nodename });
@@ -473,11 +473,11 @@ pub fn main(main_init: std.process.Init) !void {
 
                     try app_tui.moveCursor(tabs_x, 1);
                     if (current_tab == 1) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab1_label}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab1_label});
-                    try app_tui.out.writeStreamingAll(io, "  ");
+                    try app_tui.bufWrite("  ");
                     if (current_tab == 2) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab2_label}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab2_label});
-                    try app_tui.out.writeStreamingAll(io, "  ");
+                    try app_tui.bufWrite("  ");
                     if (current_tab == 3) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab3_label}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab3_label});
-                    try app_tui.out.writeStreamingAll(io, "  ");
+                    try app_tui.bufWrite("  ");
                     if (current_tab == 4) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab4_label}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab4_label});
                 }
 
@@ -854,7 +854,7 @@ pub fn main(main_init: std.process.Init) !void {
 
                             if (is_selected) {
                                 try app_tui.setStyle(.{ .bg = theme.selection_bg });
-                                for (0..procs_box_width - 4) |_| try app_tui.out.writeStreamingAll(io, " ");
+                                for (0..procs_box_width - 4) |_| try app_tui.bufWrite(" ");
                                 try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1 + @as(u16, @intCast(row)));
                             }
 
@@ -954,7 +954,7 @@ pub fn main(main_init: std.process.Init) !void {
 
                             if (is_selected) {
                                 try app_tui.setStyle(.{ .bg = theme.selection_bg });
-                                for (0..procs_box_width - 4) |_| try app_tui.out.writeStreamingAll(io, " ");
+                                for (0..procs_box_width - 4) |_| try app_tui.bufWrite(" ");
                                 try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1 + @as(u16, @intCast(row)));
                             }
 
@@ -1147,7 +1147,7 @@ pub fn main(main_init: std.process.Init) !void {
 
                             if (is_selected) {
                                 try app_tui.setStyle(.{ .bg = theme.selection_bg });
-                                for (0..procs_box_width - 4) |_| try app_tui.out.writeStreamingAll(io, " ");
+                                for (0..procs_box_width - 4) |_| try app_tui.bufWrite(" ");
                                 try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1 + @as(u16, @intCast(row)));
                             }
 
@@ -1199,7 +1199,7 @@ pub fn main(main_init: std.process.Init) !void {
                     // Clear background for overlay
                     for (0..help_height) |i| {
                         try app_tui.moveCursor(h_x, h_y + @as(u16, @intCast(i)));
-                        for (0..help_width) |_| try app_tui.out.writeStreamingAll(io, " ");
+                        for (0..help_width) |_| try app_tui.bufWrite(" ");
                     }
 
                     try app_tui.drawBoxStyled(h_x, h_y, help_width, help_height, "Help", .{ .fg = theme.border }, .{ .fg = theme.text, .bold = true });
@@ -1285,7 +1285,7 @@ pub fn main(main_init: std.process.Init) !void {
 
                     for (0..picker_height) |i| {
                         try app_tui.moveCursor(picker_x, picker_y + @as(u16, @intCast(i)));
-                        for (0..picker_width) |_| try app_tui.out.writeStreamingAll(io, " ");
+                        for (0..picker_width) |_| try app_tui.bufWrite(" ");
                     }
 
                     try app_tui.drawBoxStyled(picker_x, picker_y, picker_width, picker_height, picker_title, .{ .fg = theme.border }, .{ .fg = theme.text, .bold = true });

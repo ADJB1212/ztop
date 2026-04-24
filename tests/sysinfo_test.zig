@@ -1,5 +1,6 @@
 const std = @import("std");
-const SysInfo = @import("ztop").sysinfo.SysInfo;
+const sysinfo = @import("ztop").sysinfo;
+const SysInfo = sysinfo.SysInfo;
 
 test "SysInfo initializes and fetches CPU stats" {
     var sys_info = SysInfo.init(std.testing.io);
@@ -21,11 +22,9 @@ test "SysInfo fetches Mem stats" {
 
 test "SysInfo fetches Proc stats" {
     var sys_info = SysInfo.init(std.testing.io);
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    var proc_buf: [sysinfo.common.MAX_PROCS]sysinfo.ProcStats = undefined;
 
-    const procs = try sys_info.getProcStats(allocator, .cpu);
+    const procs = try sys_info.getProcStats(&proc_buf, .cpu);
     try std.testing.expect(procs.len > 0);
 
     // Check that at least one process has a valid state and name

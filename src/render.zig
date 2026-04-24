@@ -220,7 +220,7 @@ pub fn renderHistoryGraph(
 
                 try app_tui.writeStyled(.{ .fg = metricGraphColor(theme, mode, value) }, graph_blocks[cell_level]);
             } else {
-                try app_tui.out.writeStreamingAll(app_tui.io, " ");
+                try app_tui.bufWrite(" ");
             }
         }
     }
@@ -329,7 +329,7 @@ fn renderRateMetricRow(
     );
     if (used >= width) return;
 
-    try app_tui.out.writeStreamingAll(app_tui.io, " ");
+    try app_tui.bufWrite(" ");
     used += 1;
 
     const rate = formatUnit(series.rate_bytes_ps);
@@ -350,7 +350,7 @@ fn renderRateMetricRow(
 
     if (used + 6 > width) return;
 
-    try app_tui.out.writeStreamingAll(app_tui.io, " ");
+    try app_tui.bufWrite(" ");
     used += 1;
 
     const meter_width: u16 = @intCast(width - used);
@@ -384,7 +384,7 @@ fn renderRateLane(
         try app_tui.moveCursor(x, y);
         try app_tui.printStyled(.{ .fg = series.color, .bold = true }, "{s}", .{series.short_label});
         for (series.short_label.len..label_width) |_| {
-            try app_tui.out.writeStreamingAll(app_tui.io, " ");
+            try app_tui.bufWrite(" ");
         }
     }
 
@@ -499,16 +499,17 @@ fn sameTopologySection(a: TopologyPhysicalRow, b: TopologyPhysicalRow) bool {
 
 fn collectTopologyRows(topology: CpuTopology, rows: *[sysinfo.common.MAX_CORES]TopologyPhysicalRow) usize {
     var row_count: usize = 0;
+    // Bitmap: one bit per physical_id (max 256 = MAX_CORES)
+    var seen: [sysinfo.common.MAX_CORES / 8]u8 = std.mem.zeroes([sysinfo.common.MAX_CORES / 8]u8);
 
     for (topology.logical_cores) |logical_core| {
-        var exists = false;
-        for (rows[0..row_count]) |row| {
-            if (row.physical_id == logical_core.physical_id) {
-                exists = true;
-                break;
-            }
-        }
-        if (exists or row_count >= rows.len) continue;
+        const pid = logical_core.physical_id;
+        if (pid >= sysinfo.common.MAX_CORES) continue;
+        const byte_idx = pid / 8;
+        const bit: u3 = @intCast(pid % 8);
+        if (seen[byte_idx] & (@as(u8, 1) << bit) != 0) continue;
+        seen[byte_idx] |= @as(u8, 1) << bit;
+        if (row_count >= rows.len) continue;
 
         rows[row_count] = .{
             .physical_id = logical_core.physical_id,
@@ -691,7 +692,7 @@ fn renderTopologyPhysicalRowLine(
     );
     if (written >= column_width) return;
 
-    try app_tui.out.writeStreamingAll(app_tui.io, " ");
+    try app_tui.bufWrite(" ");
     written += 1;
     if (written >= column_width) return;
 
@@ -701,7 +702,7 @@ fn renderTopologyPhysicalRowLine(
     written += prefix.len;
     if (written >= column_width) return;
 
-    try app_tui.out.writeStreamingAll(app_tui.io, " ");
+    try app_tui.bufWrite(" ");
     written += 1;
     if (written >= column_width) return;
 
@@ -990,7 +991,7 @@ pub fn renderTimelineBar(
     const suffix_reserve: u16 = 12;
     const bar_width: usize = if (width > 4 + suffix_reserve) @as(usize, width) - 4 - @as(usize, suffix_reserve) else 2;
 
-    try app_tui.out.writeStreamingAll(app_tui.io, " ");
+    try app_tui.bufWrite(" ");
 
     if (snap_count == 0) {
         try app_tui.writeStyled(.{ .fg = theme.muted }, "Recording...");
@@ -1010,7 +1011,7 @@ pub fn renderTimelineBar(
 
             if (!in_range) {
                 // Left-pad area before history starts
-                try app_tui.out.writeStreamingAll(app_tui.io, " ");
+                try app_tui.bufWrite(" ");
                 continue;
             }
 
@@ -1038,7 +1039,7 @@ pub fn renderTimelineBar(
 
             // Get the snapshot and look up any events at that moment
             const snap = tl.getSnapshotAtIndex(abs_idx) orelse {
-                try app_tui.out.writeStreamingAll(app_tui.io, " ");
+                try app_tui.bufWrite(" ");
                 continue;
             };
             const ts = snap.timestamp_ms;
@@ -1067,7 +1068,7 @@ pub fn renderTimelineBar(
     }
 
     // Right nav indicator
-    try app_tui.out.writeStreamingAll(app_tui.io, " ");
+    try app_tui.bufWrite(" ");
     const can_go_newer = is_scrubbing and scrub_offset > 0;
     try app_tui.writeStyled(
         if (can_go_newer) .{ .fg = theme.tab_active, .bold = true } else .{ .fg = theme.muted },
@@ -1298,7 +1299,7 @@ pub fn renderDiffView(
             // Pad to 16
             if (display_name.len < 17) {
                 for (0..17 - display_name.len) |_| {
-                    try app_tui.out.writeStreamingAll(app_tui.io, " ");
+                    try app_tui.bufWrite(" ");
                 }
             }
 
