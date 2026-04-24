@@ -13,6 +13,7 @@ const cpu_topology = @import("render/cpu_topology.zig");
 const timeline = @import("render/timeline.zig");
 const diff = @import("render/diff.zig");
 const causality = @import("render/causality.zig");
+const why_busy = @import("render/why_busy.zig");
 
 // Re-exports from util.zig
 pub const UnitValue = util.UnitValue;
@@ -54,6 +55,16 @@ pub const renderDiffView = diff.renderDiffView;
 
 // Re-exports from causality.zig
 pub const renderCausalityGraph = causality.renderCausalityGraph;
+
+// Re-exports from why_busy.zig
+pub const SpikeKind = why_busy.SpikeKind;
+pub const WhyBusyData = why_busy.WhyBusyData;
+pub const WhyBusyProcMetric = why_busy.ProcMetric;
+pub const topWhyBusyProcIndices = why_busy.topProcIndices;
+pub const findWhyBusyProcByPid = why_busy.findProcByPid;
+pub const fmtWhyBusyTimestamp = why_busy.fmtTimestamp;
+pub const detectWhyBusyKind = why_busy.detectKind;
+pub const renderWhyBusyView = why_busy.renderWhyBusyView;
 
 pub fn setStatus(status_buf: *[160]u8, status_len: *usize, comptime fmt: []const u8, args: anytype) void {
     const msg = std.fmt.bufPrint(status_buf, fmt, args) catch {

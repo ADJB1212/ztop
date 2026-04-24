@@ -265,6 +265,9 @@ pub fn main(main_init: std.process.Init) !void {
     var cached_threads: []ztop.sysinfo.common.ThreadStats = &.{};
     defer if (cached_threads.len > 0) allocator.free(cached_threads);
 
+    var why_busy_view: bool = false;
+    var why_busy_spike_kind: render.SpikeKind = .auto;
+
     var causality_view: bool = false;
     var causality_pid: u32 = 0;
     var causality_name_buf: [64]u8 = std.mem.zeroes([64]u8);
@@ -888,6 +891,59 @@ pub fn main(main_init: std.process.Init) !void {
                             }
                         }
                     }
+                } else if (why_busy_view and procs_box_height >= 5) {
+                    // Current procs: use scrubbed snapshot procs if scrubbing
+                    const wb_procs: []const ztop.sysinfo.ProcStats = if (is_scrubbing and scrub_proc_count > 0)
+                        scrub_proc_buf[0..scrub_proc_count]
+                    else
+                        cached_procs;
+
+                    // "Before" snapshot: 5 ticks earlier than current view position
+                    const before_offset = (if (is_scrubbing) scrub_offset else 0) + 5;
+                    var before_snap_buf: [timeline_mod.MAX_SNAPSHOT_PROCS]ztop.sysinfo.ProcStats = undefined;
+                    var before_snap_count: usize = 0;
+                    var before_cpu_pct: ?f32 = null;
+                    var before_mem_pct: ?f32 = null;
+                    var before_disk_rate: ?u64 = null;
+                    var before_net_rate: ?u64 = null;
+
+                    if (timeline.getSnapshot(before_offset)) |bsnap| {
+                        before_cpu_pct = bsnap.cpu_usage_pct;
+                        before_mem_pct = bsnap.mem_usage_pct;
+                        before_disk_rate = bsnap.disk.read_bytes_ps + bsnap.disk.write_bytes_ps;
+                        before_net_rate = bsnap.net.rx_bytes_ps + bsnap.net.tx_bytes_ps;
+                        const cnt = @min(bsnap.proc_count, timeline_mod.MAX_SNAPSHOT_PROCS);
+                        for (0..cnt) |bi| before_snap_buf[bi] = bsnap.procs[bi];
+                        before_snap_count = cnt;
+                    }
+
+                    const cur_ts: i64 = if (is_scrubbing)
+                        (if (timeline.getSnapshot(scrub_offset)) |s| s.timestamp_ms else 0)
+                    else
+                        0;
+
+                    try render.renderWhyBusyView(
+                        &app_tui,
+                        theme,
+                        procs_box_x,
+                        procs_box_y,
+                        procs_box_width,
+                        procs_box_height,
+                        .{
+                            .kind = why_busy_spike_kind,
+                            .cpu_pct = display_cpu.usage_percent,
+                            .mem_pct = memoryUsagePercent(display_mem),
+                            .disk_rate = display_disk.read_bytes_ps + display_disk.write_bytes_ps,
+                            .net_rate = display_net.rx_bytes_ps + display_net.tx_bytes_ps,
+                            .cpu_pct_before = before_cpu_pct,
+                            .mem_pct_before = before_mem_pct,
+                            .disk_rate_before = before_disk_rate,
+                            .net_rate_before = before_net_rate,
+                            .procs = wb_procs,
+                            .procs_before = before_snap_buf[0..before_snap_count],
+                            .timestamp_ms = cur_ts,
+                        },
+                    );
                 } else if (causality_view and procs_box_height >= 5) {
                     try render.renderCausalityGraph(
                         &app_tui,
@@ -1192,7 +1248,7 @@ pub fn main(main_init: std.process.Init) !void {
                 // Help Overlay
                 if (show_help) {
                     const help_width = 60;
-                    const help_height = 21;
+                    const help_height = 22;
                     const h_x = if (size.width > help_width) (size.width - help_width) / 2 else 1;
                     const h_y = if (size.height > help_height) (size.height - help_height) / 2 else 1;
 
@@ -1244,34 +1300,38 @@ pub fn main(main_init: std.process.Init) !void {
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Resource causality graph", .{});
 
                     try app_tui.moveCursor(h_x + 2, h_y + 12);
+                    try app_tui.printStyled(.{ .fg = theme.text }, "w:            ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Why is this busy? (ranked explanation)", .{});
+
+                    try app_tui.moveCursor(h_x + 2, h_y + 13);
                     try app_tui.printStyled(.{ .fg = theme.text }, "l:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Follow selected process", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 13);
+                    try app_tui.moveCursor(h_x + 2, h_y + 14);
                     try app_tui.printStyled(.{ .fg = theme.text }, "T:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Timeline scrub (←→ step, [] jump)", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 14);
+                    try app_tui.moveCursor(h_x + 2, h_y + 15);
                     try app_tui.printStyled(.{ .fg = theme.text }, "b/B, {{}}/{{}}:   ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Bookmark add/del, jump prev/next", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 15);
+                    try app_tui.moveCursor(h_x + 2, h_y + 16);
                     try app_tui.printStyled(.{ .fg = theme.text }, "d:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Diff view (compare two moments)", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 16);
+                    try app_tui.moveCursor(h_x + 2, h_y + 17);
                     try app_tui.printStyled(.{ .fg = theme.text }, "q:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Quit", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 17);
+                    try app_tui.moveCursor(h_x + 2, h_y + 18);
                     try app_tui.printStyled(.{ .fg = theme.text }, ":             ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Command mode (show zombie)", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 18);
+                    try app_tui.moveCursor(h_x + 2, h_y + 19);
                     try app_tui.printStyled(.{ .fg = theme.text }, "Repo: ", .{});
                     try app_tui.writeStyledHyperlink(.{ .fg = theme.tab_active, .underline = true }, repo_url, repo_label);
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 19);
+                    try app_tui.moveCursor(h_x + 2, h_y + 20);
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Press any key to close...", .{});
                 }
 
@@ -1445,6 +1505,8 @@ pub fn main(main_init: std.process.Init) !void {
                 .thread_view_pid = &thread_view_pid,
                 .thread_view_name_buf = &thread_view_name_buf,
                 .thread_view_name_len = &thread_view_name_len,
+                .why_busy_view = &why_busy_view,
+                .why_busy_spike_kind = &why_busy_spike_kind,
                 .causality_view = &causality_view,
                 .causality_pid = &causality_pid,
                 .causality_name_buf = &causality_name_buf,
