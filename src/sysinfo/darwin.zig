@@ -1,133 +1,17 @@
 const std = @import("std");
 const common = @import("common.zig");
-const sys_c = @cImport({
-    @cInclude("sys/sysctl.h");
-    @cInclude("sys/proc_info.h");
-    @cInclude("sys/socket.h");
-    @cInclude("net/if.h");
-    @cInclude("net/route.h");
-});
-pub const c = struct {
-    const __CFString = opaque {};
-    const __CFDictionary = opaque {};
-    const __CFData = opaque {};
-    const __CFNumber = opaque {};
-    const __CFArray = opaque {};
-    const __CFBoolean = opaque {};
-    const __CFAllocator = opaque {};
 
-    pub const struct_proc_fdinfo = sys_c.struct_proc_fdinfo;
-    pub const struct_socket_fdinfo = sys_c.struct_socket_fdinfo;
-    pub const struct_in_sockinfo = sys_c.struct_in_sockinfo;
-    pub const struct_if_msghdr2 = sys_c.struct_if_msghdr2;
+const bindings = @import("darwin/bindings.zig");
+const cf_util = @import("darwin/cf_util.zig");
+const gpu_mod = @import("darwin/gpu.zig");
+const net_mod = @import("darwin/net.zig");
+const disk_mod = @import("darwin/disk.zig");
+const process_mod = @import("darwin/process.zig");
 
-    pub const PROC_PIDLISTFDS = sys_c.PROC_PIDLISTFDS;
-    pub const PROC_PIDFDSOCKETINFO = sys_c.PROC_PIDFDSOCKETINFO;
-    pub const PROX_FDTYPE_SOCKET = sys_c.PROX_FDTYPE_SOCKET;
-    pub const SOCKINFO_IN = sys_c.SOCKINFO_IN;
-    pub const SOCKINFO_TCP = sys_c.SOCKINFO_TCP;
-    pub const SOCKINFO_UN = sys_c.SOCKINFO_UN;
-    pub const INI_IPV4 = sys_c.INI_IPV4;
-    pub const INI_IPV6 = sys_c.INI_IPV6;
-    pub const TSI_S_CLOSED = sys_c.TSI_S_CLOSED;
-    pub const TSI_S_LISTEN = sys_c.TSI_S_LISTEN;
-    pub const TSI_S_SYN_SENT = sys_c.TSI_S_SYN_SENT;
-    pub const TSI_S_SYN_RECEIVED = sys_c.TSI_S_SYN_RECEIVED;
-    pub const TSI_S_ESTABLISHED = sys_c.TSI_S_ESTABLISHED;
-    pub const TSI_S__CLOSE_WAIT = sys_c.TSI_S__CLOSE_WAIT;
-    pub const TSI_S_FIN_WAIT_1 = sys_c.TSI_S_FIN_WAIT_1;
-    pub const TSI_S_CLOSING = sys_c.TSI_S_CLOSING;
-    pub const TSI_S_LAST_ACK = sys_c.TSI_S_LAST_ACK;
-    pub const TSI_S_FIN_WAIT_2 = sys_c.TSI_S_FIN_WAIT_2;
-    pub const TSI_S_TIME_WAIT = sys_c.TSI_S_TIME_WAIT;
-    pub const CTL_NET = sys_c.CTL_NET;
-    pub const PF_ROUTE = sys_c.PF_ROUTE;
-    pub const NET_RT_IFLIST2 = sys_c.NET_RT_IFLIST2;
-    pub const RTM_IFINFO2 = sys_c.RTM_IFINFO2;
-    pub const IFF_LOOPBACK = sys_c.IFF_LOOPBACK;
-    pub const CTL_KERN = sys_c.CTL_KERN;
-    pub const KERN_PROCARGS2 = sys_c.KERN_PROCARGS2;
-    pub const sysctl = sys_c.sysctl;
-
-    pub const Boolean = u8;
-    pub const CFTypeID = c_ulong;
-    pub const CFIndex = c_long;
-    pub const CFStringEncoding = u32;
-    pub const CFNumberType = CFIndex;
-    pub const IOOptionBits = u32;
-
-    pub const CFTypeRef = *const anyopaque;
-    pub const CFStringRef = *const __CFString;
-    pub const CFDictionaryRef = *const __CFDictionary;
-    pub const CFMutableDictionaryRef = *__CFDictionary;
-    pub const CFDataRef = *const __CFData;
-    pub const CFNumberRef = *const __CFNumber;
-    pub const CFArrayRef = *const __CFArray;
-    pub const CFBooleanRef = *const __CFBoolean;
-    pub const CFAllocatorRef = *const __CFAllocator;
-
-    pub const io_object_t = mach_port_t;
-    pub const io_iterator_t = io_object_t;
-    pub const io_registry_entry_t = io_object_t;
-    pub const io_service_t = io_object_t;
-
-    pub const KERN_SUCCESS: kern_return_t = 0;
-    pub const kIOMainPortDefault: mach_port_t = 0;
-    pub const kCFStringEncodingUTF8: CFStringEncoding = 0x08000100;
-    pub const kCFNumberSInt64Type: CFNumberType = 4;
-    pub const kCFNumberSInt32Type: CFNumberType = 3;
-    pub const kIOBlockStorageDriverClass = "IOBlockStorageDriver";
-    pub const kIOBlockStorageDriverStatisticsKey = "Statistics";
-    pub const kIOBlockStorageDriverStatisticsBytesReadKey = "Bytes (Read)";
-    pub const kIOBlockStorageDriverStatisticsBytesWrittenKey = "Bytes (Write)";
-
-    pub extern fn IOServiceMatching(name: [*:0]const u8) ?CFMutableDictionaryRef;
-    pub extern fn IOServiceGetMatchingServices(mainPort: mach_port_t, matching: CFDictionaryRef, existing: *io_iterator_t) kern_return_t;
-    pub extern fn IOIteratorNext(iterator: io_iterator_t) io_object_t;
-    pub extern fn IOObjectRelease(object: io_object_t) kern_return_t;
-    pub extern fn IORegistryEntryCreateCFProperty(entry: io_registry_entry_t, key: CFStringRef, allocator: ?CFAllocatorRef, options: IOOptionBits) ?CFTypeRef;
-
-    pub extern fn CFStringCreateWithCString(alloc: ?CFAllocatorRef, cStr: [*:0]const u8, encoding: CFStringEncoding) ?CFStringRef;
-    pub extern fn CFRelease(cf: CFTypeRef) void;
-    pub extern fn CFGetTypeID(cf: CFTypeRef) CFTypeID;
-    pub extern fn CFDictionaryGetTypeID() CFTypeID;
-    pub extern fn CFStringGetTypeID() CFTypeID;
-    pub extern fn CFDataGetTypeID() CFTypeID;
-    pub extern fn CFNumberGetTypeID() CFTypeID;
-    pub extern fn CFBooleanGetTypeID() CFTypeID;
-    pub extern fn CFArrayGetTypeID() CFTypeID;
-    pub extern fn CFStringGetCString(theString: CFStringRef, buffer: [*]u8, bufferSize: CFIndex, encoding: CFStringEncoding) Boolean;
-    pub extern fn CFDataGetBytePtr(theData: CFDataRef) ?[*]const u8;
-    pub extern fn CFDataGetLength(theData: CFDataRef) CFIndex;
-    pub extern fn CFDictionaryGetValue(theDict: CFDictionaryRef, key: CFStringRef) ?*const anyopaque;
-    pub extern fn CFNumberGetValue(number: CFNumberRef, theType: CFNumberType, valuePtr: *anyopaque) Boolean;
-    pub extern fn CFBooleanGetValue(boolean: CFBooleanRef) Boolean;
-    pub extern fn CFArrayGetCount(theArray: CFArrayRef) CFIndex;
-    pub extern fn CFArrayGetValueAtIndex(theArray: CFArrayRef, idx: CFIndex) ?*const anyopaque;
-
-    pub extern fn IOPSCopyPowerSourcesInfo() ?CFTypeRef;
-    pub extern fn IOPSCopyPowerSourcesList(blob: CFTypeRef) ?CFArrayRef;
-    pub extern fn IOPSGetPowerSourceDescription(blob: CFTypeRef, ps: *const anyopaque) ?CFTypeRef;
-    pub const kIOPSCurrentCapacityKey = "Current Capacity";
-    pub const kIOPSMaxCapacityKey = "Max Capacity";
-    pub const kIOPSPowerSourceStateKey = "Power Source State";
-    pub const kIOPSIsChargingKey = "Is Charging";
-
-    pub const IOHIDEventSystemClientRef = *anyopaque;
-    pub const IOHIDServiceClientRef = *anyopaque;
-    pub extern fn IOHIDEventSystemClientCreate(allocator: ?CFAllocatorRef) ?IOHIDEventSystemClientRef;
-    pub extern fn IOHIDEventSystemClientCopyServices(client: IOHIDEventSystemClientRef) ?CFArrayRef;
-    pub extern fn IOHIDServiceClientCopyProperty(service: IOHIDServiceClientRef, property: CFStringRef) ?CFTypeRef;
-    pub extern fn IOHIDServiceClientConformsTo(service: IOHIDServiceClientRef, usagePage: u32, usage: u32) i32;
-    pub extern fn IOHIDServiceClientCopyEvent(service: IOHIDServiceClientRef, event_type: i64, options: i32, reserved: i64) ?*anyopaque;
-    pub extern fn IOHIDEventGetFloatValue(event: *anyopaque, field: u32) f64;
-};
-
-const kIOHIDEventTypeTemperature: i64 = 15;
-const kIOHIDEventTypePower: i64 = 25;
-fn IOHIDEventFieldBase(t: i64) u32 {
-    return @intCast(t << 16);
-}
+// Re-export public API that tests depend on
+pub const c = bindings.c;
+pub const parseSocketFdInfo = net_mod.parseSocketFdInfo;
+pub const mapTcpState = net_mod.mapTcpState;
 
 const CpuStats = common.CpuStats;
 const CpuTopology = common.CpuTopology;
@@ -145,169 +29,56 @@ const ProcCpuEntry = common.ProcCpuEntry;
 const MAX_CORES = common.MAX_CORES;
 const MAX_PROCS = common.MAX_PROCS;
 
-const DiskTotals = struct {
-    read_bytes: u64,
-    write_bytes: u64,
-};
+const DiskTotals = disk_mod.DiskTotals;
+const NetTotals = net_mod.NetTotals;
 
-const NetTotals = struct {
-    rx_bytes: u64,
-    tx_bytes: u64,
-};
+const mach_port_t = bindings.mach_port_t;
+const kern_return_t = bindings.kern_return_t;
+const MachTimebaseInfo = bindings.MachTimebaseInfo;
 
-const mach_port_t = u32;
-const kern_return_t = c_int;
+const HOST_CPU_LOAD_INFO = bindings.HOST_CPU_LOAD_INFO;
+const HOST_VM_INFO = bindings.HOST_VM_INFO;
+const PROCESSOR_CPU_LOAD_INFO = bindings.PROCESSOR_CPU_LOAD_INFO;
+const KERN_SUCCESS = bindings.KERN_SUCCESS;
+const PROC_PIDTASKINFO = bindings.PROC_PIDTASKINFO;
+const CPU_STATE_USER = bindings.CPU_STATE_USER;
+const CPU_STATE_SYSTEM = bindings.CPU_STATE_SYSTEM;
+const CPU_STATE_IDLE = bindings.CPU_STATE_IDLE;
+const CPU_STATE_NICE = bindings.CPU_STATE_NICE;
+const CPU_STATE_MAX = bindings.CPU_STATE_MAX;
 
-extern "c" fn mach_host_self() mach_port_t;
-extern "c" fn host_statistics(host: mach_port_t, flavor: c_int, info: [*]c_int, count: *u32) kern_return_t;
-extern "c" fn host_page_size(host: mach_port_t, page_size: *usize) kern_return_t;
-extern "c" fn sysctlbyname(name: [*:0]const u8, oldp: ?*anyopaque, oldlenp: ?*usize, newp: ?*const anyopaque, newlen: usize) c_int;
-extern "c" fn proc_listallpids(buffer: ?[*]c_int, bufsize: c_int) c_int;
-extern "c" fn proc_pidinfo(pid: c_int, flavor: c_int, arg: u64, buffer: ?*anyopaque, bufsize: c_int) c_int;
-extern "c" fn proc_pidfdinfo(pid: c_int, fd: c_int, flavor: c_int, buffer: ?*anyopaque, bufsize: c_int) c_int;
-extern "c" fn proc_name(pid: c_int, buffer: [*]u8, bufsize: u32) c_int;
-extern "c" fn proc_pidpath(pid: c_int, buffer: [*]u8, bufsize: u32) c_int;
-extern "c" fn mach_absolute_time() u64;
-extern "c" fn mach_timebase_info(info: *MachTimebaseInfo) kern_return_t;
-extern "c" fn host_processor_info(host: mach_port_t, flavor: c_int, out_count: *u32, out_info: *[*]c_int, out_info_cnt: *u32) kern_return_t;
-extern "c" fn vm_deallocate(task: mach_port_t, address: usize, size: usize) kern_return_t;
-extern "c" fn mach_task_self() mach_port_t;
+const PROC_PIDTHREADINFO = bindings.PROC_PIDTHREADINFO;
+const PROC_PIDRUSAGE = bindings.PROC_PIDRUSAGE;
+const PROC_PIDLISTTHREADS = bindings.PROC_PIDLISTTHREADS;
+const PROC_PIDT_SHORTBSDINFO = bindings.PROC_PIDT_SHORTBSDINFO;
 
-const MachTimebaseInfo = extern struct {
-    numer: u32,
-    denom: u32,
-};
+const SIDL = bindings.SIDL;
+const SRUN = bindings.SRUN;
+const SSLEEP = bindings.SSLEEP;
+const SSTOP = bindings.SSTOP;
+const SZOMB = bindings.SZOMB;
 
-const HOST_CPU_LOAD_INFO: c_int = 3;
-const HOST_VM_INFO: c_int = 2;
-const PROCESSOR_CPU_LOAD_INFO: c_int = 2;
-const KERN_SUCCESS: c_int = 0;
-const PROC_PIDTASKINFO: c_int = 4;
-const CPU_STATE_USER = 0;
-const CPU_STATE_SYSTEM = 1;
-const CPU_STATE_IDLE = 2;
-const CPU_STATE_NICE = 3;
-const CPU_STATE_MAX = 4;
+const ProcBsdShortInfo = bindings.ProcBsdShortInfo;
+const rusage_info_v2 = bindings.rusage_info_v2;
+const HostCpuLoadInfo = bindings.HostCpuLoadInfo;
+const VmStatistics = bindings.VmStatistics;
+const xsw_usage = bindings.xsw_usage;
+const ProcTaskInfo = bindings.ProcTaskInfo;
+const ProcThreadInfo = bindings.ProcThreadInfo;
 
-const PROC_PIDTHREADINFO: c_int = 5;
-const PROC_PIDRUSAGE = 5;
-const PROC_PIDLISTTHREADS: c_int = 6;
-const PROC_PIDT_SHORTBSDINFO: c_int = 13;
-
-const SIDL = 1;
-const SRUN = 2;
-const SSLEEP = 3;
-const SSTOP = 4;
-const SZOMB = 5;
-
-const ProcBsdShortInfo = extern struct {
-    pbsi_pid: u32,
-    pbsi_ppid: u32,
-    pbsi_pgid: u32,
-    pbsi_status: u32,
-    pbsi_comm: [16]u8,
-    pbsi_flags: u32,
-    pbsi_uid: u32,
-    pbsi_gid: u32,
-    pbsi_ruid: u32,
-    pbsi_rgid: u32,
-    pbsi_svuid: u32,
-    pbsi_svgid: u32,
-    pbsi_rfu: u32,
-};
-
-const rusage_info_v2 = extern struct {
-    ri_uuid: [16]u8,
-    ri_user_time: u64,
-    ri_system_time: u64,
-    ri_pkg_idle_wkups: u64,
-    ri_interrupt_wkups: u64,
-    ri_pageins: u64,
-    ri_wired_size: u64,
-    ri_resident_size: u64,
-    ri_phys_footprint: u64,
-    ri_proc_start_abstime: u64,
-    ri_proc_exit_abstime: u64,
-    ri_child_user_time: u64,
-    ri_child_system_time: u64,
-    ri_child_pkg_idle_wkups: u64,
-    ri_child_pageins: u64,
-    ri_child_elapsed_abstime: u64,
-    ri_diskio_bytesread: u64,
-    ri_diskio_byteswritten: u64,
-};
-
-const HostCpuLoadInfo = extern struct {
-    ticks: [4]u32,
-};
-
-const VmStatistics = extern struct {
-    free_count: u32,
-    active_count: u32,
-    inactive_count: u32,
-    wire_count: u32,
-    zero_fill_count: u32,
-    reactivations: u32,
-    pageins: u32,
-    pageouts: u32,
-    faults: u32,
-    cow_faults: u32,
-    lookups: u32,
-    hits: u32,
-    purgeable_count: u32,
-    speculative_count: u32,
-};
-
-const xsw_usage = extern struct {
-    xsu_total: u64,
-    xsu_avail: u64,
-    xsu_used: u64,
-    xsu_pagesize: u32,
-    xsu_encrypted: bool,
-};
-
-const ProcTaskInfo = extern struct {
-    pti_virtual_size: u64,
-    pti_resident_size: u64,
-    pti_total_user: u64,
-    pti_total_system: u64,
-    pti_threads_user: u64,
-    pti_threads_system: u64,
-    pti_policy: i32,
-    pti_faults: i32,
-    pti_pageins: i32,
-    pti_cow_faults: i32,
-    pti_messages_sent: i32,
-    pti_messages_received: i32,
-    pti_syscalls_mach: i32,
-    pti_syscalls_unix: i32,
-    pti_csw: i32,
-    pti_threadnum: i32,
-    pti_numrunning: i32,
-    pti_priority: i32,
-};
-
-const ProcThreadInfo = extern struct {
-    pth_user_time: u64,
-    pth_system_time: u64,
-    pth_cpu_usage: i32,
-    pth_policy: i32,
-    pth_run_state: i32,
-    pth_flags: i32,
-    pth_sleep_time: i32,
-    pth_curpri: i32,
-    pth_priority: i32,
-    pth_maxpri: i32,
-    pth_name: [64]u8,
-};
-
-const TH_STATE_RUNNING: i32 = 1;
-const TH_STATE_STOPPED: i32 = 2;
-const TH_STATE_WAITING: i32 = 3;
-const TH_STATE_UNINTERRUPTIBLE: i32 = 4;
-const TH_STATE_HALTED: i32 = 5;
+const TH_STATE_RUNNING = bindings.TH_STATE_RUNNING;
+const TH_STATE_STOPPED = bindings.TH_STATE_STOPPED;
+const TH_STATE_WAITING = bindings.TH_STATE_WAITING;
+const TH_STATE_UNINTERRUPTIBLE = bindings.TH_STATE_UNINTERRUPTIBLE;
+const TH_STATE_HALTED = bindings.TH_STATE_HALTED;
 
 const MAX_THREADS = common.MAX_THREADS;
+
+const kIOHIDEventTypeTemperature: i64 = 15;
+const kIOHIDEventTypePower: i64 = 25;
+fn IOHIDEventFieldBase(t: i64) u32 {
+    return @intCast(t << 16);
+}
 
 pub const SysInfo = struct {
     io: std.Io,
@@ -339,21 +110,21 @@ pub const SysInfo = struct {
     hid_client: ?c.IOHIDEventSystemClientRef = null,
 
     pub fn init(io: std.Io) SysInfo {
-        const host_port = mach_host_self();
+        const host_port = bindings.mach_host_self();
 
         var ncpu: u32 = 0;
         var ncpu_size: usize = @sizeOf(u32);
-        _ = sysctlbyname("hw.logicalcpu", @ptrCast(&ncpu), &ncpu_size, null, 0);
+        _ = bindings.sysctlbyname("hw.logicalcpu", @ptrCast(&ncpu), &ncpu_size, null, 0);
 
         var total_mem: u64 = 0;
         var mem_size: usize = @sizeOf(u64);
-        _ = sysctlbyname("hw.memsize", @ptrCast(&total_mem), &mem_size, null, 0);
+        _ = bindings.sysctlbyname("hw.memsize", @ptrCast(&total_mem), &mem_size, null, 0);
 
         var pg_size: usize = 0;
-        _ = host_page_size(host_port, &pg_size);
+        _ = bindings.host_page_size(host_port, &pg_size);
 
         var timebase: MachTimebaseInfo = undefined;
-        _ = mach_timebase_info(&timebase);
+        _ = bindings.mach_timebase_info(&timebase);
 
         const now = nowMs(io);
 
@@ -438,7 +209,7 @@ pub const SysInfo = struct {
     pub fn getCpuStats(self: *SysInfo) CpuStats {
         var cpu_load: HostCpuLoadInfo = undefined;
         var count: u32 = @sizeOf(HostCpuLoadInfo) / @sizeOf(c_int);
-        const ret = host_statistics(self.host_port, HOST_CPU_LOAD_INFO, @ptrCast(&cpu_load), &count);
+        const ret = bindings.host_statistics(self.host_port, HOST_CPU_LOAD_INFO, @ptrCast(&cpu_load), &count);
 
         if (ret != KERN_SUCCESS) {
             return .{ .usage_percent = 0, .cores = self.ncpu };
@@ -457,7 +228,7 @@ pub const SysInfo = struct {
         var processor_count: u32 = 0;
         var processor_info: [*]c_int = undefined;
         var processor_info_count: u32 = 0;
-        const proc_ret = host_processor_info(
+        const proc_ret = bindings.host_processor_info(
             self.host_port,
             PROCESSOR_CPU_LOAD_INFO,
             &processor_count,
@@ -473,8 +244,8 @@ pub const SysInfo = struct {
             };
         }
 
-        defer _ = vm_deallocate(
-            mach_task_self(),
+        defer _ = bindings.vm_deallocate(
+            bindings.mach_task_self(),
             @intFromPtr(processor_info),
             @as(usize, @intCast(processor_info_count)) * @sizeOf(c_int),
         );
@@ -515,7 +286,7 @@ pub const SysInfo = struct {
     pub fn getMemStats(self: *SysInfo) MemStats {
         var vm_stats: VmStatistics = undefined;
         var count: u32 = @sizeOf(VmStatistics) / @sizeOf(c_int);
-        const ret = host_statistics(self.host_port, HOST_VM_INFO, @ptrCast(&vm_stats), &count);
+        const ret = bindings.host_statistics(self.host_port, HOST_VM_INFO, @ptrCast(&vm_stats), &count);
 
         if (ret != KERN_SUCCESS) {
             return .{ .total = self.total_mem, .used = 0, .free = self.total_mem, .cached = 0, .buffered = 0, .swap_total = 0, .swap_used = 0 };
@@ -534,7 +305,7 @@ pub const SysInfo = struct {
 
         var swap: xsw_usage = std.mem.zeroes(xsw_usage);
         var swap_size: usize = @sizeOf(xsw_usage);
-        _ = sysctlbyname("vm.swapusage", @ptrCast(&swap), &swap_size, null, 0);
+        _ = bindings.sysctlbyname("vm.swapusage", @ptrCast(&swap), &swap_size, null, 0);
 
         return .{
             .total = self.total_mem,
@@ -548,7 +319,7 @@ pub const SysInfo = struct {
     }
 
     pub fn getDiskStats(self: *SysInfo) DiskStats {
-        const stats = readDiskTotals() catch DiskTotals{ .read_bytes = 0, .write_bytes = 0 };
+        const stats = disk_mod.readDiskTotals() catch DiskTotals{ .read_bytes = 0, .write_bytes = 0 };
         const now = nowMs(self.io);
         const elapsed = now - self.prev_disk_ms;
 
@@ -570,7 +341,7 @@ pub const SysInfo = struct {
     }
 
     pub fn getNetStats(self: *SysInfo) NetStats {
-        const stats = readNetTotals() catch NetTotals{ .rx_bytes = 0, .tx_bytes = 0 };
+        const stats = net_mod.readNetTotals() catch NetTotals{ .rx_bytes = 0, .tx_bytes = 0 };
         const now = nowMs(self.io);
         const elapsed = now - self.prev_net_ms;
 
@@ -626,7 +397,7 @@ pub const SysInfo = struct {
             const prop = c.IOHIDServiceClientCopyProperty(service, product_key);
             if (prop) |p| {
                 defer c.CFRelease(p);
-                if (copyCFStringLikeValue(p, &name_buf)) |len| {
+                if (cf_util.copyCFStringLikeValue(p, &name_buf)) |len| {
                     name = name_buf[0..len];
                 }
             }
@@ -671,8 +442,8 @@ pub const SysInfo = struct {
         const desc = c.IOPSGetPowerSourceDescription(blob, ps) orelse return stats;
         const dict: c.CFDictionaryRef = @ptrCast(desc);
 
-        if (getCFDictionaryNumberFromCString(dict, c.kIOPSCurrentCapacityKey)) |cap| {
-            if (getCFDictionaryNumberFromCString(dict, c.kIOPSMaxCapacityKey)) |max| {
+        if (cf_util.getCFDictionaryNumberFromCString(dict, c.kIOPSCurrentCapacityKey)) |cap| {
+            if (cf_util.getCFDictionaryNumberFromCString(dict, c.kIOPSMaxCapacityKey)) |max| {
                 if (max > 0) {
                     stats.charge_percent = @as(f32, @floatFromInt(cap)) / @as(f32, @floatFromInt(max)) * 100.0;
                 }
@@ -680,12 +451,12 @@ pub const SysInfo = struct {
         }
 
         // Charge status
-        if (getCFDictionaryValueFromCString(dict, c.kIOPSPowerSourceStateKey)) |sr| {
+        if (cf_util.getCFDictionaryValueFromCString(dict, c.kIOPSPowerSourceStateKey)) |sr| {
             var buf: [32]u8 = undefined;
-            if (copyCFStringLikeValue(sr, &buf)) |len| {
+            if (cf_util.copyCFStringLikeValue(sr, &buf)) |len| {
                 const state = buf[0..len];
                 if (std.mem.eql(u8, state, "AC Power")) {
-                    if (getCFDictionaryValueFromCString(dict, c.kIOPSIsChargingKey)) |cr| {
+                    if (cf_util.getCFDictionaryValueFromCString(dict, c.kIOPSIsChargingKey)) |cr| {
                         if (c.CFGetTypeID(cr) == c.CFBooleanGetTypeID()) {
                             stats.status = if (c.CFBooleanGetValue(@ptrCast(@alignCast(cr))) != 0) .charging else .full;
                         }
@@ -696,8 +467,8 @@ pub const SysInfo = struct {
             }
         }
 
-        const amp_raw = getCFDictionarySignedNumberFromCString(dict, "Amperage");
-        const volt_raw = getCFDictionaryNumberFromCString(dict, "Voltage");
+        const amp_raw = cf_util.getCFDictionarySignedNumberFromCString(dict, "Amperage");
+        const volt_raw = cf_util.getCFDictionaryNumberFromCString(dict, "Voltage");
         if (amp_raw) |amp_ma| {
             if (volt_raw) |volt_mv| {
                 if (volt_mv > 0) {
@@ -715,7 +486,7 @@ pub const SysInfo = struct {
         var result: std.ArrayList(GpuStats) = .empty;
         errdefer result.deinit(allocator);
 
-        try appendAppleGpuStats(allocator, &result);
+        try gpu_mod.appendAppleGpuStats(allocator, &result);
 
         return result.toOwnedSlice(allocator);
     }
@@ -744,13 +515,13 @@ pub const SysInfo = struct {
     /// Fill `out_buf` with process stats, returning the used portion.
     /// Caller owns `out_buf` — no heap allocation per call.
     pub fn getProcStats(self: *SysInfo, out_buf: []ProcStats, sort_by: common.SortBy) ![]ProcStats {
-        const current_time = mach_absolute_time();
+        const current_time = bindings.mach_absolute_time();
         const wall_delta_ns: u64 = if (self.prev_time > 0) self.machToNs(current_time -| self.prev_time) else 0;
         const now_ms = nowMs(self.io);
         const elapsed_ms = now_ms - self.prev_ms;
 
         var pid_buf: [MAX_PROCS]c_int = undefined;
-        const num_pids_raw = proc_listallpids(&pid_buf, @intCast(MAX_PROCS * @sizeOf(c_int)));
+        const num_pids_raw = bindings.proc_listallpids(&pid_buf, @intCast(MAX_PROCS * @sizeOf(c_int)));
         const num_pids: usize = if (num_pids_raw > 0) @intCast(num_pids_raw) else 0;
 
         var proc_count: usize = 0;
@@ -762,11 +533,11 @@ pub const SysInfo = struct {
             const pid: u32 = @intCast(raw_pid);
 
             var task_info: ProcTaskInfo = undefined;
-            const info_ret = proc_pidinfo(raw_pid, PROC_PIDTASKINFO, 0, @ptrCast(&task_info), @sizeOf(ProcTaskInfo));
+            const info_ret = bindings.proc_pidinfo(raw_pid, PROC_PIDTASKINFO, 0, @ptrCast(&task_info), @sizeOf(ProcTaskInfo));
             if (info_ret <= 0) continue;
 
             var bsd_info: ProcBsdShortInfo = undefined;
-            const bsd_ret = proc_pidinfo(raw_pid, PROC_PIDT_SHORTBSDINFO, 0, @ptrCast(&bsd_info), @sizeOf(ProcBsdShortInfo));
+            const bsd_ret = bindings.proc_pidinfo(raw_pid, PROC_PIDT_SHORTBSDINFO, 0, @ptrCast(&bsd_info), @sizeOf(ProcBsdShortInfo));
             var state: common.ProcState = .unknown;
             if (bsd_ret > 0) {
                 state = switch (bsd_info.pbsi_status) {
@@ -780,14 +551,14 @@ pub const SysInfo = struct {
             }
 
             var nbuf: [64]u8 = std.mem.zeroes([64]u8);
-            const name_ret = proc_name(raw_pid, &nbuf, 64);
+            const name_ret = bindings.proc_name(raw_pid, &nbuf, 64);
             const name_len: u8 = if (name_ret > 0) @intCast(@min(@as(usize, @intCast(name_ret)), 63)) else 0;
             if (name_len == 0) continue;
 
             const cpu_total = task_info.pti_total_user +| task_info.pti_total_system;
 
             var rusage: rusage_info_v2 = undefined;
-            const ru_ret = proc_pidinfo(raw_pid, PROC_PIDRUSAGE, 0, @ptrCast(&rusage), @sizeOf(rusage_info_v2));
+            const ru_ret = bindings.proc_pidinfo(raw_pid, PROC_PIDRUSAGE, 0, @ptrCast(&rusage), @sizeOf(rusage_info_v2));
             const disk_read = if (ru_ret > 0) rusage.ri_diskio_bytesread else 0;
             const disk_write = if (ru_ret > 0) rusage.ri_diskio_byteswritten else 0;
 
@@ -836,7 +607,7 @@ pub const SysInfo = struct {
                 .state = state,
             };
             @memcpy(out_buf[proc_count].name_buf[0..name_len], nbuf[0..name_len]);
-            const launch_cmd = try readLaunchCommand(raw_pid, &out_buf[proc_count].launch_cmd_buf);
+            const launch_cmd = try process_mod.readLaunchCommand(raw_pid, &out_buf[proc_count].launch_cmd_buf);
             out_buf[proc_count].launch_cmd_len = @intCast(launch_cmd.len);
 
             proc_count += 1;
@@ -863,7 +634,7 @@ pub const SysInfo = struct {
 
         // Get list of thread unique IDs
         var tid_buf: [MAX_THREADS]u64 = undefined;
-        const tid_ret = proc_pidinfo(
+        const tid_ret = bindings.proc_pidinfo(
             @intCast(pid),
             PROC_PIDLISTTHREADS,
             0,
@@ -879,7 +650,7 @@ pub const SysInfo = struct {
 
         for (tid_buf[0..num_threads]) |tid| {
             var thread_info: ProcThreadInfo = undefined;
-            const info_ret = proc_pidinfo(
+            const info_ret = bindings.proc_pidinfo(
                 @intCast(pid),
                 PROC_PIDTHREADINFO,
                 tid,
@@ -923,13 +694,14 @@ pub const SysInfo = struct {
         common.sortThreadStats(thread_slice);
         return thread_slice;
     }
+
     pub fn getNetConnections(self: *SysInfo, allocator: std.mem.Allocator) ![]common.NetConnection {
         _ = self;
         var result: std.ArrayList(common.NetConnection) = .empty;
         defer result.deinit(allocator);
 
         var pids: [MAX_PROCS]c_int = undefined;
-        const num_pids_bytes = proc_listallpids(&pids, @intCast(pids.len * @sizeOf(c_int)));
+        const num_pids_bytes = bindings.proc_listallpids(&pids, @intCast(pids.len * @sizeOf(c_int)));
         if (num_pids_bytes <= 0) return result.toOwnedSlice(allocator);
         const num_pids = @as(usize, @intCast(num_pids_bytes)) / @sizeOf(c_int);
 
@@ -938,7 +710,7 @@ pub const SysInfo = struct {
         for (pids[0..num_pids]) |pid| {
             if (pid <= 0) continue;
 
-            const fds_bytes = proc_pidinfo(
+            const fds_bytes = bindings.proc_pidinfo(
                 pid,
                 c.PROC_PIDLISTFDS,
                 0,
@@ -949,14 +721,14 @@ pub const SysInfo = struct {
             const num_fds = @as(usize, @intCast(fds_bytes)) / @sizeOf(c.struct_proc_fdinfo);
 
             var process_name: [64]u8 = std.mem.zeroes([64]u8);
-            const name_len_c = proc_name(pid, &process_name, 64);
+            const name_len_c = bindings.proc_name(pid, &process_name, 64);
             const name_len: u8 = if (name_len_c > 0) @intCast(@min(name_len_c, 64)) else 0;
 
             for (fd_buf[0..num_fds]) |fdinfo| {
                 if (fdinfo.proc_fdtype != c.PROX_FDTYPE_SOCKET) continue;
 
                 var socket_info: c.struct_socket_fdinfo = std.mem.zeroes(c.struct_socket_fdinfo);
-                const sret = proc_pidfdinfo(
+                const sret = bindings.proc_pidfdinfo(
                     pid,
                     fdinfo.proc_fd,
                     c.PROC_PIDFDSOCKETINFO,
@@ -965,132 +737,13 @@ pub const SysInfo = struct {
                 );
                 if (sret != @sizeOf(c.struct_socket_fdinfo)) continue;
 
-                const conn = parseSocketFdInfo(@intCast(pid), process_name, name_len, &socket_info) orelse continue;
+                const conn = net_mod.parseSocketFdInfo(@intCast(pid), process_name, name_len, &socket_info) orelse continue;
                 try result.append(allocator, conn);
             }
         }
         return result.toOwnedSlice(allocator);
     }
 };
-
-fn appendAppleGpuStats(allocator: std.mem.Allocator, result: *std.ArrayList(GpuStats)) !void {
-    const matching = c.IOServiceMatching("IOAccelerator") orelse return;
-
-    var iter: c.io_iterator_t = 0;
-    if (c.IOServiceGetMatchingServices(c.kIOMainPortDefault, matching, &iter) != c.KERN_SUCCESS) {
-        return;
-    }
-    defer _ = c.IOObjectRelease(iter);
-
-    const performance_key = c.CFStringCreateWithCString(null, "PerformanceStatistics", c.kCFStringEncodingUTF8) orelse return;
-    defer c.CFRelease(performance_key);
-
-    const utilization_key = c.CFStringCreateWithCString(null, "Device Utilization %", c.kCFStringEncodingUTF8) orelse return;
-    defer c.CFRelease(utilization_key);
-
-    const in_use_key = c.CFStringCreateWithCString(null, "In use system memory", c.kCFStringEncodingUTF8) orelse return;
-    defer c.CFRelease(in_use_key);
-
-    const alloc_key = c.CFStringCreateWithCString(null, "Alloc system memory", c.kCFStringEncodingUTF8) orelse return;
-    defer c.CFRelease(alloc_key);
-
-    const model_key = c.CFStringCreateWithCString(null, "model", c.kCFStringEncodingUTF8) orelse return;
-    defer c.CFRelease(model_key);
-
-    const core_count_key = c.CFStringCreateWithCString(null, "gpu-core-count", c.kCFStringEncodingUTF8) orelse return;
-    defer c.CFRelease(core_count_key);
-
-    var device_index: u8 = 0;
-    while (true) {
-        const service = c.IOIteratorNext(iter);
-        if (service == 0) break;
-        defer _ = c.IOObjectRelease(service);
-
-        const stats_ref = c.IORegistryEntryCreateCFProperty(service, performance_key, null, 0) orelse continue;
-        defer c.CFRelease(stats_ref);
-        if (c.CFGetTypeID(stats_ref) != c.CFDictionaryGetTypeID()) continue;
-
-        const stats_dict: c.CFDictionaryRef = @ptrCast(stats_ref);
-        var gpu = GpuStats{
-            .index = device_index,
-            .vendor = .apple,
-            .backend = .iokit,
-        };
-        device_index +%= 1;
-
-        if (copyServiceStringProperty(service, model_key, gpu.name_buf[0..])) |name_len| {
-            gpu.name_len = @intCast(name_len);
-        } else {
-            var fallback_buf: [24]u8 = undefined;
-            setGpuName(&gpu, buildIndexedName(&fallback_buf, "Apple GPU", gpu.index));
-        }
-
-        if (getCFDictionaryNumber(stats_dict, utilization_key)) |utilization| {
-            gpu.utilization_percent = @floatFromInt(utilization);
-        }
-        if (getCFDictionaryNumber(stats_dict, in_use_key)) |used_bytes| {
-            gpu.memory_used_bytes = used_bytes;
-        }
-        if (getCFDictionaryNumber(stats_dict, alloc_key)) |allocated_bytes| {
-            gpu.memory_total_bytes = allocated_bytes;
-        }
-        if (readServiceNumber(service, core_count_key)) |core_count| {
-            gpu.core_count = @intCast(core_count);
-        }
-
-        try result.append(allocator, gpu);
-    }
-}
-
-fn setGpuName(gpu: *GpuStats, name: []const u8) void {
-    const bounded_len = @min(name.len, gpu.name_buf.len - 1);
-    if (bounded_len == 0) return;
-    @memcpy(gpu.name_buf[0..bounded_len], name[0..bounded_len]);
-    gpu.name_len = @intCast(bounded_len);
-}
-
-fn buildIndexedName(buf: []u8, prefix: []const u8, index: u8) []const u8 {
-    return std.fmt.bufPrint(buf, "{s} {d}", .{ prefix, index }) catch prefix;
-}
-
-fn copyServiceStringProperty(service: c.io_registry_entry_t, key: c.CFStringRef, dest: []u8) ?usize {
-    const value_ref = c.IORegistryEntryCreateCFProperty(service, key, null, 0) orelse return null;
-    defer c.CFRelease(value_ref);
-    return copyCFStringLikeValue(value_ref, dest);
-}
-
-fn copyCFStringLikeValue(value_ref: *const anyopaque, dest: []u8) ?usize {
-    if (dest.len == 0) return null;
-
-    const type_id = c.CFGetTypeID(value_ref);
-    if (type_id == c.CFStringGetTypeID()) {
-        if (c.CFStringGetCString(@ptrCast(value_ref), dest.ptr, @intCast(dest.len), c.kCFStringEncodingUTF8) == 0) {
-            return null;
-        }
-        return std.mem.indexOfScalar(u8, dest, 0) orelse dest.len;
-    }
-
-    if (type_id == c.CFDataGetTypeID()) {
-        const data_ref: c.CFDataRef = @ptrCast(value_ref);
-        const bytes = c.CFDataGetBytePtr(data_ref);
-        const b = bytes orelse return null;
-
-        const data_len: usize = @intCast(@max(c.CFDataGetLength(data_ref), 0));
-        const bounded_len = @min(data_len, dest.len - 1);
-        if (bounded_len == 0) return null;
-
-        @memcpy(dest[0..bounded_len], b[0..bounded_len]);
-        return std.mem.indexOfScalar(u8, dest[0..bounded_len], 0) orelse bounded_len;
-    }
-
-    return null;
-}
-
-fn readServiceNumber(service: c.io_registry_entry_t, key: c.CFStringRef) ?u64 {
-    const value_ref = c.IORegistryEntryCreateCFProperty(service, key, null, 0) orelse return null;
-    defer c.CFRelease(value_ref);
-    return getCFNumberValue(value_ref);
-}
 
 fn readCpuTopology(self: *SysInfo) !void {
     const total_logical = @min(@as(usize, @intCast(readSysctlNumber(u32, "hw.logicalcpu") orelse return error.UnexpectedCpuTopology)), MAX_CORES);
@@ -1252,290 +905,16 @@ fn readPerfLevelString(perflevel: usize, field: []const u8, buf: []u8) ?[]const 
 fn readSysctlNumber(comptime T: type, name: [:0]const u8) ?T {
     var value: T = 0;
     var size: usize = @sizeOf(T);
-    if (sysctlbyname(name.ptr, @ptrCast(&value), &size, null, 0) != 0) return null;
+    if (bindings.sysctlbyname(name.ptr, @ptrCast(&value), &size, null, 0) != 0) return null;
     if (size < @sizeOf(T)) return null;
     return value;
 }
 
 fn readSysctlString(name: [:0]const u8, buf: []u8) ?[]const u8 {
     var size = buf.len;
-    if (sysctlbyname(name.ptr, @ptrCast(buf.ptr), &size, null, 0) != 0) return null;
+    if (bindings.sysctlbyname(name.ptr, @ptrCast(buf.ptr), &size, null, 0) != 0) return null;
     if (size == 0) return null;
 
     const used = if (size > 0 and buf[@min(size, buf.len) - 1] == 0) @min(size, buf.len) - 1 else @min(size, buf.len);
     return buf[0..used];
-}
-
-pub fn parseSocketFdInfo(pid: u32, process_name: [64]u8, name_len: u8, socket_info: *const c.struct_socket_fdinfo) ?common.NetConnection {
-    const kind = socket_info.psi.soi_kind;
-    const in_info: c.struct_in_sockinfo = switch (kind) {
-        c.SOCKINFO_IN => socket_info.psi.soi_proto.pri_in,
-        c.SOCKINFO_TCP => socket_info.psi.soi_proto.pri_tcp.tcpsi_ini,
-        else => return null,
-    };
-
-    var conn = common.NetConnection{
-        .protocol = protocolForSocketKind(kind, in_info.insi_vflag),
-        .pid = pid,
-        .process_name = process_name,
-        .process_name_len = name_len,
-    };
-    conn.local_port = decodeSocketPort(in_info.insi_lport);
-    conn.remote_port = decodeSocketPort(in_info.insi_fport);
-    formatSocketAddress(&conn.local_addr, in_info, true);
-    formatSocketAddress(&conn.remote_addr, in_info, false);
-
-    if (kind == c.SOCKINFO_TCP) {
-        conn.state = mapTcpState(socket_info.psi.soi_proto.pri_tcp.tcpsi_state);
-    }
-
-    return conn;
-}
-
-fn protocolForSocketKind(kind: c_int, vflag: u8) common.NetProtocol {
-    const is_ipv6 = (vflag & c.INI_IPV6) != 0;
-    return switch (kind) {
-        c.SOCKINFO_TCP => if (is_ipv6) .tcp6 else .tcp,
-        c.SOCKINFO_IN => if (is_ipv6) .udp6 else .udp,
-        else => .unknown,
-    };
-}
-
-fn decodeSocketPort(port: c_int) u16 {
-    if (port <= 0) return 0;
-    return std.mem.nativeToBig(u16, @intCast(port));
-}
-
-fn formatSocketAddress(dest: *[46]u8, in_info: c.struct_in_sockinfo, is_local: bool) void {
-    dest.* = std.mem.zeroes([46]u8);
-
-    if ((in_info.insi_vflag & c.INI_IPV4) != 0) {
-        const addr = if (is_local) in_info.insi_laddr.ina_46.i46a_addr4 else in_info.insi_faddr.ina_46.i46a_addr4;
-        const octets: [4]u8 = @bitCast(addr.s_addr);
-        _ = std.fmt.bufPrint(dest, "{}.{}.{}.{}", .{ octets[0], octets[1], octets[2], octets[3] }) catch {};
-        return;
-    }
-
-    if ((in_info.insi_vflag & c.INI_IPV6) != 0) {
-        const addr = if (is_local) in_info.insi_laddr.ina_6 else in_info.insi_faddr.ina_6;
-        const octets = std.mem.asBytes(&addr);
-        _ = std.fmt.bufPrint(
-            dest,
-            "{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}",
-            .{
-                octets[0],  octets[1],  octets[2],  octets[3],
-                octets[4],  octets[5],  octets[6],  octets[7],
-                octets[8],  octets[9],  octets[10], octets[11],
-                octets[12], octets[13], octets[14], octets[15],
-            },
-        ) catch {};
-    }
-}
-
-pub fn mapTcpState(state: c_int) common.NetConnState {
-    return switch (state) {
-        c.TSI_S_CLOSED => .closed,
-        c.TSI_S_LISTEN => .listen,
-        c.TSI_S_SYN_SENT => .syn_sent,
-        c.TSI_S_SYN_RECEIVED => .syn_recv,
-        c.TSI_S_ESTABLISHED => .established,
-        c.TSI_S__CLOSE_WAIT => .close_wait,
-        c.TSI_S_FIN_WAIT_1 => .fin_wait1,
-        c.TSI_S_CLOSING => .closing,
-        c.TSI_S_LAST_ACK => .last_ack,
-        c.TSI_S_FIN_WAIT_2 => .fin_wait2,
-        c.TSI_S_TIME_WAIT => .time_wait,
-        else => .unknown,
-    };
-}
-
-var static_net_buf: []u8 = &[_]u8{};
-
-fn readNetTotals() !NetTotals {
-    var mib = [_]c_int{ c.CTL_NET, c.PF_ROUTE, 0, 0, c.NET_RT_IFLIST2, 0 };
-    var len: usize = 0;
-    if (c.sysctl(&mib, mib.len, null, &len, null, 0) != 0) return error.SysctlFailed;
-
-    if (len > static_net_buf.len) {
-        if (static_net_buf.len > 0) std.heap.page_allocator.free(static_net_buf);
-        static_net_buf = try std.heap.page_allocator.alloc(u8, len);
-    }
-
-    if (c.sysctl(&mib, mib.len, static_net_buf.ptr, &len, null, 0) != 0) return error.SysctlFailed;
-
-    var rx: u64 = 0;
-    var tx: u64 = 0;
-    var offset: usize = 0;
-
-    while (offset + @sizeOf(c.struct_if_msghdr2) <= len) {
-        const hdr: *align(1) const c.struct_if_msghdr2 = @ptrCast(static_net_buf.ptr + offset);
-        const msg_len: usize = hdr.ifm_msglen;
-        if (msg_len == 0) break;
-
-        if (msg_len >= @sizeOf(c.struct_if_msghdr2) and hdr.ifm_type == c.RTM_IFINFO2 and (hdr.ifm_flags & c.IFF_LOOPBACK) == 0) {
-            rx +|= hdr.ifm_data.ifi_ibytes;
-            tx +|= hdr.ifm_data.ifi_obytes;
-        }
-
-        offset += msg_len;
-    }
-
-    return .{ .rx_bytes = rx, .tx_bytes = tx };
-}
-
-var static_argmax_buf: [64 * 1024]u8 = undefined;
-
-fn readLaunchCommand(pid: c_int, dest: []u8) ![]const u8 {
-    var argmax: usize = 0;
-    var argmax_len: usize = @sizeOf(usize);
-    if (sysctlbyname("kern.argmax", &argmax, &argmax_len, null, 0) == 0 and argmax > @sizeOf(c_int) and argmax <= static_argmax_buf.len) {
-        const buf = try std.heap.page_allocator.alloc(u8, argmax);
-        defer std.heap.page_allocator.free(buf);
-
-        var mib = [_]c_int{ c.CTL_KERN, c.KERN_PROCARGS2, pid };
-        var len = argmax;
-        if (c.sysctl(&mib, mib.len, &static_argmax_buf, &len, null, 0) == 0) {
-            if (parseKernProcArgs(static_argmax_buf[0..len], dest)) |cmd| return cmd;
-        }
-    }
-
-    var path_buf: [std.fs.max_path_bytes]u8 = std.mem.zeroes([std.fs.max_path_bytes]u8);
-    const path_len = proc_pidpath(pid, &path_buf, @intCast(path_buf.len));
-    if (path_len > 0) {
-        const bounded_len: usize = @intCast(@min(path_len, dest.len));
-        @memcpy(dest[0..bounded_len], path_buf[0..bounded_len]);
-        return dest[0..bounded_len];
-    }
-
-    return dest[0..0];
-}
-
-fn parseKernProcArgs(raw: []const u8, dest: []u8) ?[]const u8 {
-    if (raw.len <= @sizeOf(c_int)) return null;
-
-    const argc = std.mem.readInt(c_int, raw[0..@sizeOf(c_int)], @import("builtin").cpu.arch.endian());
-    if (argc <= 0) return null;
-
-    var offset: usize = @sizeOf(c_int);
-    while (offset < raw.len and raw[offset] != 0) : (offset += 1) {}
-    while (offset < raw.len and raw[offset] == 0) : (offset += 1) {}
-
-    var write_idx: usize = 0;
-    var args_seen: c_int = 0;
-    while (offset < raw.len and args_seen < argc) : (args_seen += 1) {
-        const arg_start = offset;
-        while (offset < raw.len and raw[offset] != 0) : (offset += 1) {}
-        const arg = raw[arg_start..offset];
-        if (arg.len > 0) {
-            if (write_idx > 0 and write_idx < dest.len) {
-                dest[write_idx] = ' ';
-                write_idx += 1;
-            }
-
-            const available = dest.len -| write_idx;
-            if (available == 0) break;
-
-            const copy_len = @min(arg.len, available);
-            @memcpy(dest[write_idx .. write_idx + copy_len], arg[0..copy_len]);
-            write_idx += copy_len;
-            if (copy_len < arg.len) break;
-        }
-
-        while (offset < raw.len and raw[offset] == 0) : (offset += 1) {}
-    }
-
-    if (write_idx == 0) return null;
-    return dest[0..write_idx];
-}
-
-fn readDiskTotals() !DiskTotals {
-    const matching = c.IOServiceMatching(c.kIOBlockStorageDriverClass) orelse return error.IOKitMatchingFailed;
-
-    var iter: c.io_iterator_t = 0;
-    if (c.IOServiceGetMatchingServices(c.kIOMainPortDefault, matching, &iter) != c.KERN_SUCCESS) {
-        return error.IOKitQueryFailed;
-    }
-    defer _ = c.IOObjectRelease(iter);
-
-    const stats_key = c.CFStringCreateWithCString(null, c.kIOBlockStorageDriverStatisticsKey, c.kCFStringEncodingUTF8) orelse {
-        return error.OutOfMemory;
-    };
-    defer c.CFRelease(stats_key);
-
-    const read_key = c.CFStringCreateWithCString(null, c.kIOBlockStorageDriverStatisticsBytesReadKey, c.kCFStringEncodingUTF8) orelse {
-        return error.OutOfMemory;
-    };
-    defer c.CFRelease(read_key);
-
-    const write_key = c.CFStringCreateWithCString(null, c.kIOBlockStorageDriverStatisticsBytesWrittenKey, c.kCFStringEncodingUTF8) orelse {
-        return error.OutOfMemory;
-    };
-    defer c.CFRelease(write_key);
-
-    var read_bytes: u64 = 0;
-    var write_bytes: u64 = 0;
-
-    while (true) {
-        const service = c.IOIteratorNext(iter);
-        if (service == 0) break;
-        defer _ = c.IOObjectRelease(service);
-
-        const stats_ref = c.IORegistryEntryCreateCFProperty(service, stats_key, null, 0) orelse continue;
-        defer c.CFRelease(stats_ref);
-
-        if (c.CFGetTypeID(stats_ref) != c.CFDictionaryGetTypeID()) continue;
-
-        const stats_dict: c.CFDictionaryRef = @ptrCast(stats_ref);
-        read_bytes +|= getCFDictionaryU64(stats_dict, read_key);
-        write_bytes +|= getCFDictionaryU64(stats_dict, write_key);
-    }
-
-    return .{ .read_bytes = read_bytes, .write_bytes = write_bytes };
-}
-
-fn getCFDictionaryU64(dict: c.CFDictionaryRef, key: c.CFStringRef) u64 {
-    const value = c.CFDictionaryGetValue(dict, key) orelse return 0;
-    return getCFNumberValue(value) orelse 0;
-}
-
-fn getCFDictionaryNumber(dict: c.CFDictionaryRef, key: c.CFStringRef) ?u64 {
-    const value = c.CFDictionaryGetValue(dict, key) orelse return null;
-    return getCFNumberValue(value);
-}
-
-fn getCFDictionaryNumberFromCString(dict: c.CFDictionaryRef, key_ptr: [*:0]const u8) ?u64 {
-    const key = c.CFStringCreateWithCString(null, key_ptr, c.kCFStringEncodingUTF8) orelse return null;
-    defer c.CFRelease(key);
-    return getCFDictionaryNumber(dict, key);
-}
-
-fn getCFDictionaryValueFromCString(dict: c.CFDictionaryRef, key_ptr: [*:0]const u8) ?*const anyopaque {
-    const key = c.CFStringCreateWithCString(null, key_ptr, c.kCFStringEncodingUTF8) orelse return null;
-    defer c.CFRelease(key);
-    return c.CFDictionaryGetValue(dict, key);
-}
-
-fn getCFNumberValue(value: *const anyopaque) ?u64 {
-    if (c.CFGetTypeID(value) != c.CFNumberGetTypeID()) return null;
-
-    var raw: i64 = 0;
-    if (c.CFNumberGetValue(@ptrCast(value), c.kCFNumberSInt64Type, &raw) == 0 or raw < 0) return null;
-
-    return @intCast(raw);
-}
-
-fn getCFSignedNumberValue(value: *const anyopaque) ?i64 {
-    if (c.CFGetTypeID(value) != c.CFNumberGetTypeID()) return null;
-
-    var raw: i64 = 0;
-    if (c.CFNumberGetValue(@ptrCast(value), c.kCFNumberSInt64Type, &raw) == 0) return null;
-
-    return raw;
-}
-
-fn getCFDictionarySignedNumberFromCString(dict: c.CFDictionaryRef, key_ptr: [*:0]const u8) ?i64 {
-    const key = c.CFStringCreateWithCString(null, key_ptr, c.kCFStringEncodingUTF8) orelse return null;
-    defer c.CFRelease(key);
-    const value = c.CFDictionaryGetValue(dict, key) orelse return null;
-    return getCFSignedNumberValue(value);
 }
