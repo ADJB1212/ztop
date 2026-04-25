@@ -135,6 +135,8 @@ pub const ProcStats = struct {
     threads: u32 = 0,
     disk_read_ps: u64 = 0,
     disk_write_ps: u64 = 0,
+    wakeups_ps: u64 = 0,
+    context_switches_ps: u64 = 0,
 
     pub fn name(self: *const ProcStats) []const u8 {
         return self.name_buf[0..self.name_len];
@@ -201,6 +203,8 @@ pub const ProcCpuEntry = struct {
     cpu_total: u64,
     disk_read: u64 = 0,
     disk_write: u64 = 0,
+    wakeups: u64 = 0,
+    context_switches: u64 = 0,
 };
 
 pub const ThreadCpuEntry = struct {
@@ -217,7 +221,12 @@ pub const SortBy = enum {
     mem,
     pid,
     name,
+    wakeups,
 };
+
+fn wakeupScore(proc: ProcStats) f64 {
+    return @floatFromInt(proc.wakeups_ps + (proc.context_switches_ps / 2));
+}
 
 pub inline fn kbToBytes(x: usize) usize {
     return x << 10;
@@ -232,6 +241,7 @@ pub fn sortProcStats(slice: []ProcStats, sort_by: SortBy) void {
                 .mem => return a.mem_percent > b.mem_percent,
                 .pid => return a.pid < b.pid,
                 .name => return std.mem.order(u8, a.name(), b.name()) == .lt,
+                .wakeups => return wakeupScore(a) > wakeupScore(b),
             }
         }
     };

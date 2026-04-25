@@ -133,3 +133,37 @@ pub fn compactLinuxCmdline(raw: []const u8, dest: []u8) []const u8 {
 
     return std.mem.trimEnd(u8, dest[0..write_idx], " ");
 }
+
+pub fn parseStatusContextSwitches(contents: []const u8) ?u64 {
+    var voluntary: ?u64 = null;
+    var nonvoluntary: ?u64 = null;
+
+    var lines = std.mem.splitScalar(u8, contents, '\n');
+    while (lines.next()) |line_raw| {
+        const line = std.mem.trim(u8, line_raw, " \t\r");
+        if (std.mem.startsWith(u8, line, "voluntary_ctxt_switches:")) {
+            const raw = std.mem.trim(u8, line["voluntary_ctxt_switches:".len..], " \t");
+            voluntary = std.fmt.parseInt(u64, raw, 10) catch null;
+        } else if (std.mem.startsWith(u8, line, "nonvoluntary_ctxt_switches:")) {
+            const raw = std.mem.trim(u8, line["nonvoluntary_ctxt_switches:".len..], " \t");
+            nonvoluntary = std.fmt.parseInt(u64, raw, 10) catch null;
+        }
+    }
+
+    if (voluntary == null and nonvoluntary == null) return null;
+    return (voluntary orelse 0) +| (nonvoluntary orelse 0);
+}
+
+pub fn parseSchedCounter(contents: []const u8, key: []const u8) ?u64 {
+    var lines = std.mem.splitScalar(u8, contents, '\n');
+    while (lines.next()) |line_raw| {
+        const line = std.mem.trim(u8, line_raw, " \t\r");
+        if (!std.mem.startsWith(u8, line, key)) continue;
+
+        var fields = std.mem.tokenizeAny(u8, line, " \t:");
+        _ = fields.next() orelse continue;
+        const value = fields.next() orelse continue;
+        return std.fmt.parseInt(u64, value, 10) catch null;
+    }
+    return null;
+}

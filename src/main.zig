@@ -117,7 +117,7 @@ fn renderProcessRow(
     prefix: []const u8,
     prefix_width: usize,
 ) !void {
-    var buf: [32]u8 = undefined;
+    var buf: [48]u8 = undefined;
     const pid_style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.muted };
     const ppid_style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.muted };
     const name_style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text };
@@ -125,7 +125,7 @@ fn renderProcessRow(
     var rendered_name = false;
     for (layout.columns[0..layout.count]) |column| {
         if (!rendered_name and switch (column) {
-            .state, .cpu, .mem, .threads, .disk_read, .disk_write => true,
+            .state, .cpu, .mem, .threads, .disk_read, .disk_write, .wakeups => true,
             .pid, .ppid => false,
         }) {
             try renderProcessNameCell(app_tui, name_style, layout.name_width, prefix, prefix_width, proc.name());
@@ -180,6 +180,15 @@ fn renderProcessRow(
                 const text = std.fmt.bufPrint(&buf, "W {d:4.1}{s}/s", .{ rate.value, rate.unit }) catch "";
                 const style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.io_rate } else .{ .fg = theme.io_rate };
                 try render.writeAlignedCell(app_tui, style, render.processColumnWidth(.disk_write), .right, text);
+            },
+            .wakeups => {
+                const text = std.fmt.bufPrint(&buf, "W{d:5} C{d:5}", .{ proc.wakeups_ps, proc.context_switches_ps }) catch "";
+                const activity = @as(f32, @floatFromInt(proc.wakeups_ps / 20 + proc.context_switches_ps / 40));
+                const style: Tui.Style = if (is_selected)
+                    .{ .bg = theme.selection_bg, .fg = render.usageColor(theme, activity) }
+                else
+                    .{ .fg = render.usageColor(theme, activity) };
+                try render.writeAlignedCell(app_tui, style, render.processColumnWidth(.wakeups), .right, text);
             },
         }
     }
@@ -1083,6 +1092,7 @@ pub fn main(main_init: std.process.Init) !void {
                             .mem => "MEM%",
                             .pid => "PID",
                             .name => "NAME",
+                            .wakeups => "Wakeups",
                         };
                         const current_process_columns = activeProcessColumns(current_tab, &process_columns, &io_process_columns);
                         const visible_column_count = current_process_columns.countVisible() + 1; // Name is always visible.
@@ -1291,8 +1301,8 @@ pub fn main(main_init: std.process.Init) !void {
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Navigate processes", .{});
 
                     try app_tui.moveCursor(h_x + 2, h_y + 4);
-                    try app_tui.printStyled(.{ .fg = theme.text }, "c, m, p, n:   ", .{});
-                    try app_tui.printStyled(.{ .fg = theme.muted }, "Sort by CPU/Mem/PID/Name", .{});
+                    try app_tui.printStyled(.{ .fg = theme.text }, "c,m,p,n,u:    ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Sort by CPU/Mem/PID/Name/Wakeups", .{});
 
                     try app_tui.moveCursor(h_x + 2, h_y + 5);
                     try app_tui.printStyled(.{ .fg = theme.text }, "v:            ", .{});
@@ -1331,40 +1341,44 @@ pub fn main(main_init: std.process.Init) !void {
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Pressure root-cause hints (swap/log/fd)", .{});
 
                     try app_tui.moveCursor(h_x + 2, h_y + 14);
+                    try app_tui.printStyled(.{ .fg = theme.text }, "u:            ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Wakeup attribution sort", .{});
+
+                    try app_tui.moveCursor(h_x + 2, h_y + 15);
                     try app_tui.printStyled(.{ .fg = theme.text }, "l:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Follow selected process", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 15);
+                    try app_tui.moveCursor(h_x + 2, h_y + 16);
                     try app_tui.printStyled(.{ .fg = theme.text }, "T:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Timeline scrub (←→ step, [] jump)", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 16);
+                    try app_tui.moveCursor(h_x + 2, h_y + 17);
                     try app_tui.printStyled(.{ .fg = theme.text }, "b/B, {{}}/{{}}:   ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Bookmark add/del, jump prev/next", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 17);
+                    try app_tui.moveCursor(h_x + 2, h_y + 18);
                     try app_tui.printStyled(.{ .fg = theme.text }, "d:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Diff view (compare two moments)", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 18);
+                    try app_tui.moveCursor(h_x + 2, h_y + 19);
                     try app_tui.printStyled(.{ .fg = theme.text }, "q:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Quit", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 19);
+                    try app_tui.moveCursor(h_x + 2, h_y + 20);
                     try app_tui.printStyled(.{ .fg = theme.text }, ":             ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Command mode (show zombie)", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 20);
+                    try app_tui.moveCursor(h_x + 2, h_y + 21);
                     try app_tui.printStyled(.{ .fg = theme.text }, "Repo: ", .{});
                     try app_tui.writeStyledHyperlink(.{ .fg = theme.tab_active, .underline = true }, repo_url, repo_label);
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 21);
+                    try app_tui.moveCursor(h_x + 2, h_y + 22);
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Press any key to close...", .{});
                 }
 
                 if (show_column_picker) {
-                    const picker_width = 40;
-                    const picker_height = 14;
+                    const picker_width = 45;
+                    const picker_height = 15;
                     const picker_x = if (size.width > picker_width) (size.width - picker_width) / 2 else 1;
                     const picker_y = if (size.height > picker_height) (size.height - picker_height) / 2 else 1;
                     const picker_columns = activeProcessColumns(current_tab, &process_columns, &io_process_columns);
@@ -1390,8 +1404,10 @@ pub fn main(main_init: std.process.Init) !void {
                         try app_tui.printStyled(.{ .fg = theme.text }, " {s}", .{column.label()});
                     }
 
-                    try app_tui.moveCursor(picker_x + 2, picker_y + 12);
-                    try app_tui.printStyled(.{ .fg = theme.muted }, "Press 1-8 to toggle, Enter/Esc to close", .{});
+                    try app_tui.moveCursor(picker_x + 2, picker_y + picker_height - 2);
+                    var picker_help_buf: [64]u8 = undefined;
+                    const picker_help = std.fmt.bufPrint(&picker_help_buf, "Press 1-{d} to toggle, Enter/Esc to close", .{ztop.config.process_column_order.len}) catch "Press number to toggle, Enter/Esc to close";
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "{s}", .{picker_help});
                 }
 
                 // Timeline bar (above footer when snapshot data exists)
@@ -1459,7 +1475,9 @@ pub fn main(main_init: std.process.Init) !void {
                     try app_tui.printStyled(.{ .fg = theme.muted }, " (Press Enter to apply, Esc to cancel)", .{});
                 } else if (show_column_picker) {
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Process columns: ", .{});
-                    try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "1-8", .{});
+                    var picker_range_buf: [16]u8 = undefined;
+                    const picker_range = std.fmt.bufPrint(&picker_range_buf, "1-{d}", .{ztop.config.process_column_order.len}) catch "1-n";
+                    try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "{s}", .{picker_range});
                     try app_tui.printStyled(.{ .fg = theme.muted }, " toggle, ", .{});
                     try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "Enter/Esc", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, " close", .{});

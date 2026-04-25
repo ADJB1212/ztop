@@ -101,6 +101,7 @@ pub const ProcessColumn = enum(u8) {
     threads,
     disk_read,
     disk_write,
+    wakeups,
 
     pub fn label(self: ProcessColumn) []const u8 {
         return switch (self) {
@@ -112,6 +113,7 @@ pub const ProcessColumn = enum(u8) {
             .threads => "Threads",
             .disk_read => "Disk Read",
             .disk_write => "Disk Write",
+            .wakeups => "Wakeups",
         };
     }
 };
@@ -125,6 +127,7 @@ pub const process_column_order = [_]ProcessColumn{
     .threads,
     .disk_read,
     .disk_write,
+    .wakeups,
 };
 
 pub const ProcessColumns = struct {
@@ -136,6 +139,7 @@ pub const ProcessColumns = struct {
     threads: bool = false,
     disk_read: bool = false,
     disk_write: bool = false,
+    wakeups: bool = false,
 
     pub fn defaultsMain() ProcessColumns {
         return .{
@@ -164,6 +168,7 @@ pub const ProcessColumns = struct {
             .threads = true,
             .disk_read = true,
             .disk_write = true,
+            .wakeups = true,
         };
     }
 
@@ -181,6 +186,7 @@ pub const ProcessColumns = struct {
             .threads => self.threads,
             .disk_read => self.disk_read,
             .disk_write => self.disk_write,
+            .wakeups => self.wakeups,
         };
     }
 
@@ -194,6 +200,7 @@ pub const ProcessColumns = struct {
             .threads => self.threads = visible,
             .disk_read => self.disk_read = visible,
             .disk_write => self.disk_write = visible,
+            .wakeups => self.wakeups = visible,
         }
     }
 
@@ -777,6 +784,8 @@ fn parseThemeName(value: []const u8) !ThemeName {
 fn parseSortBy(value: []const u8) !sysinfo.SortBy {
     if (std.mem.eql(u8, value, "memory")) return .mem;
     if (std.mem.eql(u8, value, "process_name")) return .name;
+    if (std.mem.eql(u8, value, "wakeup")) return .wakeups;
+    if (std.mem.eql(u8, value, "wakeups_per_second")) return .wakeups;
     return std.meta.stringToEnum(sysinfo.SortBy, value) orelse error.UnknownSort;
 }
 
@@ -830,6 +839,8 @@ fn parseProcessColumn(value: []const u8) !ProcessColumn {
     if (std.mem.eql(u8, value, "thread")) return .threads;
     if (std.mem.eql(u8, value, "read")) return .disk_read;
     if (std.mem.eql(u8, value, "write")) return .disk_write;
+    if (std.mem.eql(u8, value, "wakeup")) return .wakeups;
+    if (std.mem.eql(u8, value, "wakeups_per_second")) return .wakeups;
     return std.meta.stringToEnum(ProcessColumn, value) orelse error.UnknownProcessColumn;
 }
 

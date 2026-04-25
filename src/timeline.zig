@@ -711,7 +711,7 @@ pub const Timeline = struct {
 /// Magic bytes identifying a ztop session file.
 pub const SESSION_MAGIC: [4]u8 = "ZTOP".*;
 /// Binary format version. Increment when the schema changes incompatibly.
-pub const SESSION_VERSION: u32 = 1;
+pub const SESSION_VERSION: u32 = 2;
 /// Maximum file size that loadFromDisk will accept (guards against corrupt/huge files).
 const SESSION_MAX_BYTES: usize = 4 * 1024 * 1024;
 
@@ -786,6 +786,8 @@ fn serializeSnapshot(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), snap: *con
         try appendU32(gpa, buf, p.threads);
         try appendU64(gpa, buf, p.disk_read_ps);
         try appendU64(gpa, buf, p.disk_write_ps);
+        try appendU64(gpa, buf, p.wakeups_ps);
+        try appendU64(gpa, buf, p.context_switches_ps);
     }
 }
 
@@ -898,6 +900,8 @@ fn deserializeSnapshot(r: *ByteReader) !SystemSnapshot {
         const threads = try r.readU32();
         const disk_read_ps = try r.readU64();
         const disk_write_ps = try r.readU64();
+        const wakeups_ps = try r.readU64();
+        const context_switches_ps = try r.readU64();
         if (i < MAX_SNAPSHOT_PROCS) {
             var p: common.ProcStats = std.mem.zeroes(common.ProcStats);
             p.pid = pid;
@@ -911,6 +915,8 @@ fn deserializeSnapshot(r: *ByteReader) !SystemSnapshot {
             p.threads = threads;
             p.disk_read_ps = disk_read_ps;
             p.disk_write_ps = disk_write_ps;
+            p.wakeups_ps = wakeups_ps;
+            p.context_switches_ps = context_switches_ps;
             snap.procs[i] = p;
         }
     }

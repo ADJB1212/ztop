@@ -22,6 +22,7 @@ pub fn processColumnWidth(column: ProcessColumn) usize {
         .threads => 8,
         .disk_read => 11,
         .disk_write => 11,
+        .wakeups => 14,
     };
 }
 

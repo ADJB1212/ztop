@@ -46,6 +46,18 @@ test "config parse supports aliases and quoted values" {
     try std.testing.expectEqual(tui.Tui.Color{ .indexed = 183 }, parsed.theme.process_title);
 }
 
+test "config parse supports wakeup attribution sort and column" {
+    const parsed = config.parse(
+        \\default_sort = wakeups
+        \\process_columns = pid, cpu, wakeups
+    );
+
+    try std.testing.expectEqual(@import("ztop").sysinfo.SortBy.wakeups, parsed.default_sort);
+    try std.testing.expectEqual(true, parsed.process_columns.pid);
+    try std.testing.expectEqual(true, parsed.process_columns.cpu);
+    try std.testing.expectEqual(true, parsed.process_columns.wakeups);
+}
+
 test "config parse supports 256 color themes and numeric overrides" {
     const parsed = config.parse(
         \\theme = "default-light"

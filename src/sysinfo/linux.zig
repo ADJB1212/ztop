@@ -13,6 +13,8 @@ const gpu_mod = @import("linux/gpu.zig");
 // Re-export public API that tests depend on
 pub const parseProcStat = process_mod.parseProcStat;
 pub const parseCpuListInfo = process_mod.parseCpuListInfo;
+pub const parseStatusContextSwitches = process_mod.parseStatusContextSwitches;
+pub const parseSchedCounter = process_mod.parseSchedCounter;
 pub const ParsedProcStat = process_mod.ParsedProcStat;
 pub const CpuListInfo = process_mod.CpuListInfo;
 
@@ -341,14 +343,35 @@ pub const SysInfo = struct {
                 }
             } else |_| {}
 
+            var status_buf: [1024]u8 = undefined;
+            var context_switches_total: u64 = 0;
+            if (io_util_mod.readDirFile(self.io, &pid_dir, "status", &status_buf)) |status_contents| {
+                context_switches_total = process_mod.parseStatusContextSwitches(status_contents) orelse 0;
+            } else |_| {}
+
+            var sched_buf: [2048]u8 = undefined;
+            var wakeups_total: u64 = 0;
+            if (io_util_mod.readDirFile(self.io, &pid_dir, "sched", &sched_buf)) |sched_contents| {
+                wakeups_total = process_mod.parseSchedCounter(sched_contents, "nr_wakeups") orelse 0;
+            } else |_| {}
+
             if (new_proc_count < MAX_PROCS) {
-                new_procs[new_proc_count] = .{ .pid = pid, .cpu_total = proc_info.cpu_total, .disk_read = disk_read, .disk_write = disk_write };
+                new_procs[new_proc_count] = .{
+                    .pid = pid,
+                    .cpu_total = proc_info.cpu_total,
+                    .disk_read = disk_read,
+                    .disk_write = disk_write,
+                    .wakeups = wakeups_total,
+                    .context_switches = context_switches_total,
+                };
                 new_proc_count += 1;
             }
 
             var cpu_percent: f32 = 0;
             var disk_read_ps: u64 = 0;
             var disk_write_ps: u64 = 0;
+            var wakeups_ps: u64 = 0;
+            var context_switches_ps: u64 = 0;
 
             const prev_entry = self.findPrevProcEntry(pid);
 
@@ -364,6 +387,10 @@ pub const SysInfo = struct {
                     const d_write = disk_write -| prev.disk_write;
                     disk_read_ps = (d_read *| 1000) / @as(u64, @intCast(elapsed_ms));
                     disk_write_ps = (d_write *| 1000) / @as(u64, @intCast(elapsed_ms));
+                    const d_wakeups = wakeups_total -| prev.wakeups;
+                    const d_csw = context_switches_total -| prev.context_switches;
+                    wakeups_ps = (d_wakeups *| 1000) / @as(u64, @intCast(elapsed_ms));
+                    context_switches_ps = (d_csw *| 1000) / @as(u64, @intCast(elapsed_ms));
                 }
             }
 
@@ -383,6 +410,8 @@ pub const SysInfo = struct {
                 .threads = proc_info.num_threads,
                 .disk_read_ps = disk_read_ps,
                 .disk_write_ps = disk_write_ps,
+                .wakeups_ps = wakeups_ps,
+                .context_switches_ps = context_switches_ps,
                 .name_len = @intCast(name.len),
                 .state = proc_info.state,
             };

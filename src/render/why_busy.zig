@@ -8,7 +8,7 @@ const Tui = tui.Tui;
 const MAX_TOP = 8;
 
 /// Which resource spike to explain. `.auto` means detect from current metrics.
-pub const SpikeKind = enum { auto, cpu, mem, disk, net, thermal };
+pub const SpikeKind = enum { auto, cpu, mem, disk, net, thermal, wakeup };
 
 /// All data needed for the "Why is this busy?" view.
 pub const WhyBusyData = struct {
@@ -31,13 +31,14 @@ pub const WhyBusyData = struct {
     timestamp_ms: i64 = 0,
 };
 
-pub const ProcMetric = enum { cpu, mem, disk };
+pub const ProcMetric = enum { cpu, mem, disk, wakeups };
 
 fn procMetricValue(proc: sysinfo.ProcStats, metric: ProcMetric) f64 {
     return switch (metric) {
         .cpu => @floatCast(proc.cpu_percent),
         .mem => @floatCast(proc.mem_percent),
         .disk => @floatFromInt(proc.disk_read_ps + proc.disk_write_ps),
+        .wakeups => @floatFromInt(proc.wakeups_ps + proc.context_switches_ps / 2),
     };
 }
 
@@ -115,6 +116,16 @@ fn renderDeltaRate(app_tui: *Tui, theme: config.Theme, before_val: ?u64, now_val
 
 /// Detect the most prominent metric kind when kind == .auto.
 pub fn detectKind(data: WhyBusyData) SpikeKind {
+    var wakeup_score_max: f32 = 0;
+    for (data.procs) |proc| {
+        const score = @as(f32, @floatFromInt(proc.wakeups_ps + proc.context_switches_ps / 2));
+        if (score > wakeup_score_max) wakeup_score_max = score;
+    }
+
+    if (data.cpu_pct <= 35.0 and wakeup_score_max >= 300.0) {
+        return .wakeup;
+    }
+
     // Simple heuristic: highest relative busyness wins
     var best = SpikeKind.cpu;
     var best_score: f32 = data.cpu_pct;
@@ -139,6 +150,7 @@ fn spikeLabel(kind: SpikeKind) []const u8 {
         .disk => "Disk I/O",
         .net => "Network",
         .thermal => "Thermal",
+        .wakeup => "Wakeup Churn",
     };
 }
 
@@ -147,6 +159,7 @@ fn spikeProcMetric(kind: SpikeKind) ProcMetric {
         .auto, .cpu, .thermal => .cpu,
         .mem => .mem,
         .disk, .net => .disk,
+        .wakeup => .wakeups,
     };
 }
 
@@ -215,6 +228,15 @@ fn renderProcRow(
             if (proc_before) |pb| {
                 const before_io = pb.disk_read_ps + pb.disk_write_ps;
                 try renderDeltaRate(app_tui, theme, before_io, total_io);
+            }
+        },
+        .wakeups => {
+            const churn = proc.wakeups_ps + proc.context_switches_ps;
+            const pct = @as(f32, @floatFromInt(churn / 20));
+            try util.renderMeter(app_tui, meter_w, @min(pct, 100.0), .{ .fg = util.usageColor(theme, pct) }, .{ .fg = theme.muted, .dim = true });
+            try app_tui.printStyled(.{ .fg = util.usageColor(theme, pct) }, " W{d:4} C{d:4}", .{ proc.wakeups_ps, proc.context_switches_ps });
+            if (proc.cpu_percent <= 10.0 and churn > 0) {
+                try app_tui.printStyled(.{ .fg = theme.usage_warn, .dim = true }, " low CPU", .{});
             }
         },
     }
@@ -320,6 +342,7 @@ pub fn renderWhyBusyView(
         .mem => "TOP MEMORY CONTRIBUTORS",
         .disk => "TOP DISK I/O",
         .net => "TOP DISK I/O (proxy — per-process net unavailable)",
+        .wakeup => "TOP WAKEUP/CHURN ATTRIBUTION",
     };
 
     try app_tui.moveCursor(inner_x, cur_y);

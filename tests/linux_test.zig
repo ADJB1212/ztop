@@ -59,3 +59,22 @@ test "parseCpuListInfo handles a single cpu entry" {
     try std.testing.expectEqual(@as(?u16, 7), parsed.first);
     try std.testing.expectEqual(@as(?usize, 0), parsed.target_index);
 }
+
+test "parseStatusContextSwitches sums voluntary and nonvoluntary values" {
+    const status =
+        "Name:\tbash\n" ++
+        "voluntary_ctxt_switches:\t42\n" ++
+        "nonvoluntary_ctxt_switches:\t8\n";
+
+    try std.testing.expectEqual(@as(?u64, 50), linux.parseStatusContextSwitches(status));
+}
+
+test "parseSchedCounter reads key value" {
+    const sched =
+        "se.exec_start                                :      1234.000000\n" ++
+        "nr_wakeups                                   :                 77\n" ++
+        "nr_wakeups_sync                              :                  2\n";
+
+    try std.testing.expectEqual(@as(?u64, 77), linux.parseSchedCounter(sched, "nr_wakeups"));
+    try std.testing.expectEqual(@as(?u64, null), linux.parseSchedCounter(sched, "nr_not_here"));
+}

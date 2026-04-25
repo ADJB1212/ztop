@@ -153,6 +153,20 @@ test "sortProcStats by name" {
     try std.testing.expectEqual(@as(u32, 1), procs[2].pid);
 }
 
+test "sortProcStats by wakeups" {
+    var procs = [_]common.ProcStats{
+        .{ .pid = 1, .wakeups_ps = 120, .context_switches_ps = 20 },
+        .{ .pid = 2, .wakeups_ps = 40, .context_switches_ps = 200 },
+        .{ .pid = 3, .wakeups_ps = 80, .context_switches_ps = 40 },
+    };
+
+    common.sortProcStats(&procs, .wakeups);
+
+    try std.testing.expectEqual(@as(u32, 2), procs[0].pid);
+    try std.testing.expectEqual(@as(u32, 1), procs[1].pid);
+    try std.testing.expectEqual(@as(u32, 3), procs[2].pid);
+}
+
 test "filterProcStatsByLaunchCommandSubstring removes matches in place" {
     var procs = [_]common.ProcStats{
         .{ .pid = 1, .launch_cmd_len = 22 },

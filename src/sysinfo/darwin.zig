@@ -561,15 +561,26 @@ pub const SysInfo = struct {
             const ru_ret = bindings.proc_pidinfo(raw_pid, PROC_PIDRUSAGE, 0, @ptrCast(&rusage), @sizeOf(rusage_info_v2));
             const disk_read = if (ru_ret > 0) rusage.ri_diskio_bytesread else 0;
             const disk_write = if (ru_ret > 0) rusage.ri_diskio_byteswritten else 0;
+            const wakeups_total = if (ru_ret > 0) rusage.ri_pkg_idle_wkups +| rusage.ri_interrupt_wkups else 0;
+            const context_switches_total = if (task_info.pti_csw > 0) @as(u64, @intCast(task_info.pti_csw)) else 0;
 
             if (new_proc_count < MAX_PROCS) {
-                new_procs[new_proc_count] = .{ .pid = pid, .cpu_total = cpu_total, .disk_read = disk_read, .disk_write = disk_write };
+                new_procs[new_proc_count] = .{
+                    .pid = pid,
+                    .cpu_total = cpu_total,
+                    .disk_read = disk_read,
+                    .disk_write = disk_write,
+                    .wakeups = wakeups_total,
+                    .context_switches = context_switches_total,
+                };
                 new_proc_count += 1;
             }
 
             var cpu_percent: f32 = 0;
             var disk_read_ps: u64 = 0;
             var disk_write_ps: u64 = 0;
+            var wakeups_ps: u64 = 0;
+            var context_switches_ps: u64 = 0;
 
             const prev_entry = self.findPrevProcEntry(pid);
 
@@ -585,6 +596,10 @@ pub const SysInfo = struct {
                     const d_write = disk_write -| prev.disk_write;
                     disk_read_ps = (d_read *| 1000) / @as(u64, @intCast(elapsed_ms));
                     disk_write_ps = (d_write *| 1000) / @as(u64, @intCast(elapsed_ms));
+                    const d_wakeups = wakeups_total -| prev.wakeups;
+                    const d_csw = context_switches_total -| prev.context_switches;
+                    wakeups_ps = (d_wakeups *| 1000) / @as(u64, @intCast(elapsed_ms));
+                    context_switches_ps = (d_csw *| 1000) / @as(u64, @intCast(elapsed_ms));
                 }
             }
 
@@ -603,6 +618,8 @@ pub const SysInfo = struct {
                 .threads = @intCast(task_info.pti_threadnum),
                 .disk_read_ps = disk_read_ps,
                 .disk_write_ps = disk_write_ps,
+                .wakeups_ps = wakeups_ps,
+                .context_switches_ps = context_switches_ps,
                 .name_len = name_len,
                 .state = state,
             };

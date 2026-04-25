@@ -199,7 +199,8 @@ fn handleColumnPickerToken(ctx: *Context, token: Tui.InputToken) bool {
                 return true;
             }
 
-            if (ch < '1' or ch > '8') return false;
+            const max_column_digit: u8 = @as(u8, @intCast('0' + config.process_column_order.len));
+            if (ch < '1' or ch > max_column_digit) return false;
 
             const column = config.process_column_order[@as(usize, ch - '1')];
             const visible = activeColumns(ctx).toggle(column);
@@ -390,6 +391,13 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
             'n' => {
                 if (!ctx.thread_view.* and !ctx.is_scrubbing.*) {
                     ctx.sort_by.* = .name;
+                    sort_dirty.* = true;
+                }
+                return true;
+            },
+            'u' => {
+                if (!ctx.thread_view.* and !ctx.is_scrubbing.*) {
+                    ctx.sort_by.* = .wakeups;
                     sort_dirty.* = true;
                 }
                 return true;
@@ -662,6 +670,7 @@ fn enterWhyBusyView(ctx: *Context) void {
         .disk => "disk I/O",
         .net => "network",
         .thermal => "thermal",
+        .wakeup => "wakeup churn",
     };
     render.setStatus(ctx.status_buf, ctx.status_len, "Why is {s} busy? — w or Esc to close", .{kind_label});
 }

@@ -21,10 +21,11 @@ Built for people who want a focused dashboard in the terminal: quick enough to k
   - NVIDIA via NVML when `libnvidia-ml` is present
   - AMD via DRM/sysfs counters exposed by `amdgpu`
   - Apple Silicon via IORegistry accelerator performance statistics
-- Dynamic process-table columns with an in-app picker (PID, PPID, state, CPU, memory, threads, disk rates)
+- Dynamic process-table columns with an in-app picker (PID, PPID, state, CPU, memory, threads, disk rates, wakeups/churn)
 - Mouse support for tab switching, list navigation, and scrolling
 - Timeline scrubbing with incident bookmarks and before/after diff: pause live view, scrub through recent history, drop markers to jump back to interesting moments, and compare two captured snapshots side-by-side
-- **Why is this busy?** (`w`) — ranked explanation view showing which processes are driving the current CPU, memory, disk, or network spike, with delta indicators against a 5-tick baseline
+- **Why is this busy?** (`w`) — ranked explanation view showing which processes are driving the current CPU, memory, disk, network, or wakeup-churn spike, with delta indicators against a 5-tick baseline
+- **Wakeup attribution** (`u` sort + optional `wakeups` column) — surfaces timer wakeups and scheduler churn (`W` wakeups/sec, `C` context-switches/sec), including low-CPU/high-churn workloads
 - **Resource causality graph** (`g`) — per-process view linking a selected process to its child tree, open network connections, and a resource summary
 - **Pressure root-cause hints** (`P`) — automatic detection of pathological patterns: swap storms, runaway log writers, reconnect loops, file descriptor pressure, memory leak suspects, CPU runaways, thermal throttle risk, and cache starvation
 - Built-in process actions: `SIGTERM`, `SIGKILL`, `:killall`, `:show zombie`, `:search`
@@ -84,7 +85,7 @@ ztop [--version] [--help]
 | `j` / `k` or arrow keys | Move through the process list                                             |
 | `Enter`                 | Drill into threads of the selected process                                |
 | `Esc`                   | Return from any view; clear follow, filter, status, or zombie view        |
-| `c`, `m`, `p`, `n`      | Sort by CPU, memory, PID, or name                                         |
+| `c`, `m`, `p`, `n`, `u` | Sort by CPU, memory, PID, name, or wakeups/churn                          |
 | `C`                     | Toggle process-table columns for the current view                         |
 | `v`                     | Toggle tree view (process hierarchy)                                      |
 | `/`                     | Filter processes by name or PID                                           |
@@ -127,7 +128,7 @@ Press `:` to open command mode. Available commands:
 
 ### Why Is This Busy? (`w`)
 
-Press `w` to open a ranked explanation of what is driving the current load. The view detects which resource is spiking (CPU, memory, disk, or network), shows current metrics with delta indicators relative to a 5-tick baseline, and lists the top contributing processes sorted by their share of the spike. Works in live mode and in timeline scrubbing mode — when scrubbing, the view reflects the state at the current scrub position and highlights the nearest event type.
+Press `w` to open a ranked explanation of what is driving the current load. The view detects which resource is spiking (CPU, memory, disk, network, or wakeup churn), shows current metrics with delta indicators relative to a 5-tick baseline, and lists the top contributing processes sorted by their share of the spike. Wakeup mode is especially useful when CPU% is modest but wakeups/context switches are high. Works in live mode and in timeline scrubbing mode — when scrubbing, the view reflects the state at the current scrub position and highlights the nearest event type.
 
 ### Resource Causality Graph (`g`)
 
@@ -171,7 +172,7 @@ default_tab = main
 default_tree_view = false
 show_help_on_startup = false
 update_interval_ms = 500
-process_columns = pid,cpu,mem,threads,state
+process_columns = pid,cpu,mem,threads,state,wakeups
 io_process_columns = pid,disk_read,disk_write,ppid
 color.tab_active = 141
 ```
@@ -181,12 +182,12 @@ color.tab_active = 141
 | Key                    | Values                                                                                                                           |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `theme`                | `default`, `default_dark`, `default_light`, `gruvbox`, `nord`, `solarized`, `catppuccin`, `palenight`, `colorblind`              |
-| `default_sort`         | `cpu`, `mem`, `pid`, `name`                                                                                                      |
+| `default_sort`         | `cpu`, `mem`, `pid`, `name`, `wakeups`                                                                                           |
 | `default_tab`          | `main`, `io`, `sensors`, `network` (or `1`–`4`)                                                                                  |
 | `default_tree_view`    | `true` / `false` (also `yes`/`no`, `1`/`0`)                                                                                      |
 | `show_help_on_startup` | `true` / `false`                                                                                                                 |
 | `update_interval_ms`   | Refresh interval in milliseconds                                                                                                 |
-| `process_columns`      | Comma-separated list of `pid`, `ppid`, `state`, `cpu`, `mem`, `threads`, `disk_read`, `disk_write` — or `none`, `default`, `all` |
+| `process_columns`      | Comma-separated list of `pid`, `ppid`, `state`, `cpu`, `mem`, `threads`, `disk_read`, `disk_write`, `wakeups` — or `none`, `default`, `all` |
 | `io_process_columns`   | Same column names, applied to the I/O tab process table                                                                          |
 | `color.<key>`          | Named ANSI color (e.g. `bright_cyan`) or xterm-256 index (e.g. `141`)                                                            |
 
