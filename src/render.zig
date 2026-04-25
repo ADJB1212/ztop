@@ -14,6 +14,7 @@ const timeline = @import("render/timeline.zig");
 const diff = @import("render/diff.zig");
 const causality = @import("render/causality.zig");
 const why_busy = @import("render/why_busy.zig");
+const pressure_hints = @import("render/pressure_hints.zig");
 
 // Re-exports from util.zig
 pub const UnitValue = util.UnitValue;
@@ -65,6 +66,15 @@ pub const findWhyBusyProcByPid = why_busy.findProcByPid;
 pub const fmtWhyBusyTimestamp = why_busy.fmtTimestamp;
 pub const detectWhyBusyKind = why_busy.detectKind;
 pub const renderWhyBusyView = why_busy.renderWhyBusyView;
+
+// Re-exports from pressure_hints.zig
+pub const MAX_PRESSURE_HINTS = pressure_hints.MAX_HINTS;
+pub const HintSeverity = pressure_hints.HintSeverity;
+pub const PatternKind = pressure_hints.PatternKind;
+pub const PressureHint = pressure_hints.PressureHint;
+pub const PressureHintsData = pressure_hints.PressureHintsData;
+pub const buildPressureHints = pressure_hints.buildPressureHints;
+pub const renderPressureHintsView = pressure_hints.renderPressureHintsView;
 
 pub fn setStatus(status_buf: *[160]u8, status_len: *usize, comptime fmt: []const u8, args: anytype) void {
     const msg = std.fmt.bufPrint(status_buf, fmt, args) catch {

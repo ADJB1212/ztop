@@ -111,6 +111,7 @@ pub const Context = struct {
     causality_name_buf: *[64]u8,
     causality_name_len: *u8,
     causality_connections: *[]sysinfo.common.NetConnection,
+    pressure_hints_view: *bool,
     is_following: *bool,
     follow_pid: *u32,
     status_buf: *[160]u8,
@@ -517,6 +518,15 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
                 }
                 return true;
             },
+            'P' => {
+                ctx.pressure_hints_view.* = !ctx.pressure_hints_view.*;
+                if (ctx.pressure_hints_view.*) {
+                    render.setStatus(ctx.status_buf, ctx.status_len, "Pressure hints — P or Esc to close", .{});
+                } else {
+                    ctx.status_len.* = 0;
+                }
+                return true;
+            },
             'g' => {
                 if (!ctx.thread_view.* and !ctx.causality_view.* and !ctx.is_scrubbing.* and !ctx.why_busy_view.* and ctx.current_tab.* != 4) {
                     try enterCausalityView(ctx);
@@ -723,6 +733,9 @@ fn clearCurrentView(ctx: *Context) void {
     } else if (ctx.why_busy_view.*) {
         // Close why-busy overlay before exiting scrub mode
         ctx.why_busy_view.* = false;
+        ctx.status_len.* = 0;
+    } else if (ctx.pressure_hints_view.*) {
+        ctx.pressure_hints_view.* = false;
         ctx.status_len.* = 0;
     } else if (ctx.is_scrubbing.*) {
         ctx.is_scrubbing.* = false;

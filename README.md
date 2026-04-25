@@ -24,7 +24,11 @@ Built for people who want a focused dashboard in the terminal: quick enough to k
 - Dynamic process-table columns with an in-app picker (PID, PPID, state, CPU, memory, threads, disk rates)
 - Mouse support for tab switching, list navigation, and scrolling
 - Timeline scrubbing with incident bookmarks and before/after diff: pause live view, scrub through recent history, drop markers to jump back to interesting moments, and compare two captured snapshots side-by-side
+- **Why is this busy?** (`w`) — ranked explanation view showing which processes are driving the current CPU, memory, disk, or network spike, with delta indicators against a 5-tick baseline
+- **Resource causality graph** (`g`) — per-process view linking a selected process to its child tree, open network connections, and a resource summary
+- **Pressure root-cause hints** (`P`) — automatic detection of pathological patterns: swap storms, runaway log writers, reconnect loops, file descriptor pressure, memory leak suspects, CPU runaways, thermal throttle risk, and cache starvation
 - Built-in process actions: `SIGTERM`, `SIGKILL`, `:killall`, `:show zombie`, `:search`
+- Process follow mode (`l`): lock the view to a selected process as it moves through the list
 - Responsive layout for narrow terminals
 - Configurable refresh interval, default sort, theme, and per-color overrides
 - Themes: `default`, `default_dark`, `default_light`, `gruvbox`, `nord`, `solarized`, `catppuccin`, `palenight`, `colorblind`
@@ -74,29 +78,32 @@ ztop [--version] [--help]
 
 ### Key Bindings
 
-| Key                     | Action                                                                |
-| ----------------------- | --------------------------------------------------------------------- |
-| `1`, `2`, `3`, `4`      | Switch to `Main`, `I/O`, `Sensors`, `Network`                         |
-| `j` / `k` or arrow keys | Move through the process list                                         |
-| `Enter`                 | Drill into threads of the selected process                            |
-| `Esc`                   | Return from thread view; clear follow, filter, status, or zombie view |
-| `c`, `m`, `p`, `n`      | Sort by CPU, memory, PID, or name                                     |
-| `C`                     | Toggle process-table columns for the current view                     |
-| `v`                     | Toggle tree view (process hierarchy)                                  |
-| `/`                     | Filter processes by name or PID                                       |
-| `:`                     | Open command mode                                                     |
-| `l`                     | Follow selected process (lock view to it as it moves)                 |
-| `T`                     | Toggle timeline scrubbing mode (requires enough collected history)    |
-| `←` / `→`               | While scrubbing: move older/newer by one snapshot                     |
-| `[` / `]`               | While scrubbing: jump older/newer by 10 snapshots                     |
-| `b`                     | While scrubbing: drop a bookmark at the current position              |
-| `B`                     | While scrubbing: remove the nearest bookmark                          |
-| `{` / `}`               | While scrubbing: jump to previous/next bookmark                       |
-| `d`                     | While scrubbing: toggle diff view (set anchor, then navigate to compare) |
-| `t`                     | Send `SIGTERM` to the selected process                                |
-| `K`                     | Send `SIGKILL` to the selected process                                |
-| `?`                     | Open help overlay                                                     |
-| `q`                     | Quit                                                                  |
+| Key                     | Action                                                                    |
+| ----------------------- | ------------------------------------------------------------------------- |
+| `1`, `2`, `3`, `4`      | Switch to `Main`, `I/O`, `Sensors`, `Network`                             |
+| `j` / `k` or arrow keys | Move through the process list                                             |
+| `Enter`                 | Drill into threads of the selected process                                |
+| `Esc`                   | Return from any view; clear follow, filter, status, or zombie view        |
+| `c`, `m`, `p`, `n`      | Sort by CPU, memory, PID, or name                                         |
+| `C`                     | Toggle process-table columns for the current view                         |
+| `v`                     | Toggle tree view (process hierarchy)                                      |
+| `/`                     | Filter processes by name or PID                                           |
+| `:`                     | Open command mode                                                         |
+| `l`                     | Follow selected process (lock view to it as it moves)                     |
+| `g`                     | Resource causality graph for selected process (children + connections)    |
+| `w`                     | Why is this busy? — ranked spike explanation with process deltas          |
+| `P`                     | Pressure root-cause hints — detect swap storms, log writers, reconnect loops, and more |
+| `T`                     | Toggle timeline scrubbing mode (requires enough collected history)        |
+| `←` / `→`               | While scrubbing: move older/newer by one snapshot                         |
+| `[` / `]`               | While scrubbing: jump older/newer by 10 snapshots                         |
+| `b`                     | While scrubbing: drop a bookmark at the current position                  |
+| `B`                     | While scrubbing: remove the nearest bookmark                              |
+| `{` / `}`               | While scrubbing: jump to previous/next bookmark                           |
+| `d`                     | While scrubbing: toggle diff view (set anchor, then navigate to compare)  |
+| `t`                     | Send `SIGTERM` to the selected process                                    |
+| `K`                     | Send `SIGKILL` to the selected process                                    |
+| `?`                     | Open help overlay                                                         |
+| `q`                     | Quit                                                                      |
 
 While scrubbing is active, destructive process actions and view-mutating actions are disabled until you exit scrubbing.
 Press `Esc` or `T` to leave scrubbing and return to live view.
@@ -115,6 +122,41 @@ Press `:` to open command mode. Available commands:
 :search <term>        Filter the process list by name or PID
 :quit                 Quit ztop
 ```
+
+## Diagnostic Views
+
+### Why Is This Busy? (`w`)
+
+Press `w` to open a ranked explanation of what is driving the current load. The view detects which resource is spiking (CPU, memory, disk, or network), shows current metrics with delta indicators relative to a 5-tick baseline, and lists the top contributing processes sorted by their share of the spike. Works in live mode and in timeline scrubbing mode — when scrubbing, the view reflects the state at the current scrub position and highlights the nearest event type.
+
+### Resource Causality Graph (`g`)
+
+Press `g` with a process selected to open a causality view for that process. Shows:
+
+- All child processes with their CPU and memory usage
+- Active network connections (protocol, address, TCP state)
+- A resource summary with CPU and memory meters, thread count, disk I/O rates, and the full launch command
+
+### Pressure Root-Cause Hints (`P`)
+
+Press `P` to surface automatically detected pathological patterns from current system state. Each hint includes a severity level (`!!` critical, `!` warning), a description, and the most likely culprit process where applicable.
+
+Patterns detected:
+
+| Pattern | Trigger |
+| ------- | ------- |
+| Swap storm | Swap > 15% used and growing over the last 30 snapshots |
+| Swap pressure | Swap > 15% used (stable) |
+| Runaway log writer | Single process > 8 MB/s writes with a log-related name, or > 40% of total disk writes |
+| Disk write storm | Single process > 8 MB/s writes and > 40% of total disk writes |
+| Reconnect loop | Process with > 15 TIME\_WAIT or CLOSE\_WAIT connections |
+| FD pressure risk | Process with > 400 threads (proxy for high file descriptor usage) |
+| Memory leak suspect | Process memory grew > 3pp over ~60 seconds while system memory > 50% |
+| CPU runaway | Single process > 85% CPU while system total > 70% |
+| Thermal throttle risk | CPU temperature ≥ 85 °C |
+| Cache starvation | Page cache < 5% of RAM while memory pressure > 80% |
+
+Press `P` or `Esc` to close.
 
 ## Configuration
 

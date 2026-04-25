@@ -275,6 +275,8 @@ pub fn main(main_init: std.process.Init) !void {
     var causality_connections: []ztop.sysinfo.common.NetConnection = &.{};
     defer if (causality_connections.len > 0) allocator.free(causality_connections);
 
+    var pressure_hints_view: bool = false;
+
     var cached_connections: []ztop.sysinfo.common.NetConnection = &.{};
     defer if (cached_connections.len > 0) allocator.free(cached_connections);
 
@@ -957,6 +959,27 @@ pub fn main(main_init: std.process.Init) !void {
                         cached_procs,
                         causality_connections,
                     );
+                } else if (pressure_hints_view and procs_box_height >= 5) {
+                    const ph_data = render.buildPressureHints(
+                        display_mem,
+                        memoryUsagePercent(display_mem),
+                        display_cpu.usage_percent,
+                        display_disk.read_bytes_ps + display_disk.write_bytes_ps,
+                        display_net.rx_bytes_ps + display_net.tx_bytes_ps,
+                        display_thermal,
+                        cached_procs,
+                        cached_connections,
+                        timeline,
+                    );
+                    try render.renderPressureHintsView(
+                        &app_tui,
+                        theme,
+                        procs_box_x,
+                        procs_box_y,
+                        procs_box_width,
+                        procs_box_height,
+                        ph_data,
+                    );
                 } else if (procs_box_height >= 3) {
                     var title_buf: [96]u8 = undefined;
 
@@ -1248,7 +1271,7 @@ pub fn main(main_init: std.process.Init) !void {
                 // Help Overlay
                 if (show_help) {
                     const help_width = 60;
-                    const help_height = 22;
+                    const help_height = 23;
                     const h_x = if (size.width > help_width) (size.width - help_width) / 2 else 1;
                     const h_y = if (size.height > help_height) (size.height - help_height) / 2 else 1;
 
@@ -1304,34 +1327,38 @@ pub fn main(main_init: std.process.Init) !void {
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Why is this busy? (ranked explanation)", .{});
 
                     try app_tui.moveCursor(h_x + 2, h_y + 13);
+                    try app_tui.printStyled(.{ .fg = theme.text }, "P:            ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "Pressure root-cause hints (swap/log/fd)", .{});
+
+                    try app_tui.moveCursor(h_x + 2, h_y + 14);
                     try app_tui.printStyled(.{ .fg = theme.text }, "l:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Follow selected process", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 14);
+                    try app_tui.moveCursor(h_x + 2, h_y + 15);
                     try app_tui.printStyled(.{ .fg = theme.text }, "T:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Timeline scrub (←→ step, [] jump)", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 15);
+                    try app_tui.moveCursor(h_x + 2, h_y + 16);
                     try app_tui.printStyled(.{ .fg = theme.text }, "b/B, {{}}/{{}}:   ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Bookmark add/del, jump prev/next", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 16);
+                    try app_tui.moveCursor(h_x + 2, h_y + 17);
                     try app_tui.printStyled(.{ .fg = theme.text }, "d:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Diff view (compare two moments)", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 17);
+                    try app_tui.moveCursor(h_x + 2, h_y + 18);
                     try app_tui.printStyled(.{ .fg = theme.text }, "q:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Quit", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 18);
+                    try app_tui.moveCursor(h_x + 2, h_y + 19);
                     try app_tui.printStyled(.{ .fg = theme.text }, ":             ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Command mode (show zombie)", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 19);
+                    try app_tui.moveCursor(h_x + 2, h_y + 20);
                     try app_tui.printStyled(.{ .fg = theme.text }, "Repo: ", .{});
                     try app_tui.writeStyledHyperlink(.{ .fg = theme.tab_active, .underline = true }, repo_url, repo_label);
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 20);
+                    try app_tui.moveCursor(h_x + 2, h_y + 21);
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Press any key to close...", .{});
                 }
 
@@ -1512,6 +1539,7 @@ pub fn main(main_init: std.process.Init) !void {
                 .causality_name_buf = &causality_name_buf,
                 .causality_name_len = &causality_name_len,
                 .causality_connections = &causality_connections,
+                .pressure_hints_view = &pressure_hints_view,
                 .is_following = &is_following,
                 .follow_pid = &follow_pid,
                 .status_buf = &status_buf,
