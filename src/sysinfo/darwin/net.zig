@@ -6,6 +6,7 @@ const common = @import("../../sysinfo/common.zig");
 pub const NetTotals = struct {
     rx_bytes: u64,
     tx_bytes: u64,
+    wifi: common.WifiDetails = .{},
 };
 
 var static_net_buf: []u8 = &[_]u8{};
@@ -39,7 +40,30 @@ pub fn readNetTotals() !NetTotals {
         offset += msg_len;
     }
 
-    return .{ .rx_bytes = rx, .tx_bytes = tx };
+    return .{
+        .rx_bytes = rx,
+        .tx_bytes = tx,
+        .wifi = readWifiDetails(),
+    };
+}
+
+pub fn mapWifiGeneration(phy_mode: i64, channel_band: i64) common.WifiGeneration {
+    return switch (phy_mode) {
+        7 => .wifi7,
+        6 => if (channel_band == 3) .wifi6e else .wifi6,
+        5 => .wifi5,
+        4 => .wifi4,
+        1, 2, 3 => .legacy,
+        else => .unknown,
+    };
+}
+
+fn readWifiDetails() common.WifiDetails {
+    var wifi: common.WifiDetails = .{};
+    const raw = bindings.ztop_read_wifi_snapshot(&wifi.ssid_buf, wifi.ssid_buf.len);
+    wifi.ssid_len = @intCast(@min(raw.ssid_len, wifi.ssid_buf.len - 1));
+    wifi.generation = mapWifiGeneration(raw.phy_mode, raw.channel_band);
+    return wifi;
 }
 
 pub fn parseSocketFdInfo(pid: u32, process_name: [64]u8, name_len: u8, socket_info: *const c.struct_socket_fdinfo) ?common.NetConnection {

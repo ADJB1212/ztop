@@ -69,6 +69,24 @@ pub const TextAlign = enum {
     right,
 };
 
+pub fn clipUtf8(text: []const u8, max_codepoints: usize) []const u8 {
+    if (max_codepoints == 0) return text[0..0];
+
+    var view = std.unicode.Utf8View.init(text) catch {
+        return if (text.len > max_codepoints) text[0..max_codepoints] else text;
+    };
+    var iter = view.iterator();
+    var count: usize = 0;
+    var end: usize = 0;
+
+    while (count < max_codepoints) : (count += 1) {
+        const slice = iter.nextCodepointSlice() orelse break;
+        end += slice.len;
+    }
+
+    return text[0..end];
+}
+
 pub fn writeAlignedCell(app_tui: *Tui, style: Tui.Style, width: usize, text_align: TextAlign, text: []const u8) !void {
     if (width == 0) return;
 

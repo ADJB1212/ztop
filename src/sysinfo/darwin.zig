@@ -12,6 +12,7 @@ const process_mod = @import("darwin/process.zig");
 pub const c = bindings.c;
 pub const parseSocketFdInfo = net_mod.parseSocketFdInfo;
 pub const mapTcpState = net_mod.mapTcpState;
+pub const mapWifiGeneration = net_mod.mapWifiGeneration;
 
 const CpuStats = common.CpuStats;
 const CpuTopology = common.CpuTopology;
@@ -364,6 +365,7 @@ pub const SysInfo = struct {
             .tx_bytes_ps = tx_ps,
             .rx_bytes = stats.rx_bytes,
             .tx_bytes = stats.tx_bytes,
+            .wifi = stats.wifi,
         };
     }
 

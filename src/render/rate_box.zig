@@ -16,6 +16,11 @@ pub const RateSeries = struct {
     color: Tui.Color,
 };
 
+pub const DetailLine = struct {
+    text: []const u8,
+    style: Tui.Style,
+};
+
 fn renderRateMetricRow(
     app_tui: *Tui,
     theme: config.Theme,
@@ -112,6 +117,7 @@ pub fn renderDualRateBox(
     title_color: Tui.Color,
     primary: RateSeries,
     secondary: RateSeries,
+    detail_lines: []const DetailLine,
     disable_history: bool,
 ) !void {
     try app_tui.drawBoxStyled(
@@ -136,16 +142,33 @@ pub fn renderDualRateBox(
         @max(primary.rate_bytes_ps, secondary.rate_bytes_ps),
     );
 
-    try renderRateMetricRow(app_tui, theme, inner_x, inner_y, inner_width, primary, peak_rate);
-    if (inner_height == 1) return;
+    var content_y = inner_y;
+    var content_height = inner_height;
 
-    try renderRateMetricRow(app_tui, theme, inner_x, inner_y + 1, inner_width, secondary, peak_rate);
+    for (detail_lines) |detail| {
+        if (content_height == 0) return;
+        try app_tui.moveCursor(inner_x, content_y);
+        try util.writeAlignedCell(
+            app_tui,
+            detail.style,
+            inner_width,
+            .left,
+            util.clipUtf8(detail.text, inner_width),
+        );
+        content_y += 1;
+        content_height -|= 1;
+    }
 
-    const graph_rows = if (disable_history) 0 else inner_height -| 2;
+    try renderRateMetricRow(app_tui, theme, inner_x, content_y, inner_width, primary, peak_rate);
+    if (content_height == 1) return;
+
+    try renderRateMetricRow(app_tui, theme, inner_x, content_y + 1, inner_width, secondary, peak_rate);
+
+    const graph_rows = if (disable_history) 0 else content_height -| 2;
     if (graph_rows == 0) return;
 
     if (graph_rows == 1) {
-        try app_tui.moveCursor(inner_x, inner_y + 2);
+        try app_tui.moveCursor(inner_x, content_y + 2);
         try app_tui.printStyled(.{ .fg = theme.muted }, "Peak scale ", .{});
         var peak_buf: [24]u8 = undefined;
         const peak_text = if (peak_rate > 0) blk: {
@@ -158,13 +181,13 @@ pub fn renderDualRateBox(
 
     const primary_height = (graph_rows + 1) / 2;
     const secondary_height = graph_rows / 2;
-    try renderRateLane(app_tui, theme, inner_x, inner_y + 2, inner_width, @intCast(primary_height), primary, peak_rate);
+    try renderRateLane(app_tui, theme, inner_x, content_y + 2, inner_width, @intCast(primary_height), primary, peak_rate);
     if (secondary_height > 0) {
         try renderRateLane(
             app_tui,
             theme,
             inner_x,
-            inner_y + 2 + @as(u16, @intCast(primary_height)),
+            content_y + 2 + @as(u16, @intCast(primary_height)),
             inner_width,
             @intCast(secondary_height),
             secondary,

@@ -52,11 +52,48 @@ pub const DiskStats = struct {
     write_bytes_ps: u64 = 0,
 };
 
+pub const WifiGeneration = enum(u8) {
+    unknown,
+    legacy,
+    wifi4,
+    wifi5,
+    wifi6,
+    wifi6e,
+    wifi7,
+
+    pub fn label(self: @This()) ?[]const u8 {
+        return switch (self) {
+            .unknown => null,
+            .legacy => "legacy",
+            .wifi4 => "4",
+            .wifi5 => "5",
+            .wifi6 => "6",
+            .wifi6e => "6E",
+            .wifi7 => "7",
+        };
+    }
+};
+
+pub const WifiDetails = struct {
+    ssid_buf: [64]u8 = std.mem.zeroes([64]u8),
+    ssid_len: u8 = 0,
+    generation: WifiGeneration = .unknown,
+
+    pub fn ssid(self: *const @This()) []const u8 {
+        return self.ssid_buf[0..self.ssid_len];
+    }
+
+    pub fn hasInfo(self: *const @This()) bool {
+        return self.ssid_len > 0 or self.generation != .unknown;
+    }
+};
+
 pub const NetStats = struct {
     rx_bytes_ps: u64 = 0,
     tx_bytes_ps: u64 = 0,
     rx_bytes: u64 = 0,
     tx_bytes: u64 = 0,
+    wifi: WifiDetails = .{},
 };
 
 pub const ThermalStats = struct {

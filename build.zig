@@ -11,6 +11,10 @@ pub fn build(b: *std.Build) void {
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "version", manifest.version);
 
+    if (sdk_root) |root| {
+        b.sysroot = root;
+    }
+
     const mod = b.addModule("ztop", .{
         .root_source_file = b.path("src/root.zig"),
 
@@ -48,18 +52,29 @@ pub fn build(b: *std.Build) void {
     });
 
     if (target.result.os.tag == .macos) {
+        exe.root_module.addCSourceFile(.{
+            .file = b.path("src/sysinfo/darwin/wifi.m"),
+        });
+        tests.root_module.addCSourceFile(.{
+            .file = b.path("src/sysinfo/darwin/wifi.m"),
+        });
+
         // Allow explicit SDK root for cross-compilation (e.g. aarch64 from x86_64 host).
         // Pass with: -Dsdk-root=$(xcrun --show-sdk-path)
         if (sdk_root) |root| {
-            exe.root_module.addFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ root, "System/Library/Frameworks" }) });
-            exe.root_module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/lib" }) });
-            tests.root_module.addFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ root, "System/Library/Frameworks" }) });
-            tests.root_module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/lib" }) });
+            exe.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/include" }) });
+            exe.root_module.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ root, "System/Library/Frameworks" }) });
+            tests.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/include" }) });
+            tests.root_module.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ root, "System/Library/Frameworks" }) });
         }
         exe.root_module.linkFramework("IOKit", .{});
         exe.root_module.linkFramework("CoreFoundation", .{});
+        exe.root_module.linkFramework("Foundation", .{});
+        exe.root_module.linkFramework("CoreWLAN", .{});
         tests.root_module.linkFramework("IOKit", .{});
         tests.root_module.linkFramework("CoreFoundation", .{});
+        tests.root_module.linkFramework("Foundation", .{});
+        tests.root_module.linkFramework("CoreWLAN", .{});
     }
 
     b.installArtifact(exe);

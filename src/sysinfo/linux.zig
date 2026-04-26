@@ -226,6 +226,7 @@ pub const SysInfo = struct {
             .tx_bytes_ps = tx_ps,
             .rx_bytes = stats.rx_bytes,
             .tx_bytes = stats.tx_bytes,
+            .wifi = .{},
         };
     }
 

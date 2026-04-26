@@ -70,6 +70,15 @@ test "mapTcpState covers expected transitions" {
     try std.testing.expectEqual(common.NetConnState.unknown, darwin.mapTcpState(999));
 }
 
+test "mapWifiGeneration maps modern WiFi generations" {
+    try std.testing.expectEqual(common.WifiGeneration.wifi5, darwin.mapWifiGeneration(5, 2));
+    try std.testing.expectEqual(common.WifiGeneration.wifi6, darwin.mapWifiGeneration(6, 2));
+    try std.testing.expectEqual(common.WifiGeneration.wifi6e, darwin.mapWifiGeneration(6, 3));
+    try std.testing.expectEqual(common.WifiGeneration.wifi7, darwin.mapWifiGeneration(7, 3));
+    try std.testing.expectEqual(common.WifiGeneration.legacy, darwin.mapWifiGeneration(3, 1));
+    try std.testing.expectEqual(common.WifiGeneration.unknown, darwin.mapWifiGeneration(0, 0));
+}
+
 test "getBatteryStats does not crash" {
     var si = darwin.SysInfo.init(std.testing.io);
     const stats = si.getBatteryStats();

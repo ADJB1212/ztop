@@ -56,6 +56,17 @@ fn gpuVendorLabel(vendor: ztop.sysinfo.GpuVendor) []const u8 {
     };
 }
 
+fn formatWifiSsidLine(net: ztop.sysinfo.NetStats, buf: []u8) ?[]const u8 {
+    const ssid = net.wifi.ssid();
+    if (ssid.len == 0) return null;
+    return std.fmt.bufPrint(buf, "WiFi: {s}", .{ssid}) catch null;
+}
+
+fn formatWifiGenerationLine(net: ztop.sysinfo.NetStats, buf: []u8) ?[]const u8 {
+    const generation = net.wifi.generation.label() orelse return null;
+    return std.fmt.bufPrint(buf, "WiFi Generation: {s}", .{generation}) catch null;
+}
+
 fn nowMs(io: std.Io) i64 {
     return std.Io.Clock.now(.real, io).toMilliseconds();
 }
@@ -562,6 +573,9 @@ pub fn main(main_init: std.process.Init) !void {
                 var display_net = net;
                 var display_thermal = thermal;
                 var display_battery = battery;
+                var wifi_ssid_buf: [96]u8 = undefined;
+                var wifi_generation_buf: [96]u8 = undefined;
+                var wifi_detail_lines: [2]render.DetailLine = undefined;
                 scrub_proc_count = 0;
 
                 if (is_scrubbing) {
@@ -581,6 +595,23 @@ pub fn main(main_init: std.process.Init) !void {
                             scrub_proc_buf[i] = snap.procs[i];
                         }
                     }
+                }
+                const wifi_ssid_line = formatWifiSsidLine(display_net, &wifi_ssid_buf);
+                const wifi_generation_line = formatWifiGenerationLine(display_net, &wifi_generation_buf);
+                var wifi_detail_count: usize = 0;
+                if (wifi_ssid_line) |line| {
+                    wifi_detail_lines[wifi_detail_count] = .{
+                        .text = line,
+                        .style = .{ .fg = theme.text, .dim = true },
+                    };
+                    wifi_detail_count += 1;
+                }
+                if (wifi_generation_line) |line| {
+                    wifi_detail_lines[wifi_detail_count] = .{
+                        .text = line,
+                        .style = .{ .fg = theme.text, .dim = true },
+                    };
+                    wifi_detail_count += 1;
                 }
 
                 // Before/After Diff View (replaces normal content when active)
@@ -665,6 +696,7 @@ pub fn main(main_init: std.process.Init) !void {
                             .history = &disk_write_history,
                             .color = theme.io_rate,
                         },
+                        &.{},
                         app_config.disable_history,
                     );
 
@@ -693,6 +725,7 @@ pub fn main(main_init: std.process.Init) !void {
                             .history = &net_tx_history,
                             .color = theme.io_rate,
                         },
+                        wifi_detail_lines[0..wifi_detail_count],
                         app_config.disable_history,
                     );
                 } else if (current_tab == 3) {
@@ -847,6 +880,21 @@ pub fn main(main_init: std.process.Init) !void {
                         try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Tx: ", .{});
                         const tx_ps = render.formatUnit(display_net.tx_bytes_ps);
                         try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} {s}/s", .{ tx_ps.value, tx_ps.unit });
+
+                        var wifi_row: u16 = 2;
+                        if (wifi_ssid_line) |line| {
+                            if (cpu_box_height >= wifi_row + 2) {
+                                try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + wifi_row);
+                                try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{render.clipUtf8(line, size.width -| 4)});
+                                wifi_row += 1;
+                            }
+                        }
+                        if (wifi_generation_line) |line| {
+                            if (cpu_box_height >= wifi_row + 2) {
+                                try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + wifi_row);
+                                try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{render.clipUtf8(line, size.width -| 4)});
+                            }
+                        }
                     }
                 }
 

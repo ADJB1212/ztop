@@ -145,6 +145,14 @@ pub const MachTimebaseInfo = extern struct {
     denom: u32,
 };
 
+pub const WifiSnapshotRaw = extern struct {
+    ssid_len: usize,
+    phy_mode: i64,
+    channel_band: i64,
+};
+
+pub extern "c" fn ztop_read_wifi_snapshot(ssid_buf: [*]u8, ssid_buf_len: usize) WifiSnapshotRaw;
+
 pub const HOST_CPU_LOAD_INFO: c_int = 3;
 pub const HOST_VM_INFO: c_int = 2;
 pub const PROCESSOR_CPU_LOAD_INFO: c_int = 2;

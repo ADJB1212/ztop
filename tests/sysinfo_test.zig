@@ -49,3 +49,11 @@ test "SysInfo fetches GPU stats without failing" {
         try std.testing.expect(gpu.name_len > 0);
     }
 }
+
+test "SysInfo fetches Net stats without failing" {
+    var sys_info = SysInfo.init(std.testing.io);
+    const net = sys_info.getNetStats();
+    try std.testing.expect(net.rx_bytes >= 0);
+    try std.testing.expect(net.tx_bytes >= 0);
+    try std.testing.expect(net.wifi.ssid_len <= net.wifi.ssid_buf.len);
+}

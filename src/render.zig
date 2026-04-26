@@ -25,6 +25,7 @@ pub const memoryColor = util.memoryColor;
 pub const procStateLabel = util.procStateLabel;
 pub const procStateColor = util.procStateColor;
 pub const TextAlign = util.TextAlign;
+pub const clipUtf8 = util.clipUtf8;
 pub const writeAlignedCell = util.writeAlignedCell;
 pub const writeChip = util.writeChip;
 pub const renderMeter = util.renderMeter;
@@ -44,6 +45,7 @@ pub const planProcessTableLayout = process_table.planProcessTableLayout;
 
 // Re-exports from rate_box.zig
 pub const RateSeries = rate_box.RateSeries;
+pub const DetailLine = rate_box.DetailLine;
 pub const renderDualRateBox = rate_box.renderDualRateBox;
 
 // Re-exports from cpu_topology.zig
