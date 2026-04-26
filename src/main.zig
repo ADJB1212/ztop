@@ -286,6 +286,15 @@ pub fn main(main_init: std.process.Init) !void {
     var causality_name_buf: [64]u8 = std.mem.zeroes([64]u8);
     var causality_name_len: u8 = 0;
     var causality_connections: []ztop.sysinfo.common.NetConnection = &.{};
+
+    var lifeline_view: bool = false;
+    var lifeline_name_buf: [64]u8 = std.mem.zeroes([64]u8);
+    var lifeline_name_len: u8 = 0;
+    var active_tracer: ?*ztop.process_tracer.ProcessTracer = null;
+    defer {
+        if (active_tracer) |tracer| tracer.deinit();
+    }
+
     defer if (causality_connections.len > 0) allocator.free(causality_connections);
 
     var pressure_hints_view: bool = false;
@@ -425,6 +434,19 @@ pub fn main(main_init: std.process.Init) !void {
                     allocator.free(causality_connections);
                 }
                 causality_connections = input_handler.fetchProcConnections(allocator, &sys_info, causality_pid) catch &.{};
+            }
+
+            if (lifeline_view) {
+                if (active_tracer) |tracer| {
+                    var target_proc: ?ztop.sysinfo.ProcStats = null;
+                    for (cached_procs) |p| {
+                        if (p.pid == tracer.pid) {
+                            target_proc = p;
+                            break;
+                        }
+                    }
+                    tracer.update(&sys_info, current_time, target_proc);
+                }
             }
 
             last_fetch_time = current_time;
@@ -978,6 +1000,20 @@ pub fn main(main_init: std.process.Init) !void {
                         cached_procs,
                         causality_connections,
                     );
+                } else if (lifeline_view and procs_box_height >= 5) {
+                    if (active_tracer) |tracer| {
+                        try render.renderLifelineView(
+                            &app_tui,
+                            theme,
+                            procs_box_x,
+                            procs_box_y,
+                            procs_box_width,
+                            procs_box_height,
+                            tracer,
+                            lifeline_name_buf[0..lifeline_name_len],
+                            scroll_offset,
+                        );
+                    }
                 } else if (pressure_hints_view and procs_box_height >= 5) {
                     const ph_data = render.buildPressureHints(
                         display_mem,
@@ -1291,7 +1327,7 @@ pub fn main(main_init: std.process.Init) !void {
                 // Help Overlay
                 if (show_help) {
                     const help_width = 60;
-                    const help_height = 23;
+                    const help_height = 24;
                     const h_x = if (size.width > help_width) (size.width - help_width) / 2 else 1;
                     const h_y = if (size.height > help_height) (size.height - help_height) / 2 else 1;
 
@@ -1371,18 +1407,22 @@ pub fn main(main_init: std.process.Init) !void {
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Diff view (compare two moments)", .{});
 
                     try app_tui.moveCursor(h_x + 2, h_y + 19);
+                    try app_tui.printStyled(.{ .fg = theme.text }, "L:            ", .{});
+                    try app_tui.printStyled(.{ .fg = theme.muted }, "View process's lifeline", .{});
+
+                    try app_tui.moveCursor(h_x + 2, h_y + 20);
                     try app_tui.printStyled(.{ .fg = theme.text }, "q:            ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Quit", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 20);
+                    try app_tui.moveCursor(h_x + 2, h_y + 21);
                     try app_tui.printStyled(.{ .fg = theme.text }, ":             ", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Command mode (show zombie)", .{});
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 21);
+                    try app_tui.moveCursor(h_x + 2, h_y + 22);
                     try app_tui.printStyled(.{ .fg = theme.text }, "Repo: ", .{});
                     try app_tui.writeStyledHyperlink(.{ .fg = theme.tab_active, .underline = true }, repo_url, repo_label);
 
-                    try app_tui.moveCursor(h_x + 2, h_y + 22);
+                    try app_tui.moveCursor(h_x + 2, h_y + 23);
                     try app_tui.printStyled(.{ .fg = theme.muted }, "Press any key to close...", .{});
                 }
 
@@ -1573,6 +1613,10 @@ pub fn main(main_init: std.process.Init) !void {
                 .causality_name_buf = &causality_name_buf,
                 .causality_name_len = &causality_name_len,
                 .causality_connections = &causality_connections,
+                .lifeline_view = &lifeline_view,
+                .lifeline_name_buf = &lifeline_name_buf,
+                .lifeline_name_len = &lifeline_name_len,
+                .active_tracer = &active_tracer,
                 .pressure_hints_view = &pressure_hints_view,
                 .is_following = &is_following,
                 .follow_pid = &follow_pid,

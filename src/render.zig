@@ -15,6 +15,7 @@ const diff = @import("render/diff.zig");
 const causality = @import("render/causality.zig");
 const why_busy = @import("render/why_busy.zig");
 const pressure_hints = @import("render/pressure_hints.zig");
+const process_lifeline = @import("render/process_lifeline.zig");
 
 // Re-exports from util.zig
 pub const UnitValue = util.UnitValue;
@@ -75,6 +76,9 @@ pub const PressureHint = pressure_hints.PressureHint;
 pub const PressureHintsData = pressure_hints.PressureHintsData;
 pub const buildPressureHints = pressure_hints.buildPressureHints;
 pub const renderPressureHintsView = pressure_hints.renderPressureHintsView;
+
+// Re-exports from process_lifeline.zig
+pub const renderLifelineView = process_lifeline.renderLifelineView;
 
 pub fn setStatus(status_buf: *[160]u8, status_len: *usize, comptime fmt: []const u8, args: anytype) void {
     const msg = std.fmt.bufPrint(status_buf, fmt, args) catch {

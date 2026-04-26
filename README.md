@@ -28,6 +28,7 @@ Built for people who want a focused dashboard in the terminal: quick enough to k
 - **Wakeup attribution** (`u` sort + optional `wakeups` column) — surfaces timer wakeups and scheduler churn (`W` wakeups/sec, `C` context-switches/sec), including low-CPU/high-churn workloads
 - **Resource causality graph** (`g`) — per-process view linking a selected process to its child tree, open network connections, and a resource summary
 - **Pressure root-cause hints** (`P`) — automatic detection of pathological patterns: swap storms, runaway log writers, reconnect loops, file descriptor pressure, memory leak suspects, CPU runaways, thermal throttle risk, and cache starvation
+- **Process lifeline view** (`L`) — high-fidelity timeline for a selected process showing state transitions, CPU bursts, memory growth, thread count changes, and socket opens/closes over time
 - Built-in process actions: `SIGTERM`, `SIGKILL`, `:killall`, `:show zombie`, `:search`
 - Process follow mode (`l`): lock the view to a selected process as it moves through the list
 - Responsive layout for narrow terminals
@@ -91,6 +92,7 @@ ztop [--version] [--help]
 | `/`                     | Filter processes by name or PID                                           |
 | `:`                     | Open command mode                                                         |
 | `l`                     | Follow selected process (lock view to it as it moves)                     |
+| `L`                     | Process lifeline view for selected process (timeline of events)           |
 | `g`                     | Resource causality graph for selected process (children + connections)    |
 | `w`                     | Why is this busy? — ranked spike explanation with process deltas          |
 | `P`                     | Pressure root-cause hints — detect swap storms, log writers, reconnect loops, and more |
@@ -137,6 +139,16 @@ Press `g` with a process selected to open a causality view for that process. Sho
 - All child processes with their CPU and memory usage
 - Active network connections (protocol, address, TCP state)
 - A resource summary with CPU and memory meters, thread count, disk I/O rates, and the full launch command
+
+### Process Lifeline View (`L`)
+
+Press `L` with a process selected to open a high-fidelity timeline of its behavior. This view is updated live and tracks:
+
+- **State Transitions**: Track when a process moves between running, sleeping, or stopped states.
+- **Resource Spikes**: Detects CPU bursts (>20% change) and memory growth (>5% change) between ticks.
+- **Thread Churn**: Shows when threads are spawned or exited.
+- **Network Activity**: Lists socket opens and closes with protocol and address details.
+- **Graphs**: Live sparklines for the process's CPU and memory history.
 
 ### Pressure Root-Cause Hints (`P`)
 

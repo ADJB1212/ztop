@@ -7,6 +7,7 @@ const sysinfo = @import("sysinfo.zig");
 const SysInfo = sysinfo.SysInfo;
 const config = @import("config.zig");
 const timeline_mod = @import("timeline.zig");
+const process_tracer = @import("process_tracer.zig");
 const posix = std.posix;
 
 pub const Rect = struct {
@@ -111,6 +112,10 @@ pub const Context = struct {
     causality_name_buf: *[64]u8,
     causality_name_len: *u8,
     causality_connections: *[]sysinfo.common.NetConnection,
+    lifeline_view: *bool,
+    lifeline_name_buf: *[64]u8,
+    lifeline_name_len: *u8,
+    active_tracer: *?*process_tracer.ProcessTracer,
     pressure_hints_view: *bool,
     is_following: *bool,
     follow_pid: *u32,
@@ -543,7 +548,7 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
             },
 
             'l' => {
-                if (!ctx.thread_view.* and !ctx.causality_view.* and !ctx.is_scrubbing.* and ctx.filtered_count.* > 0) {
+                if (!ctx.thread_view.* and !ctx.causality_view.* and !ctx.lifeline_view.* and !ctx.is_scrubbing.* and ctx.filtered_count.* > 0) {
                     if (ctx.is_following.*) {
                         ctx.is_following.* = false;
                         ctx.follow_pid.* = 0;
@@ -551,6 +556,12 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
                         ctx.follow_pid.* = ctx.cached_procs[ctx.filtered_indices[ctx.selected_idx.*]].pid;
                         ctx.is_following.* = true;
                     }
+                }
+                return true;
+            },
+            'L' => {
+                if (!ctx.thread_view.* and !ctx.causality_view.* and !ctx.lifeline_view.* and !ctx.is_scrubbing.* and ctx.current_tab.* != 4) {
+                    try enterLifelineView(ctx);
                 }
                 return true;
             },
@@ -675,6 +686,27 @@ fn enterWhyBusyView(ctx: *Context) void {
     render.setStatus(ctx.status_buf, ctx.status_len, "Why is {s} busy? — w or Esc to close", .{kind_label});
 }
 
+fn enterLifelineView(ctx: *Context) !void {
+    if (ctx.current_tab.* == 4 or ctx.causality_view.* or ctx.thread_view.* or ctx.lifeline_view.* or ctx.filtered_count.* == 0 or ctx.selected_idx.* >= ctx.filtered_count.*) {
+        return;
+    }
+
+    const proc = ctx.cached_procs[ctx.filtered_indices[ctx.selected_idx.*]];
+
+    // Allocate and initialize ProcessTracer
+    if (ctx.active_tracer.*) |tracer| {
+        tracer.deinit();
+        ctx.active_tracer.* = null;
+    }
+    ctx.active_tracer.* = try process_tracer.ProcessTracer.init(ctx.allocator, proc.pid);
+
+    ctx.lifeline_view.* = true;
+    @memcpy(ctx.lifeline_name_buf.*[0..proc.name_len], proc.name());
+    ctx.lifeline_name_len.* = proc.name_len;
+    ctx.selected_idx.* = 0;
+    ctx.scroll_offset.* = 0;
+}
+
 fn enterCausalityView(ctx: *Context) !void {
     if (ctx.current_tab.* == 4 or ctx.causality_view.* or ctx.thread_view.* or ctx.filtered_count.* == 0 or ctx.selected_idx.* >= ctx.filtered_count.*) {
         return;
@@ -762,6 +794,14 @@ fn clearCurrentView(ctx: *Context) void {
         if (ctx.cached_threads.*.len > 0) {
             ctx.allocator.free(ctx.cached_threads.*);
             ctx.cached_threads.* = &.{};
+        }
+        ctx.selected_idx.* = 0;
+        ctx.scroll_offset.* = 0;
+    } else if (ctx.lifeline_view.*) {
+        ctx.lifeline_view.* = false;
+        if (ctx.active_tracer.*) |tracer| {
+            tracer.deinit();
+            ctx.active_tracer.* = null;
         }
         ctx.selected_idx.* = 0;
         ctx.scroll_offset.* = 0;
