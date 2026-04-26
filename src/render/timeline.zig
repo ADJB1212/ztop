@@ -32,9 +32,15 @@ pub fn renderTimelineBar(
 
     // Left nav indicator
     const can_go_older = is_scrubbing and scrub_offset + 1 < snap_count;
+    const left_nav = if (app_tui.hasNerdFonts()) "󰒮" else "◀";
+    const right_nav = if (app_tui.hasNerdFonts()) "󰒭" else "▶";
+    const bookmark_marker = if (app_tui.hasNerdFonts()) "󰃀" else "▼";
+    const anchor_marker = if (app_tui.hasNerdFonts()) "󰛿" else "◆";
+    const cursor_bookmark = if (app_tui.hasNerdFonts()) "󰃀" else "▼";
+    const cursor_marker = if (app_tui.hasNerdFonts()) "󱞪" else "|";
     try app_tui.writeStyled(
         if (can_go_older) .{ .fg = theme.tab_active, .bold = true } else .{ .fg = theme.muted },
-        "◀",
+        left_nav,
     );
 
     const suffix_reserve: u16 = 12;
@@ -67,22 +73,22 @@ pub fn renderTimelineBar(
             if (is_cursor) {
                 // Show combined cursor+bookmark indicator if bookmarked
                 if (tl.hasBookmarkAtAbsIndex(abs_idx)) {
-                    try app_tui.writeStyled(.{ .bg = theme.tab_active, .fg = theme.selection_fg, .bold = true }, "▼");
+                    try app_tui.writeStyled(.{ .bg = theme.tab_active, .fg = theme.selection_fg, .bold = true }, cursor_bookmark);
                 } else {
-                    try app_tui.writeStyled(.{ .bg = theme.selection_bg, .fg = theme.selection_fg, .bold = true }, "|");
+                    try app_tui.writeStyled(.{ .bg = theme.selection_bg, .fg = theme.selection_fg, .bold = true }, cursor_marker);
                 }
                 continue;
             }
 
             // Bookmark marker (priority over events)
             if (tl.hasBookmarkAtAbsIndex(abs_idx)) {
-                try app_tui.writeStyled(.{ .fg = theme.tab_active, .bold = true }, "▼");
+                try app_tui.writeStyled(.{ .fg = theme.tab_active, .bold = true }, bookmark_marker);
                 continue;
             }
 
             // Diff anchor marker
             if (anchor_abs != null and abs_idx == anchor_abs.?) {
-                try app_tui.writeStyled(.{ .fg = theme.usage_warn, .bold = true }, "◆");
+                try app_tui.writeStyled(.{ .fg = theme.usage_warn, .bold = true }, anchor_marker);
                 continue;
             }
 
@@ -121,7 +127,7 @@ pub fn renderTimelineBar(
     const can_go_newer = is_scrubbing and scrub_offset > 0;
     try app_tui.writeStyled(
         if (can_go_newer) .{ .fg = theme.tab_active, .bold = true } else .{ .fg = theme.muted },
-        "▶",
+        right_nav,
     );
 
     // Time label

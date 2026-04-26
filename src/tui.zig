@@ -508,6 +508,10 @@ pub const Tui = struct {
         try self.drawBoxStyled(x, y, width, height, title, .{}, .{ .bold = true });
     }
 
+    pub fn hasNerdFonts(self: *const Tui) bool {
+        return self.nerd_fonts;
+    }
+
     pub fn drawBoxStyled(self: *Tui, x: u16, y: u16, width: u16, height: u16, title: []const u8, border_style: Style, title_style: Style) !void {
         try self.setStyleIfChanged(border_style);
 
@@ -564,6 +568,10 @@ pub const Tui = struct {
                     try self.printStyled(title_style, "┤ 󰁹 {s} ├", .{title});
                 } else if (std.mem.startsWith(u8, title, "Processes") or std.mem.startsWith(u8, title, "Threads")) {
                     try self.printStyled(title_style, "┤ 󰒋 {s} ├", .{title});
+                } else if (std.mem.startsWith(u8, title, "Causality") or std.mem.startsWith(u8, title, "Process Columns") or std.mem.startsWith(u8, title, "I/O Columns")) {
+                    try self.printStyled(title_style, "┤ 󰒋 {s} ├", .{title});
+                } else if (std.mem.startsWith(u8, title, "Why ") or std.mem.startsWith(u8, title, "Pressure") or std.mem.startsWith(u8, title, "Before/After Diff")) {
+                    try self.printStyled(title_style, "┤ 󰋖 {s} ├", .{title});
                 } else if (std.mem.startsWith(u8, title, "Help")) {
                     try self.printStyled(title_style, "┤ 󰋖 {s} ├", .{title});
                 } else {

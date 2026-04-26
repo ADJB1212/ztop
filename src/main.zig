@@ -60,6 +60,10 @@ fn nowMs(io: std.Io) i64 {
     return std.Io.Clock.now(.real, io).toMilliseconds();
 }
 
+fn displayWidth(text: []const u8) usize {
+    return std.unicode.utf8CountCodepoints(text) catch text.len;
+}
+
 fn activeProcessColumns(
     current_tab: u8,
     process_columns: *ztop.config.ProcessColumns,
@@ -135,7 +139,7 @@ fn renderProcessRow(
         switch (column) {
             .pid => {
                 const text = std.fmt.bufPrint(&buf, "{d}", .{proc.pid}) catch "";
-                try render.writeAlignedCell(app_tui, pid_style, render.processColumnWidth(.pid), .right, text);
+                try render.writeAlignedCell(app_tui, pid_style, render.processColumnWidth(.pid), .left, text);
             },
             .ppid => {
                 const text = std.fmt.bufPrint(&buf, "{d}", .{proc.ppid}) catch "";
@@ -468,31 +472,37 @@ pub fn main(main_init: std.process.Init) !void {
                 try app_tui.printStyled(.{ .fg = theme.brand, .bold = true }, " ztop ", .{});
                 try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "- {s} {s} {s} - {s}", .{ sysname, release, machine, nodename });
 
-                const tabs_str = "[1] Main  [2] I/O  [3] Sensors  [4] Network";
-                if (size.width > tabs_str.len + 30) {
-                    const tabs_x = size.width - @as(u16, @intCast(tabs_str.len)) - 2;
-                    const tab1_label = "[1] Main";
-                    const tab2_label = "[2] I/O";
-                    const tab3_label = "[3] Sensors";
-                    const tab4_label = "[4] Network";
+                {
+                    const tab1_label = if (app_tui.hasNerdFonts()) "[1]  Main" else "[1] Main";
+                    const tab2_label = if (app_tui.hasNerdFonts()) "[2] 󰕒 I/O" else "[2] I/O";
+                    const tab3_label = if (app_tui.hasNerdFonts()) "[3]  Sensors" else "[3] Sensors";
+                    const tab4_label = if (app_tui.hasNerdFonts()) "[4] 󰈀 Network" else "[4] Network";
+                    const tab1_w = displayWidth(tab1_label);
+                    const tab2_w = displayWidth(tab2_label);
+                    const tab3_w = displayWidth(tab3_label);
+                    const tab4_w = displayWidth(tab4_label);
                     const gap: u16 = 2;
-                    const tab2_x = tabs_x + @as(u16, @intCast(tab1_label.len)) + gap;
-                    const tab3_x = tab2_x + @as(u16, @intCast(tab2_label.len)) + gap;
-                    const tab4_x = tab3_x + @as(u16, @intCast(tab3_label.len)) + gap;
+                    const tabs_width = tab1_w + tab2_w + tab3_w + tab4_w + @as(usize, gap) * 3;
+                    if (size.width > tabs_width + 30) {
+                        const tabs_x = size.width - @as(u16, @intCast(tabs_width)) - 2;
+                        const tab2_x = tabs_x + @as(u16, @intCast(tab1_w)) + gap;
+                        const tab3_x = tab2_x + @as(u16, @intCast(tab2_w)) + gap;
+                        const tab4_x = tab3_x + @as(u16, @intCast(tab3_w)) + gap;
 
-                    mouse_regions.addTab(1, .{ .x = tabs_x, .y = 1, .width = tab1_label.len, .height = 1 });
-                    mouse_regions.addTab(2, .{ .x = tab2_x, .y = 1, .width = tab2_label.len, .height = 1 });
-                    mouse_regions.addTab(3, .{ .x = tab3_x, .y = 1, .width = tab3_label.len, .height = 1 });
-                    mouse_regions.addTab(4, .{ .x = tab4_x, .y = 1, .width = tab4_label.len, .height = 1 });
+                        mouse_regions.addTab(1, .{ .x = tabs_x, .y = 1, .width = @as(u16, @intCast(tab1_w)), .height = 1 });
+                        mouse_regions.addTab(2, .{ .x = tab2_x, .y = 1, .width = @as(u16, @intCast(tab2_w)), .height = 1 });
+                        mouse_regions.addTab(3, .{ .x = tab3_x, .y = 1, .width = @as(u16, @intCast(tab3_w)), .height = 1 });
+                        mouse_regions.addTab(4, .{ .x = tab4_x, .y = 1, .width = @as(u16, @intCast(tab4_w)), .height = 1 });
 
-                    try app_tui.moveCursor(tabs_x, 1);
-                    if (current_tab == 1) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab1_label}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab1_label});
-                    try app_tui.bufWrite("  ");
-                    if (current_tab == 2) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab2_label}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab2_label});
-                    try app_tui.bufWrite("  ");
-                    if (current_tab == 3) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab3_label}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab3_label});
-                    try app_tui.bufWrite("  ");
-                    if (current_tab == 4) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab4_label}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab4_label});
+                        try app_tui.moveCursor(tabs_x, 1);
+                        if (current_tab == 1) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab1_label}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab1_label});
+                        try app_tui.bufWrite("  ");
+                        if (current_tab == 2) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab2_label}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab2_label});
+                        try app_tui.bufWrite("  ");
+                        if (current_tab == 3) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab3_label}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab3_label});
+                        try app_tui.bufWrite("  ");
+                        if (current_tab == 4) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab4_label}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab4_label});
+                    }
                 }
 
                 const available_height = size.height -| 2;
@@ -1428,14 +1438,20 @@ pub fn main(main_init: std.process.Init) !void {
                 // Footer
                 try app_tui.moveCursor(1, size.height);
                 if (diff_active) {
-                    try app_tui.printStyled(.{ .fg = theme.usage_warn, .bold = true }, "◆ DIFF  ", .{});
+                    try app_tui.writeStyled(
+                        .{ .fg = theme.usage_warn, .bold = true },
+                        if (app_tui.hasNerdFonts()) "󰛿 DIFF  " else "◆ DIFF  ",
+                    );
                     try app_tui.printStyled(.{ .fg = theme.muted }, "←/→ move compare point  ", .{});
                     try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "d", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, "/", .{});
                     try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "Esc", .{});
                     try app_tui.printStyled(.{ .fg = theme.muted }, " close diff", .{});
                 } else if (is_scrubbing) {
-                    try app_tui.printStyled(.{ .fg = theme.usage_warn, .bold = true }, "◀◀ SCRUB  ", .{});
+                    try app_tui.writeStyled(
+                        .{ .fg = theme.usage_warn, .bold = true },
+                        if (app_tui.hasNerdFonts()) "󱊓 SCRUB  " else "◀◀ SCRUB  ",
+                    );
                     // Show events near scrub cursor
                     var ev_out: [4]timeline_mod.TimelineEvent = undefined;
                     const ev_n = timeline.getEventsNearSnapshot(scrub_offset, &ev_out);
