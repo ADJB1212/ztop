@@ -10,6 +10,7 @@ pub fn build(b: *std.Build) void {
 
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "version", manifest.version);
+    const strip = b.option(bool, "strip", "Strip symbols") orelse false;
 
     if (sdk_root) |root| {
         b.sysroot = root;
@@ -29,6 +30,7 @@ pub fn build(b: *std.Build) void {
 
             .target = target,
             .optimize = optimize,
+            .strip = strip,
 
             .imports = &.{
                 .{ .name = "ztop", .module = mod },
