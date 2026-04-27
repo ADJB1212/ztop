@@ -16,6 +16,8 @@ const causality = @import("render/causality.zig");
 const why_busy = @import("render/why_busy.zig");
 const pressure_hints = @import("render/pressure_hints.zig");
 const process_lifeline = @import("render/process_lifeline.zig");
+const overlays = @import("render/overlays.zig");
+const footer = @import("render/footer.zig");
 
 // Re-exports from util.zig
 pub const UnitValue = util.UnitValue;
@@ -42,6 +44,7 @@ pub const ProcessTableLayout = process_table.ProcessTableLayout;
 pub const min_process_name_width = process_table.min_process_name_width;
 pub const processColumnWidth = process_table.processColumnWidth;
 pub const planProcessTableLayout = process_table.planProcessTableLayout;
+pub const renderProcessRow = process_table.renderProcessRow;
 
 // Re-exports from rate_box.zig
 pub const RateSeries = rate_box.RateSeries;
@@ -81,6 +84,14 @@ pub const renderPressureHintsView = pressure_hints.renderPressureHintsView;
 
 // Re-exports from process_lifeline.zig
 pub const renderLifelineView = process_lifeline.renderLifelineView;
+
+// Re-exports from overlays.zig
+pub const renderHelpOverlay = overlays.renderHelpOverlay;
+pub const renderColumnPickerOverlay = overlays.renderColumnPickerOverlay;
+
+// Re-exports from footer.zig
+pub const FooterState = footer.FooterState;
+pub const renderFooter = footer.renderFooter;
 
 pub fn setStatus(status_buf: *[160]u8, status_len: *usize, comptime fmt: []const u8, args: anytype) void {
     const msg = std.fmt.bufPrint(status_buf, fmt, args) catch {
