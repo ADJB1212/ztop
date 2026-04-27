@@ -21,13 +21,7 @@ pub const FooterState = struct {
     scrub_offset: usize,
 };
 
-pub fn renderFooter(
-    app_tui: *Tui,
-    theme: config.Theme,
-    width: u16,
-    height: u16,
-    state: FooterState,
-) !void {
+pub fn renderFooter(app_tui: *Tui, theme: config.Theme, width: u16, height: u16, state: FooterState) !void {
     _ = width;
 
     try app_tui.moveCursor(1, height);

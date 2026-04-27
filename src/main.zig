@@ -1,6 +1,7 @@
 const std = @import("std");
 const ztop = @import("ztop");
 const build_options = @import("build_options");
+const main_view = @import("main_view.zig");
 const cli = ztop.cli;
 const render = ztop.render;
 const input_handler = ztop.input_handler;
@@ -9,6 +10,10 @@ const timeline_mod = ztop.timeline;
 const Tui = ztop.tui.Tui;
 const SysInfo = ztop.sysinfo.SysInfo;
 const posix = std.posix;
+const memoryUsagePercent = main_view.memoryUsagePercent;
+const formatWifiSsidLine = main_view.formatWifiSsidLine;
+const formatWifiGenerationLine = main_view.formatWifiGenerationLine;
+const activeProcessColumns = main_view.activeProcessColumns;
 const repo_url = "https://github.com/ADJB1212/ztop";
 const repo_label = "github.com/ADJB1212/ztop";
 
@@ -25,63 +30,8 @@ fn handleSigWinch(sig: posix.SIG) callconv(.c) void {
     sigwinch_flag = true;
 }
 
-fn memoryUsagePercent(mem: ztop.sysinfo.MemStats) f32 {
-    if (mem.total == 0) return 0;
-    return @as(f32, @floatFromInt(mem.used)) / @as(f32, @floatFromInt(mem.total)) * 100.0;
-}
-
-fn batteryStatusLabel(status: ztop.sysinfo.BatteryStatus) []const u8 {
-    return switch (status) {
-        .charging => "Charging",
-        .discharging => "Discharging",
-        .full => "Full",
-        .unknown => "Unknown",
-    };
-}
-
-fn aggregateGpuTemp(thermal: ztop.sysinfo.ThermalStats, gpus: []const ztop.sysinfo.GpuStats) ?f32 {
-    for (gpus) |gpu| {
-        if (gpu.temperature_c) |temp_c| return temp_c;
-    }
-    return thermal.gpu_temp;
-}
-
-fn gpuVendorLabel(vendor: ztop.sysinfo.GpuVendor) []const u8 {
-    return switch (vendor) {
-        .nvidia => "NVIDIA",
-        .amd => "AMD",
-        .apple => "Apple",
-        .intel => "Intel",
-        .unknown => "Unknown",
-    };
-}
-
-fn formatWifiSsidLine(net: ztop.sysinfo.NetStats, buf: []u8) ?[]const u8 {
-    const ssid = net.wifi.ssid();
-    if (ssid.len == 0) return null;
-    return std.fmt.bufPrint(buf, "WiFi: {s}", .{ssid}) catch null;
-}
-
-fn formatWifiGenerationLine(net: ztop.sysinfo.NetStats, buf: []u8) ?[]const u8 {
-    const generation = net.wifi.generation.label() orelse return null;
-    return std.fmt.bufPrint(buf, "WiFi Generation: {s}", .{generation}) catch null;
-}
-
 fn nowMs(io: std.Io) i64 {
     return std.Io.Clock.now(.real, io).toMilliseconds();
-}
-
-fn displayWidth(text: []const u8) usize {
-    return std.unicode.utf8CountCodepoints(text) catch text.len;
-}
-
-fn activeProcessColumns(
-    current_tab: u8,
-    process_columns: *ztop.config.ProcessColumns,
-    io_process_columns: *ztop.config.ProcessColumns,
-) *ztop.config.ProcessColumns {
-    if (current_tab == 2) return io_process_columns;
-    return process_columns;
 }
 
 pub fn main(main_init: std.process.Init) !void {
@@ -371,43 +321,17 @@ pub fn main(main_init: std.process.Init) !void {
                 try app_tui.setCursorStyle(.steady_block);
                 try app_tui.setCursorVisible(false);
             } else {
-                // Status Bar
-                try app_tui.moveCursor(1, 1);
-                try app_tui.printStyled(.{ .fg = theme.brand, .bold = true }, " ztop ", .{});
-                try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "- {s} {s} {s} - {s}", .{ sysname, release, machine, nodename });
-
-                {
-                    const tab1_label = if (app_tui.hasNerdFonts()) "[1]  Main" else "[1] Main";
-                    const tab2_label = if (app_tui.hasNerdFonts()) "[2] 󰕒 I/O" else "[2] I/O";
-                    const tab3_label = if (app_tui.hasNerdFonts()) "[3]  Sensors" else "[3] Sensors";
-                    const tab4_label = if (app_tui.hasNerdFonts()) "[4] 󰈀 Network" else "[4] Network";
-                    const tab1_w = displayWidth(tab1_label);
-                    const tab2_w = displayWidth(tab2_label);
-                    const tab3_w = displayWidth(tab3_label);
-                    const tab4_w = displayWidth(tab4_label);
-                    const gap: u16 = 2;
-                    const tabs_width = tab1_w + tab2_w + tab3_w + tab4_w + @as(usize, gap) * 3;
-                    if (size.width > tabs_width + 30) {
-                        const tabs_x = size.width - @as(u16, @intCast(tabs_width)) - 2;
-                        const tab2_x = tabs_x + @as(u16, @intCast(tab1_w)) + gap;
-                        const tab3_x = tab2_x + @as(u16, @intCast(tab2_w)) + gap;
-                        const tab4_x = tab3_x + @as(u16, @intCast(tab3_w)) + gap;
-
-                        mouse_regions.addTab(1, .{ .x = tabs_x, .y = 1, .width = @as(u16, @intCast(tab1_w)), .height = 1 });
-                        mouse_regions.addTab(2, .{ .x = tab2_x, .y = 1, .width = @as(u16, @intCast(tab2_w)), .height = 1 });
-                        mouse_regions.addTab(3, .{ .x = tab3_x, .y = 1, .width = @as(u16, @intCast(tab3_w)), .height = 1 });
-                        mouse_regions.addTab(4, .{ .x = tab4_x, .y = 1, .width = @as(u16, @intCast(tab4_w)), .height = 1 });
-
-                        try app_tui.moveCursor(tabs_x, 1);
-                        if (current_tab == 1) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab1_label}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab1_label});
-                        try app_tui.bufWrite("  ");
-                        if (current_tab == 2) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab2_label}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab2_label});
-                        try app_tui.bufWrite("  ");
-                        if (current_tab == 3) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab3_label}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab3_label});
-                        try app_tui.bufWrite("  ");
-                        if (current_tab == 4) try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab4_label}) else try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab4_label});
-                    }
-                }
+                try main_view.renderHeader(
+                    &app_tui,
+                    theme,
+                    size.width,
+                    current_tab,
+                    sysname,
+                    release,
+                    machine,
+                    nodename,
+                    &mouse_regions,
+                );
 
                 const available_height = size.height -| 2;
                 const is_small_width = size.width < 80;
@@ -498,51 +422,17 @@ pub fn main(main_init: std.process.Init) !void {
                     // Diff view already rendered above; skip normal tab content
                 } else if (current_tab == 1) {
                     try render.renderCpuTopologyBox(&app_tui, theme, cpu_box_x, cpu_box_y, cpu_box_width, cpu_box_height, display_cpu, cpu_topology, &cpu_history, app_config.disable_history);
-
-                    // Memory Box
-                    try app_tui.drawBoxStyled(
+                    try main_view.renderMemoryBox(
+                        &app_tui,
+                        theme,
                         mem_box_x,
                         mem_box_y,
                         mem_box_width,
                         mem_box_height,
-                        "Memory",
-                        .{ .fg = theme.border },
-                        .{ .fg = theme.memory_title, .bold = true },
+                        display_mem,
+                        &mem_history,
+                        app_config.disable_history,
                     );
-
-                    if (mem_box_height >= 3) {
-                        const mem_used_percent = memoryUsagePercent(display_mem);
-                        try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 1);
-                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Used: ", .{});
-                        try app_tui.printStyled(.{ .fg = render.memoryColor(theme, mem_used_percent), .bold = true }, "{d} GB", .{display_mem.used / 1024 / 1024 / 1024});
-                        try app_tui.printStyled(.{ .fg = theme.muted }, " (C: {d}M B: {d}M)", .{ display_mem.cached / 1024 / 1024, display_mem.buffered / 1024 / 1024 });
-                        try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 2);
-                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Free: ", .{});
-                        try app_tui.printStyled(.{ .fg = theme.usage_good, .bold = true }, "{d} GB", .{display_mem.free / 1024 / 1024 / 1024});
-                        if (display_mem.swap_total > 0 and mem_box_height >= 4) {
-                            try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 3);
-                            try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Swap: ", .{});
-                            try app_tui.printStyled(.{ .fg = theme.memory_mid }, "{d} MB / {d} MB", .{ display_mem.swap_used / 1024 / 1024, display_mem.swap_total / 1024 / 1024 });
-                        }
-
-                        const stats_rows: u16 = if (display_mem.swap_total > 0 and mem_box_height >= 4) 3 else 2;
-                        const graph_height = @min(
-                            render.suggestedHistoryGraphRows(mem_box_height, app_config.disable_history),
-                            mem_box_height -| (stats_rows + 2),
-                        );
-                        if (graph_height > 0 and mem_box_width > 10 and mem_history.len() > 1) {
-                            try render.renderHistoryGraph(
-                                &app_tui,
-                                theme,
-                                mem_box_x + 2,
-                                mem_box_y + 1 + stats_rows,
-                                mem_box_width -| 4,
-                                graph_height,
-                                &mem_history,
-                                .memory,
-                            );
-                        }
-                    }
                 } else if (current_tab == 2) {
                     try render.renderDualRateBox(
                         &app_tui,
@@ -600,259 +490,50 @@ pub fn main(main_init: std.process.Init) !void {
                         app_config.disable_history,
                     );
                 } else if (current_tab == 3) {
-                    try app_tui.drawBoxStyled(
+                    try main_view.renderSensorsTab(
+                        &app_tui,
+                        theme,
                         cpu_box_x,
                         cpu_box_y,
                         cpu_box_width,
                         cpu_box_height,
-                        "Sensors",
-                        .{ .fg = theme.border },
-                        .{ .fg = theme.sensor_title, .bold = true },
-                    );
-                    if (cpu_box_height >= 3) {
-                        try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 1);
-                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "CPU Temp: ", .{});
-                        if (display_thermal.cpu_temp) |t| {
-                            try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} C", .{t});
-                        } else {
-                            try app_tui.printStyled(.{ .fg = theme.muted }, "N/A", .{});
-                        }
-                        if (cpu_box_height >= 4) {
-                            try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 2);
-                            try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "GPU Temp: ", .{});
-                            if (aggregateGpuTemp(display_thermal, cached_gpus)) |t| {
-                                try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} C", .{t});
-                            } else {
-                                try app_tui.printStyled(.{ .fg = theme.muted }, "N/A", .{});
-                            }
-                        }
-                        if (cpu_box_height >= 5) {
-                            try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 3);
-                            try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Charge: ", .{});
-                            if (display_battery.charge_percent) |c| {
-                                try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1}%", .{c});
-                            } else {
-                                try app_tui.printStyled(.{ .fg = theme.muted }, "N/A", .{});
-                            }
-                        }
-                        if (cpu_box_height >= 6) {
-                            try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 4);
-                            try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Power: ", .{});
-                            if (display_battery.power_draw_w) |w| {
-                                try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.2} W", .{w});
-                            } else {
-                                try app_tui.printStyled(.{ .fg = theme.muted }, "N/A", .{});
-                            }
-                        }
-                        if (cpu_box_height >= 7) {
-                            try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 5);
-                            try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Status: ", .{});
-                            try app_tui.printStyled(.{ .fg = theme.text }, "{s}", .{batteryStatusLabel(display_battery.status)});
-                        }
-                    }
-
-                    try app_tui.drawBoxStyled(
                         mem_box_x,
                         mem_box_y,
                         mem_box_width,
                         mem_box_height,
-                        "GPU",
-                        .{ .fg = theme.border },
-                        .{ .fg = theme.sensor_title, .bold = true },
+                        display_thermal,
+                        display_battery,
+                        cached_gpus,
                     );
-                    if (mem_box_height >= 3) {
-                        if (cached_gpus.len == 0) {
-                            try app_tui.moveCursor(mem_box_x + 2, mem_box_y + 1);
-                            try app_tui.printStyled(.{ .fg = theme.muted }, "No supported GPU metrics detected", .{});
-                        } else {
-                            const rows_per_gpu: u16 = if (mem_box_height >= 7 and mem_box_width >= 42) 2 else 1;
-                            const available_rows = mem_box_height - 2;
-                            const visible_gpu_count = @min(cached_gpus.len, @as(usize, @intCast(available_rows / rows_per_gpu)));
-
-                            for (cached_gpus[0..visible_gpu_count], 0..) |gpu, gpu_idx| {
-                                const row_y = mem_box_y + 1 + @as(u16, @intCast(gpu_idx)) * rows_per_gpu;
-                                const gpu_name = gpu.name();
-                                const name_limit: usize = if (mem_box_width > 38) @as(usize, mem_box_width - 30) else 12;
-                                const display_name = if (gpu_name.len > name_limit) gpu_name[0..name_limit] else gpu_name;
-
-                                try app_tui.moveCursor(mem_box_x + 2, row_y);
-                                try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "{s}", .{if (display_name.len > 0) display_name else "GPU"});
-                                try app_tui.printStyled(.{ .fg = theme.muted }, " [{s}]", .{gpuVendorLabel(gpu.vendor)});
-                                if (gpu.core_count) |core_count| {
-                                    try app_tui.printStyled(.{ .fg = theme.muted }, " {d} cores", .{core_count});
-                                }
-                                try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "  Util: ", .{});
-                                if (gpu.utilization_percent) |util| {
-                                    try app_tui.printStyled(.{ .fg = render.usageColor(theme, util), .bold = true }, "{d:4.1}%", .{util});
-                                } else {
-                                    try app_tui.printStyled(.{ .fg = theme.muted }, "N/A", .{});
-                                }
-
-                                if (rows_per_gpu == 2 and row_y + 1 < mem_box_y + mem_box_height - 1) {
-                                    try app_tui.moveCursor(mem_box_x + 2, row_y + 1);
-                                    var wrote_detail = false;
-
-                                    if (gpu.memory_used_bytes) |used_bytes| {
-                                        const used_value = render.formatUnit(used_bytes);
-                                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Mem: ", .{});
-                                        if (gpu.memory_total_bytes) |total_bytes| {
-                                            const total_value = render.formatUnit(total_bytes);
-                                            try app_tui.printStyled(.{ .fg = theme.memory_mid }, "{d:4.1} {s} / {d:4.1} {s}", .{ used_value.value, used_value.unit, total_value.value, total_value.unit });
-                                        } else {
-                                            try app_tui.printStyled(.{ .fg = theme.memory_mid }, "{d:4.1} {s}", .{ used_value.value, used_value.unit });
-                                        }
-                                        wrote_detail = true;
-                                    }
-
-                                    if (gpu.temperature_c) |temp_c| {
-                                        if (wrote_detail) try app_tui.printStyled(.{ .fg = theme.muted }, "  ", .{});
-                                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Temp: ", .{});
-                                        try app_tui.printStyled(.{ .fg = theme.io_rate }, "{d:4.1} C", .{temp_c});
-                                        wrote_detail = true;
-                                    }
-
-                                    if (gpu.power_draw_w) |power_w| {
-                                        if (wrote_detail) try app_tui.printStyled(.{ .fg = theme.muted }, "  ", .{});
-                                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Power: ", .{});
-                                        try app_tui.printStyled(.{ .fg = theme.io_rate }, "{d:4.1} W", .{power_w});
-                                        wrote_detail = true;
-                                    }
-
-                                    if (!wrote_detail) {
-                                        try app_tui.printStyled(.{ .fg = theme.muted }, "No additional counters exposed", .{});
-                                    }
-                                }
-                            }
-
-                            if (visible_gpu_count < cached_gpus.len and mem_box_height >= 4) {
-                                try app_tui.moveCursor(mem_box_x + 2, mem_box_y + mem_box_height - 2);
-                                try app_tui.printStyled(.{ .fg = theme.muted }, "+{d} more GPU(s)", .{cached_gpus.len - visible_gpu_count});
-                            }
-                        }
-                    }
                 } else if (current_tab == 4) {
-                    // Network Totals Box
-                    try app_tui.drawBoxStyled(
+                    try main_view.renderNetworkTotalsBox(
+                        &app_tui,
+                        theme,
                         cpu_box_x,
                         cpu_box_y,
-                        size.width, // Full width for top box
+                        size.width,
                         cpu_box_height,
-                        "Network",
-                        .{ .fg = theme.border },
-                        .{ .fg = theme.sensor_title, .bold = true },
+                        display_net,
+                        wifi_ssid_line,
+                        wifi_generation_line,
                     );
-                    if (cpu_box_height >= 3) {
-                        try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 1);
-                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Rx: ", .{});
-                        const rx_ps = render.formatUnit(display_net.rx_bytes_ps);
-                        try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} {s}/s", .{ rx_ps.value, rx_ps.unit });
-
-                        try app_tui.moveCursor(cpu_box_x + 22, cpu_box_y + 1);
-                        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Tx: ", .{});
-                        const tx_ps = render.formatUnit(display_net.tx_bytes_ps);
-                        try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} {s}/s", .{ tx_ps.value, tx_ps.unit });
-
-                        var wifi_row: u16 = 2;
-                        if (wifi_ssid_line) |line| {
-                            if (cpu_box_height >= wifi_row + 2) {
-                                try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + wifi_row);
-                                try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{render.clipUtf8(line, size.width -| 4)});
-                                wifi_row += 1;
-                            }
-                        }
-                        if (wifi_generation_line) |line| {
-                            if (cpu_box_height >= wifi_row + 2) {
-                                try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + wifi_row);
-                                try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{render.clipUtf8(line, size.width -| 4)});
-                            }
-                        }
-                    }
                 }
 
                 // Bottom Box: Processes, Threads, or Connections
                 if (current_tab == 4) {
-                    // Connections Box
-                    if (procs_box_height >= 3) {
-                        try app_tui.drawBoxStyled(
-                            procs_box_x,
-                            procs_box_y,
-                            procs_box_width,
-                            procs_box_height,
-                            "Connections",
-                            .{ .fg = theme.border },
-                            .{ .fg = theme.process_title, .bold = true },
-                        );
-                        const visible_rows = procs_box_height - 2;
-                        mouse_regions.list_rect = .{
-                            .x = procs_box_x + 1,
-                            .y = procs_box_y + 1,
-                            .width = procs_box_width -| 2,
-                            .height = visible_rows,
-                        };
-                        const conn_count = cached_connections.len;
-                        if (conn_count == 0) {
-                            selected_idx = 0;
-                            scroll_offset = 0;
-                        } else {
-                            if (selected_idx >= conn_count) selected_idx = conn_count - 1;
-                        }
-
-                        if (selected_idx < scroll_offset) {
-                            scroll_offset = selected_idx;
-                        } else if (selected_idx >= scroll_offset + visible_rows) {
-                            scroll_offset = selected_idx - visible_rows + 1;
-                        }
-
-                        if (conn_count == 0) {
-                            try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1);
-                            try app_tui.printStyled(.{ .fg = theme.muted }, "No active connections detected", .{});
-                        }
-
-                        for (0..visible_rows) |row| {
-                            const idx = scroll_offset + row;
-                            if (idx >= conn_count) break;
-                            const conn = cached_connections[idx];
-
-                            const is_selected = (idx == selected_idx) and !show_help;
-
-                            try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1 + @as(u16, @intCast(row)));
-
-                            if (is_selected) {
-                                try app_tui.setStyle(.{ .bg = theme.selection_bg });
-                                for (0..procs_box_width - 4) |_| try app_tui.bufWrite(" ");
-                                try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1 + @as(u16, @intCast(row)));
-                            }
-
-                            try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s:4} ", .{@tagName(conn.protocol)});
-
-                            const local_str = std.mem.sliceTo(&conn.local_addr, 0);
-                            if (conn.local_port > 0) {
-                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s}:{d:<5} ", .{ local_str, conn.local_port });
-                            } else {
-                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s:<11} ", .{local_str});
-                            }
-                            try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.muted } else .{ .fg = theme.muted }, "-> ", .{});
-
-                            const remote_str = std.mem.sliceTo(&conn.remote_addr, 0);
-                            if (conn.remote_port > 0) {
-                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s}:{d:<5} ", .{ remote_str, conn.remote_port });
-                            } else {
-                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s:<11} ", .{remote_str});
-                            }
-
-                            if (conn.protocol == .tcp or conn.protocol == .tcp6) {
-                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.muted } else .{ .fg = theme.muted }, "[{s:<11}] ", .{@tagName(conn.state)});
-                            } else {
-                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.muted } else .{ .fg = theme.muted }, "[{s:<11}] ", .{"-"});
-                            }
-
-                            try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.process_title } else .{ .fg = theme.process_title }, "{s} (PID: {d})", .{ conn.name(), conn.pid });
-
-                            if (is_selected) {
-                                try app_tui.resetStyle();
-                            }
-                        }
-                    }
+                    try main_view.renderConnectionsTable(
+                        &app_tui,
+                        theme,
+                        procs_box_x,
+                        procs_box_y,
+                        procs_box_width,
+                        procs_box_height,
+                        cached_connections,
+                        show_help,
+                        &selected_idx,
+                        &scroll_offset,
+                        &mouse_regions,
+                    );
                 } else if (why_busy_view and procs_box_height >= 5) {
                     // Current procs: use scrubbed snapshot procs if scrubbing
                     const wb_procs: []const ztop.sysinfo.ProcStats = if (is_scrubbing and scrub_proc_count > 0)
@@ -955,103 +636,24 @@ pub fn main(main_init: std.process.Init) !void {
                         ph_data,
                     );
                 } else if (procs_box_height >= 3) {
-                    var title_buf: [96]u8 = undefined;
-
                     if (thread_view) {
-                        const tv_name = thread_view_name_buf[0..thread_view_name_len];
-                        const title = std.fmt.bufPrint(
-                            &title_buf,
-                            "Threads of {s} (PID: {d}) - {d} threads",
-                            .{ tv_name, thread_view_pid, cached_threads.len },
-                        ) catch "Threads";
-
-                        try app_tui.drawBoxStyled(
+                        try main_view.renderThreadTable(
+                            &app_tui,
+                            theme,
                             procs_box_x,
                             procs_box_y,
                             procs_box_width,
                             procs_box_height,
-                            title,
-                            .{ .fg = theme.border },
-                            .{ .fg = theme.process_title, .bold = true },
+                            thread_view_name_buf[0..thread_view_name_len],
+                            thread_view_pid,
+                            cached_threads,
+                            show_help,
+                            &selected_idx,
+                            &scroll_offset,
+                            &mouse_regions,
                         );
-
-                        const thread_count = cached_threads.len;
-                        if (thread_count == 0) {
-                            selected_idx = 0;
-                            scroll_offset = 0;
-                        } else {
-                            if (selected_idx >= thread_count) selected_idx = thread_count - 1;
-                        }
-
-                        const visible_rows = procs_box_height - 2;
-                        mouse_regions.list_rect = .{
-                            .x = procs_box_x + 1,
-                            .y = procs_box_y + 1,
-                            .width = procs_box_width -| 2,
-                            .height = visible_rows,
-                        };
-                        if (selected_idx < scroll_offset) {
-                            scroll_offset = selected_idx;
-                        } else if (selected_idx >= scroll_offset + visible_rows) {
-                            scroll_offset = selected_idx - visible_rows + 1;
-                        }
-
-                        for (0..visible_rows) |row| {
-                            const idx = scroll_offset + row;
-                            if (idx >= thread_count) break;
-                            const thr = cached_threads[idx];
-
-                            const is_selected = (idx == selected_idx) and !show_help;
-
-                            try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1 + @as(u16, @intCast(row)));
-
-                            if (is_selected) {
-                                try app_tui.setStyle(.{ .bg = theme.selection_bg });
-                                for (0..procs_box_width - 4) |_| try app_tui.bufWrite(" ");
-                                try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1 + @as(u16, @intCast(row)));
-                            }
-
-                            try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.muted }, "{d:7} ", .{thr.tid});
-
-                            const name_width: usize = if (procs_box_width > 40) 16 else 8;
-                            if (thr.name().len > name_width) {
-                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s}.. ", .{thr.name()[0 .. name_width - 2]});
-                            } else if (thr.name().len > 0) {
-                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text }, "{s} ", .{thr.name()});
-                                for (thr.name().len..name_width) |_| try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg } else .{}, " ", .{});
-                            } else {
-                                for (0..name_width) |_| try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg } else .{}, " ", .{});
-                                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg } else .{}, " ", .{});
-                            }
-
-                            const c_style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = render.usageColor(theme, thr.cpu_percent), .bold = thr.cpu_percent >= 70 } else .{ .fg = render.usageColor(theme, thr.cpu_percent), .bold = thr.cpu_percent >= 70 };
-                            try app_tui.printStyled(c_style, "{d:5.1}% CPU ", .{thr.cpu_percent});
-
-                            const state_str = switch (thr.state) {
-                                .running => "running",
-                                .sleeping => "sleeping",
-                                .disk_sleep => "disk_slp",
-                                .stopped => "stopped",
-                                .zombie => "zombie",
-                                .dead => "dead",
-                                .idle => "idle",
-                                else => "unknown",
-                            };
-                            const state_color: Tui.Color = switch (thr.state) {
-                                .running => theme.usage_good,
-                                .sleeping => theme.muted,
-                                .disk_sleep => theme.usage_warn,
-                                .stopped => theme.usage_critical,
-                                .zombie => theme.usage_critical,
-                                else => theme.muted,
-                            };
-                            try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = state_color } else .{ .fg = state_color }, "{s}", .{state_str});
-
-                            if (is_selected) {
-                                try app_tui.resetStyle();
-                            }
-                        }
                     } else {
+                        var title_buf: [96]u8 = undefined;
                         const sort_name = switch (sort_by) {
                             .cpu => "CPU%",
                             .mem => "MEM%",

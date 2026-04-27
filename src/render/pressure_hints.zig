@@ -81,12 +81,7 @@ fn addHint(
     data.hint_count += 1;
 }
 
-fn detectSwapPatterns(
-    data: *PressureHintsData,
-    mem: sysinfo.common.MemStats,
-    procs: []const sysinfo.ProcStats,
-    timeline: *const timeline_mod.Timeline,
-) void {
+fn detectSwapPatterns(data: *PressureHintsData, mem: sysinfo.common.MemStats, procs: []const sysinfo.ProcStats, timeline: *const timeline_mod.Timeline) void {
     if (mem.swap_total == 0) return;
     const swap_pct = @as(f32, @floatFromInt(mem.swap_used)) / @as(f32, @floatFromInt(mem.swap_total)) * 100.0;
     if (swap_pct < 15.0) return;
@@ -126,11 +121,7 @@ fn detectSwapPatterns(
     }
 }
 
-fn detectRunawayWriter(
-    data: *PressureHintsData,
-    procs: []const sysinfo.ProcStats,
-    disk_total: u64,
-) void {
+fn detectRunawayWriter(data: *PressureHintsData, procs: []const sysinfo.ProcStats, disk_total: u64) void {
     if (disk_total < 5 * 1024 * 1024) return;
 
     var top_pid: u32 = 0;
@@ -168,10 +159,7 @@ fn detectRunawayWriter(
     addHint(data, .runaway_writer, sv, title, detail, top_pid, top_name);
 }
 
-fn detectReconnectLoop(
-    data: *PressureHintsData,
-    connections: []const sysinfo.common.NetConnection,
-) void {
+fn detectReconnectLoop(data: *PressureHintsData, connections: []const sysinfo.common.NetConnection) void {
     if (connections.len == 0) return;
 
     const MAX_TRACKED = 32;
@@ -244,11 +232,7 @@ fn detectFdPressure(data: *PressureHintsData, procs: []const sysinfo.ProcStats) 
     addHint(data, .fd_pressure, sv, title, detail, top_pid, top_name);
 }
 
-fn detectMemoryLeak(
-    data: *PressureHintsData,
-    procs: []const sysinfo.ProcStats,
-    timeline: *const timeline_mod.Timeline,
-) void {
+fn detectMemoryLeak(data: *PressureHintsData, procs: []const sysinfo.ProcStats, timeline: *const timeline_mod.Timeline) void {
     if (timeline.snapshotCount() < 30) return;
     if (data.mem_pct < 50.0) return;
 
@@ -308,11 +292,7 @@ fn detectCpuRunaway(data: *PressureHintsData, procs: []const sysinfo.ProcStats) 
     addHint(data, .runaway_cpu, sv, title, detail, top_pid, top_name);
 }
 
-fn detectThermalThrottle(
-    data: *PressureHintsData,
-    thermal: sysinfo.common.ThermalStats,
-    cpu_pct: f32,
-) void {
+fn detectThermalThrottle(data: *PressureHintsData, thermal: sysinfo.common.ThermalStats, cpu_pct: f32) void {
     const temp = thermal.cpu_temp orelse return;
     if (temp < 85.0) return;
 

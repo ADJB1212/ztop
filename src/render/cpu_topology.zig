@@ -158,11 +158,7 @@ fn efficiencyAccentColor(theme: config.Theme, class: CpuEfficiencyClass) Tui.Col
     };
 }
 
-fn collectLogicalIndicesForPhysical(
-    topology: CpuTopology,
-    physical_id: u16,
-    out: *[sysinfo.common.MAX_CORES]usize,
-) []usize {
+fn collectLogicalIndicesForPhysical(topology: CpuTopology, physical_id: u16, out: *[sysinfo.common.MAX_CORES]usize) []usize {
     var count: usize = 0;
     for (topology.logical_cores, 0..) |logical_core, idx| {
         if (logical_core.physical_id != physical_id or count >= out.len) continue;
