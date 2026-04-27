@@ -14,6 +14,10 @@ pub fn memoryUsagePercent(mem: sysinfo.MemStats) f32 {
     return @as(f32, @floatFromInt(mem.used)) / @as(f32, @floatFromInt(mem.total)) * 100.0;
 }
 
+pub fn diskUsagePercent(disk: sysinfo.DiskStats) f32 {
+    return sysinfo.common.diskUsagePercent(disk);
+}
+
 pub fn batteryStatusLabel(status: sysinfo.BatteryStatus) []const u8 {
     return switch (status) {
         .charging => "Charging",

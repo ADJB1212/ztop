@@ -458,6 +458,13 @@ pub fn main(main_init: std.process.Init) !void {
                             .color = theme.io_rate,
                         },
                         &.{},
+                        .{
+                            .label = "USED",
+                            .short_label = "U ",
+                            .used_bytes = display_disk.capacity_used_bytes,
+                            .total_bytes = display_disk.capacity_total_bytes,
+                            .color = theme.disk_title,
+                        },
                         app_config.disable_history,
                     );
 
@@ -487,6 +494,7 @@ pub fn main(main_init: std.process.Init) !void {
                             .color = theme.io_rate,
                         },
                         wifi_detail_lines[0..wifi_detail_count],
+                        null,
                         app_config.disable_history,
                     );
                 } else if (current_tab == 3) {

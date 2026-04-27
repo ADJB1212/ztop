@@ -67,6 +67,7 @@ pub const SysInfo = struct {
     thread_view_pid: u32 = 0,
     prev_disk_read: u64 = 0,
     prev_disk_write: u64 = 0,
+    disk_usage: disk_mod.DiskUsage = .{ .total_bytes = 0, .used_bytes = 0 },
     prev_net_rx: u64 = 0,
     prev_net_tx: u64 = 0,
     prev_time: i64 = 0,
@@ -81,6 +82,7 @@ pub const SysInfo = struct {
             .ncpu = @intCast(initial_cores),
             .total_mem = memory_mod.readMemInfoTotal(io) catch 0,
             .page_size = std.heap.pageSize(),
+            .disk_usage = disk_mod.readDiskUsage() catch .{ .total_bytes = 0, .used_bytes = 0 },
             .prev_time = now,
             .prev_disk_ms = now,
             .prev_net_ms = now,
@@ -199,7 +201,12 @@ pub const SysInfo = struct {
         self.prev_disk_write = stats.write_bytes;
         self.prev_disk_ms = now;
 
-        return .{ .read_bytes_ps = read_ps, .write_bytes_ps = write_ps };
+        return .{
+            .read_bytes_ps = read_ps,
+            .write_bytes_ps = write_ps,
+            .capacity_used_bytes = self.disk_usage.used_bytes,
+            .capacity_total_bytes = self.disk_usage.total_bytes,
+        };
     }
 
     pub fn getNetStats(self: *SysInfo) NetStats {

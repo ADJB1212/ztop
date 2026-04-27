@@ -8,6 +8,11 @@ pub const DiskTotals = struct {
     write_bytes: u64,
 };
 
+pub const DiskUsage = struct {
+    total_bytes: u64,
+    used_bytes: u64,
+};
+
 pub fn readDiskTotals() !DiskTotals {
     const matching = c.IOServiceMatching(c.kIOBlockStorageDriverClass) orelse return error.IOKitMatchingFailed;
 
@@ -51,4 +56,19 @@ pub fn readDiskTotals() !DiskTotals {
     }
 
     return .{ .read_bytes = read_bytes, .write_bytes = write_bytes };
+}
+
+pub fn readDiskUsage() !DiskUsage {
+    var stats: c.struct_statvfs = std.mem.zeroes(c.struct_statvfs);
+    if (c.statvfs("/", &stats) != 0) return error.StatVfsFailed;
+
+    const block_size = if (stats.f_frsize > 0) stats.f_frsize else stats.f_bsize;
+    if (block_size == 0) return error.InvalidStatVfs;
+
+    const total = stats.f_blocks *| block_size;
+    const used_blocks = stats.f_blocks -| stats.f_bfree;
+    return .{
+        .total_bytes = total,
+        .used_bytes = used_blocks *| block_size,
+    };
 }

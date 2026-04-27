@@ -2,6 +2,7 @@ const sys_c = @cImport({
     @cInclude("sys/sysctl.h");
     @cInclude("sys/proc_info.h");
     @cInclude("sys/socket.h");
+    @cInclude("sys/statvfs.h");
     @cInclude("net/if.h");
     @cInclude("net/route.h");
 });
@@ -19,6 +20,7 @@ pub const c = struct {
     pub const struct_socket_fdinfo = sys_c.struct_socket_fdinfo;
     pub const struct_in_sockinfo = sys_c.struct_in_sockinfo;
     pub const struct_if_msghdr2 = sys_c.struct_if_msghdr2;
+    pub const struct_statvfs = sys_c.struct_statvfs;
 
     pub const PROC_PIDLISTFDS = sys_c.PROC_PIDLISTFDS;
     pub const PROC_PIDFDSOCKETINFO = sys_c.PROC_PIDFDSOCKETINFO;
@@ -47,6 +49,7 @@ pub const c = struct {
     pub const CTL_KERN = sys_c.CTL_KERN;
     pub const KERN_PROCARGS2 = sys_c.KERN_PROCARGS2;
     pub const sysctl = sys_c.sysctl;
+    pub const statvfs = sys_c.statvfs;
 
     pub const Boolean = u8;
     pub const CFTypeID = c_ulong;

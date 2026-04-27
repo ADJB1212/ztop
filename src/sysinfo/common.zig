@@ -50,7 +50,14 @@ pub const MemStats = struct {
 pub const DiskStats = struct {
     read_bytes_ps: u64 = 0,
     write_bytes_ps: u64 = 0,
+    capacity_used_bytes: u64 = 0,
+    capacity_total_bytes: u64 = 0,
 };
+
+pub fn diskUsagePercent(disk: DiskStats) f32 {
+    if (disk.capacity_total_bytes == 0) return 0;
+    return @as(f32, @floatFromInt(disk.capacity_used_bytes)) / @as(f32, @floatFromInt(disk.capacity_total_bytes)) * 100.0;
+}
 
 pub const WifiGeneration = enum(u8) {
     unknown,

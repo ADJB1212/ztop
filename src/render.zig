@@ -49,6 +49,7 @@ pub const renderProcessRow = process_table.renderProcessRow;
 // Re-exports from rate_box.zig
 pub const RateSeries = rate_box.RateSeries;
 pub const DetailLine = rate_box.DetailLine;
+pub const UsageSeries = rate_box.UsageSeries;
 pub const renderDualRateBox = rate_box.renderDualRateBox;
 
 // Re-exports from cpu_topology.zig
