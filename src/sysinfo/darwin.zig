@@ -484,10 +484,43 @@ pub const SysInfo = struct {
             }
         }
 
-        const amp_raw = cf_util.getCFDictionarySignedNumberFromCString(dict, "Amperage");
-        const volt_raw = cf_util.getCFDictionaryNumberFromCString(dict, "Voltage");
-        if (amp_raw) |amp_ma| {
-            if (volt_raw) |volt_mv| {
+        var amp_ma_opt: ?i64 = null;
+        var volt_mv_opt: ?u64 = null;
+
+        if (c.IOServiceMatching("AppleSmartBattery")) |matching| {
+            var iter: c.io_iterator_t = 0;
+            if (c.IOServiceGetMatchingServices(c.kIOMainPortDefault, matching, &iter) == c.KERN_SUCCESS) {
+                defer _ = c.IOObjectRelease(iter);
+
+                const service = c.IOIteratorNext(iter);
+                if (service != 0) {
+                    defer _ = c.IOObjectRelease(service);
+
+                    if (c.CFStringCreateWithCString(null, "Amperage", c.kCFStringEncodingUTF8)) |amp_key| {
+                        defer c.CFRelease(amp_key);
+                        if (c.IORegistryEntryCreateCFProperty(service, amp_key, null, 0)) |amp_ref| {
+                            defer c.CFRelease(amp_ref);
+                            amp_ma_opt = cf_util.getCFSignedNumberValue(amp_ref);
+                        }
+                    }
+
+                    if (c.CFStringCreateWithCString(null, "Voltage", c.kCFStringEncodingUTF8)) |volt_key| {
+                        defer c.CFRelease(volt_key);
+                        if (c.IORegistryEntryCreateCFProperty(service, volt_key, null, 0)) |volt_ref| {
+                            defer c.CFRelease(volt_ref);
+                            if (cf_util.getCFNumberValue(volt_ref)) |volt_mv| {
+                                volt_mv_opt = volt_mv;
+                            } else if (cf_util.getCFSignedNumberValue(volt_ref)) |volt_signed| {
+                                if (volt_signed >= 0) volt_mv_opt = @intCast(volt_signed);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (amp_ma_opt) |amp_ma| {
+            if (volt_mv_opt) |volt_mv| {
                 if (volt_mv > 0) {
                     const watts = @abs(@as(f64, @floatFromInt(amp_ma))) * @as(f64, @floatFromInt(volt_mv)) / 1_000_000.0;
                     if (watts > 0) stats.power_draw_w = @floatCast(watts);

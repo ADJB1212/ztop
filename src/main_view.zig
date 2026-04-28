@@ -214,8 +214,14 @@ pub fn renderSensorsTab(app_tui: *Tui, theme: config.Theme, cpu_box_x: u16, cpu_
         }
 
         if (cpu_box_height >= 6) {
+            const power_label = switch (battery.status) {
+                .charging => "Input: ",
+                .discharging => "Draw: ",
+                .full => "Power: ",
+                .unknown => "Power: ",
+            };
             try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 4);
-            try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Power: ", .{});
+            try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{power_label});
             if (battery.power_draw_w) |w| {
                 try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.2} W", .{w});
             } else {
