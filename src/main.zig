@@ -136,7 +136,6 @@ pub fn main(main_init: std.process.Init) !void {
     var status_len: usize = 0;
 
     var cpu_history: ztop.history.MetricHistory = .{};
-    var mem_history: ztop.history.MetricHistory = .{};
     var disk_read_history: ztop.history.RateHistory = .{};
     var disk_write_history: ztop.history.RateHistory = .{};
     var net_rx_history: ztop.history.RateHistory = .{};
@@ -184,7 +183,6 @@ pub fn main(main_init: std.process.Init) !void {
     cached_procs = try sys_info.getProcStats(proc_buf, sort_by);
     cached_procs = ztop.sysinfo.common.filterProcStatsByLaunchCommandSubstring(cached_procs, app_config.ignoredLaunchCommandSubstr());
     cpu_history.append(cpu.usage_percent);
-    mem_history.append(memoryUsagePercent(mem));
     disk_read_history.append(disk.read_bytes_ps);
     disk_write_history.append(disk.write_bytes_ps);
     net_rx_history.append(net.rx_bytes_ps);
@@ -235,7 +233,6 @@ pub fn main(main_init: std.process.Init) !void {
             battery = sys_info.getBatteryStats();
             if (!is_scrubbing) {
                 cpu_history.append(cpu.usage_percent);
-                mem_history.append(memoryUsagePercent(mem));
                 disk_read_history.append(disk.read_bytes_ps);
                 disk_write_history.append(disk.write_bytes_ps);
                 net_rx_history.append(net.rx_bytes_ps);
@@ -425,8 +422,6 @@ pub fn main(main_init: std.process.Init) !void {
                         mem_box_width,
                         mem_box_height,
                         display_mem,
-                        &mem_history,
-                        app_config.disable_history,
                     );
                 } else if (current_tab == 2) {
                     try render.renderDualRateBox(

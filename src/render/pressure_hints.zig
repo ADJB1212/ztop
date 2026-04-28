@@ -403,14 +403,28 @@ pub fn renderPressureHintsView(
         }
 
         // CPU and disk on right if width allows
-        const right_x = x + width -| 22;
+        const right_x = x + width -| 31;
         if (right_x > inner_x + meter_w + 20) {
             try app_tui.moveCursor(right_x, cur_y);
             try app_tui.printStyled(.{ .fg = theme.text }, "CPU ", .{});
-            try app_tui.printStyled(.{ .fg = util.usageColor(theme, data.cpu_pct) }, "{d:.0}%", .{data.cpu_pct});
+            try app_tui.printStyled(.{ .fg = util.usageColor(theme, data.cpu_pct) }, "{d:0>2.0}%", .{data.cpu_pct});
             const dr = util.formatUnit(data.disk_rate);
-            try app_tui.printStyled(.{ .fg = theme.muted }, "  DSK ", .{});
-            try app_tui.printStyled(.{ .fg = theme.io_rate }, "{d:.1}{s}/s", .{ dr.value, dr.unit });
+            try app_tui.printStyled(.{ .fg = theme.muted }, " DISK", .{});
+            var value_buf: [16]u8 = undefined;
+            const raw_slice = std.fmt.bufPrint(&value_buf, "{d:.2}", .{dr.value}) catch value_buf[0..0];
+            const value_width: usize = 6;
+            var aligned_buf: [6]u8 = .{ ' ', ' ', ' ', ' ', ' ', ' ' };
+            if (raw_slice.len >= value_width) {
+                const start = raw_slice.len - value_width;
+                @memcpy(aligned_buf[0..], raw_slice[start..][0..value_width]);
+            } else {
+                const pad = value_width - raw_slice.len;
+                @memcpy(aligned_buf[pad..], raw_slice);
+            }
+            var unit_buf: [2]u8 = .{ ' ', ' ' };
+            if (dr.unit.len > 0) unit_buf[0] = dr.unit[0];
+            if (dr.unit.len > 1) unit_buf[1] = dr.unit[1];
+            try app_tui.printStyled(.{ .fg = theme.io_rate }, "{s}{s}/s", .{ aligned_buf[0..], unit_buf[0..] });
             if (data.thermal.cpu_temp) |temp| {
                 const tc: Tui.Color = if (temp >= 95.0) theme.usage_critical else if (temp >= 85.0) theme.usage_warn else theme.usage_good;
                 try app_tui.printStyled(.{ .fg = theme.muted }, "  ", .{});

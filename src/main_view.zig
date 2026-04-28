@@ -1,7 +1,6 @@
 const std = @import("std");
 const ztop = @import("ztop");
 const config = ztop.config;
-const history = ztop.history;
 const input_handler = ztop.input_handler;
 const render = ztop.render;
 const sysinfo = ztop.sysinfo;
@@ -142,7 +141,7 @@ pub fn renderHeader(
     }
 }
 
-pub fn renderMemoryBox(app_tui: *Tui, theme: config.Theme, x: u16, y: u16, width: u16, height: u16, mem: sysinfo.MemStats, mem_history: *history.MetricHistory, disable_history: bool) !void {
+pub fn renderMemoryBox(app_tui: *Tui, theme: config.Theme, x: u16, y: u16, width: u16, height: u16, mem: sysinfo.MemStats) !void {
     try app_tui.drawBoxStyled(x, y, width, height, "Memory", .{ .fg = theme.border }, .{ .fg = theme.memory_title, .bold = true });
 
     if (height < 3) return;
@@ -161,15 +160,6 @@ pub fn renderMemoryBox(app_tui: *Tui, theme: config.Theme, x: u16, y: u16, width
         try app_tui.moveCursor(x + 2, y + 3);
         try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Swap: ", .{});
         try app_tui.printStyled(.{ .fg = theme.memory_mid }, "{d} MB / {d} MB", .{ mem.swap_used / 1024 / 1024, mem.swap_total / 1024 / 1024 });
-    }
-
-    const stats_rows: u16 = if (mem.swap_total > 0 and height >= 4) 3 else 2;
-    const graph_height = @min(
-        render.suggestedHistoryGraphRows(height, disable_history),
-        height -| (stats_rows + 2),
-    );
-    if (graph_height > 0 and width > 10 and mem_history.len() > 1) {
-        try render.renderHistoryGraph(app_tui, theme, x + 2, y + 1 + stats_rows, width -| 4, graph_height, mem_history, .memory);
     }
 }
 
