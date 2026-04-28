@@ -110,6 +110,8 @@ pub const SysInfo = struct {
     prev_ms: i64 = 0,
     prev_disk_ms: i64 = 0,
     prev_net_ms: i64 = 0,
+    wifi_details: common.WifiDetails = .{},
+    wifi_fetched: bool = false,
     hid_client: ?c.IOHIDEventSystemClientRef = null,
 
     pub fn init(io: std.Io) SysInfo {
@@ -368,12 +370,17 @@ pub const SysInfo = struct {
         self.prev_net_tx = stats.tx_bytes;
         self.prev_net_ms = now;
 
+        if (!self.wifi_fetched) {
+            self.wifi_details = net_mod.readWifiDetails();
+            self.wifi_fetched = true;
+        }
+
         return .{
             .rx_bytes_ps = rx_ps,
             .tx_bytes_ps = tx_ps,
             .rx_bytes = stats.rx_bytes,
             .tx_bytes = stats.tx_bytes,
-            .wifi = stats.wifi,
+            .wifi = self.wifi_details,
         };
     }
 
@@ -574,23 +581,14 @@ pub const SysInfo = struct {
             const wakeups_total = if (ru_ret > 0) rusage.ri_pkg_idle_wkups +| rusage.ri_interrupt_wkups else 0;
             const context_switches_total = if (task_info.pti_csw > 0) @as(u64, @intCast(task_info.pti_csw)) else 0;
 
-            if (new_proc_count < MAX_PROCS) {
-                new_procs[new_proc_count] = .{
-                    .pid = pid,
-                    .cpu_total = cpu_total,
-                    .disk_read = disk_read,
-                    .disk_write = disk_write,
-                    .wakeups = wakeups_total,
-                    .context_switches = context_switches_total,
-                };
-                new_proc_count += 1;
-            }
-
             var cpu_percent: f32 = 0;
             var disk_read_ps: u64 = 0;
             var disk_write_ps: u64 = 0;
             var wakeups_ps: u64 = 0;
             var context_switches_ps: u64 = 0;
+
+            var launch_cmd_buf: [256]u8 = std.mem.zeroes([256]u8);
+            var launch_cmd_len: u16 = 0;
 
             const prev_entry = self.findPrevProcEntry(pid);
 
@@ -611,6 +609,27 @@ pub const SysInfo = struct {
                     wakeups_ps = (d_wakeups *| 1000) / @as(u64, @intCast(elapsed_ms));
                     context_switches_ps = (d_csw *| 1000) / @as(u64, @intCast(elapsed_ms));
                 }
+                @memcpy(launch_cmd_buf[0..prev.launch_cmd_len], prev.launch_cmd_buf[0..prev.launch_cmd_len]);
+                launch_cmd_len = prev.launch_cmd_len;
+            }
+
+            if (launch_cmd_len == 0) {
+                const launch_cmd = process_mod.readLaunchCommand(raw_pid, &launch_cmd_buf) catch &[_]u8{};
+                launch_cmd_len = @intCast(launch_cmd.len);
+            }
+
+            if (new_proc_count < MAX_PROCS) {
+                new_procs[new_proc_count] = .{
+                    .pid = pid,
+                    .cpu_total = cpu_total,
+                    .disk_read = disk_read,
+                    .disk_write = disk_write,
+                    .wakeups = wakeups_total,
+                    .context_switches = context_switches_total,
+                    .launch_cmd_buf = launch_cmd_buf,
+                    .launch_cmd_len = launch_cmd_len,
+                };
+                new_proc_count += 1;
             }
 
             const mem_percent: f32 = if (self.total_mem > 0)
@@ -634,8 +653,8 @@ pub const SysInfo = struct {
                 .state = state,
             };
             @memcpy(out_buf[proc_count].name_buf[0..name_len], nbuf[0..name_len]);
-            const launch_cmd = try process_mod.readLaunchCommand(raw_pid, &out_buf[proc_count].launch_cmd_buf);
-            out_buf[proc_count].launch_cmd_len = @intCast(launch_cmd.len);
+            @memcpy(out_buf[proc_count].launch_cmd_buf[0..launch_cmd_len], launch_cmd_buf[0..launch_cmd_len]);
+            out_buf[proc_count].launch_cmd_len = launch_cmd_len;
 
             proc_count += 1;
         }

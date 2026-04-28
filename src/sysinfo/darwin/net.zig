@@ -6,7 +6,6 @@ const common = @import("../../sysinfo/common.zig");
 pub const NetTotals = struct {
     rx_bytes: u64,
     tx_bytes: u64,
-    wifi: common.WifiDetails = .{},
 };
 
 var static_net_buf: []u8 = &[_]u8{};
@@ -43,7 +42,6 @@ pub fn readNetTotals() !NetTotals {
     return .{
         .rx_bytes = rx,
         .tx_bytes = tx,
-        .wifi = readWifiDetails(),
     };
 }
 
@@ -58,7 +56,7 @@ pub fn mapWifiGeneration(phy_mode: i64, channel_band: i64) common.WifiGeneration
     };
 }
 
-fn readWifiDetails() common.WifiDetails {
+pub fn readWifiDetails() common.WifiDetails {
     var wifi: common.WifiDetails = .{};
     const raw = bindings.ztop_read_wifi_snapshot(&wifi.ssid_buf, wifi.ssid_buf.len);
     wifi.ssid_len = @intCast(@min(raw.ssid_len, wifi.ssid_buf.len - 1));

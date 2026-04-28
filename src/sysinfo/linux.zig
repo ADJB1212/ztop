@@ -363,23 +363,14 @@ pub const SysInfo = struct {
                 wakeups_total = process_mod.parseSchedCounter(sched_contents, "nr_wakeups") orelse 0;
             } else |_| {}
 
-            if (new_proc_count < MAX_PROCS) {
-                new_procs[new_proc_count] = .{
-                    .pid = pid,
-                    .cpu_total = proc_info.cpu_total,
-                    .disk_read = disk_read,
-                    .disk_write = disk_write,
-                    .wakeups = wakeups_total,
-                    .context_switches = context_switches_total,
-                };
-                new_proc_count += 1;
-            }
-
             var cpu_percent: f32 = 0;
             var disk_read_ps: u64 = 0;
             var disk_write_ps: u64 = 0;
             var wakeups_ps: u64 = 0;
             var context_switches_ps: u64 = 0;
+
+            var launch_cmd_buf: [256]u8 = std.mem.zeroes([256]u8);
+            var launch_cmd_len: u16 = 0;
 
             const prev_entry = self.findPrevProcEntry(pid);
 
@@ -400,6 +391,30 @@ pub const SysInfo = struct {
                     wakeups_ps = (d_wakeups *| 1000) / @as(u64, @intCast(elapsed_ms));
                     context_switches_ps = (d_csw *| 1000) / @as(u64, @intCast(elapsed_ms));
                 }
+                @memcpy(launch_cmd_buf[0..prev.launch_cmd_len], prev.launch_cmd_buf[0..prev.launch_cmd_len]);
+                launch_cmd_len = prev.launch_cmd_len;
+            }
+
+            if (launch_cmd_len == 0) {
+                var cmdline_buf: [4096]u8 = undefined;
+                if (io_util_mod.readDirFile(self.io, &pid_dir, "cmdline", &cmdline_buf)) |cmdline_contents| {
+                    const launch_cmd = process_mod.compactLinuxCmdline(cmdline_contents, &launch_cmd_buf);
+                    launch_cmd_len = @intCast(launch_cmd.len);
+                } else |_| {}
+            }
+
+            if (new_proc_count < MAX_PROCS) {
+                new_procs[new_proc_count] = .{
+                    .pid = pid,
+                    .cpu_total = proc_info.cpu_total,
+                    .disk_read = disk_read,
+                    .disk_write = disk_write,
+                    .wakeups = wakeups_total,
+                    .context_switches = context_switches_total,
+                    .launch_cmd_buf = launch_cmd_buf,
+                    .launch_cmd_len = launch_cmd_len,
+                };
+                new_proc_count += 1;
             }
 
             const mem_percent: f32 = if (self.total_mem > 0)
@@ -424,12 +439,8 @@ pub const SysInfo = struct {
                 .state = proc_info.state,
             };
             @memcpy(out_buf[proc_count].name_buf[0..name.len], name);
-
-            var cmdline_buf: [4096]u8 = undefined;
-            if (io_util_mod.readDirFile(self.io, &pid_dir, "cmdline", &cmdline_buf)) |cmdline_contents| {
-                const launch_cmd = process_mod.compactLinuxCmdline(cmdline_contents, &out_buf[proc_count].launch_cmd_buf);
-                out_buf[proc_count].launch_cmd_len = @intCast(launch_cmd.len);
-            } else |_| {}
+            @memcpy(out_buf[proc_count].launch_cmd_buf[0..launch_cmd_len], launch_cmd_buf[0..launch_cmd_len]);
+            out_buf[proc_count].launch_cmd_len = launch_cmd_len;
 
             proc_count += 1;
         }

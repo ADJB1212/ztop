@@ -249,6 +249,8 @@ pub const ProcCpuEntry = struct {
     disk_write: u64 = 0,
     wakeups: u64 = 0,
     context_switches: u64 = 0,
+    launch_cmd_buf: [256]u8 = std.mem.zeroes([256]u8),
+    launch_cmd_len: u16 = 0,
 };
 
 pub const ThreadCpuEntry = struct {
