@@ -110,9 +110,6 @@ pub fn main(main_init: std.process.Init) !void {
     var cached_threads: []ztop.sysinfo.common.ThreadStats = &.{};
     defer if (cached_threads.len > 0) allocator.free(cached_threads);
 
-    var why_busy_view: bool = false;
-    var why_busy_spike_kind: render.SpikeKind = .auto;
-
     var causality_view: bool = false;
     var causality_pid: u32 = 0;
     var causality_name_buf: [64]u8 = std.mem.zeroes([64]u8);
@@ -128,8 +125,6 @@ pub fn main(main_init: std.process.Init) !void {
     }
 
     defer if (causality_connections.len > 0) allocator.free(causality_connections);
-
-    var pressure_hints_view: bool = false;
 
     var cached_connections: []ztop.sysinfo.common.NetConnection = &.{};
     defer if (cached_connections.len > 0) allocator.free(cached_connections);
@@ -525,6 +520,27 @@ pub fn main(main_init: std.process.Init) !void {
                         wifi_ssid_line,
                         wifi_generation_line,
                     );
+                } else if (current_tab == 5 and cpu_box_height >= 5) {
+                    const ph_data = render.buildPressureHints(
+                        display_mem,
+                        memoryUsagePercent(display_mem),
+                        display_cpu.usage_percent,
+                        display_disk.read_bytes_ps + display_disk.write_bytes_ps,
+                        display_net.rx_bytes_ps + display_net.tx_bytes_ps,
+                        display_thermal,
+                        cached_procs,
+                        cached_connections,
+                        timeline,
+                    );
+                    try render.renderPressureHintsView(
+                        &app_tui,
+                        theme,
+                        cpu_box_x,
+                        cpu_box_y,
+                        size.width,
+                        cpu_box_height,
+                        ph_data,
+                    );
                 }
 
                 // Bottom Box: Processes, Threads, or Connections
@@ -542,7 +558,7 @@ pub fn main(main_init: std.process.Init) !void {
                         &scroll_offset,
                         &mouse_regions,
                     );
-                } else if (why_busy_view and procs_box_height >= 5) {
+                } else if (current_tab == 5 and procs_box_height >= 5) {
                     // Current procs: use scrubbed snapshot procs if scrubbing
                     const wb_procs: []const ztop.sysinfo.ProcStats = if (is_scrubbing and scrub_proc_count > 0)
                         scrub_proc_buf[0..scrub_proc_count]
@@ -581,7 +597,7 @@ pub fn main(main_init: std.process.Init) !void {
                         procs_box_width,
                         procs_box_height,
                         .{
-                            .kind = why_busy_spike_kind,
+                            .kind = .auto,
                             .cpu_pct = display_cpu.usage_percent,
                             .mem_pct = memoryUsagePercent(display_mem),
                             .disk_rate = display_disk.read_bytes_ps + display_disk.write_bytes_ps,
@@ -622,27 +638,6 @@ pub fn main(main_init: std.process.Init) !void {
                             scroll_offset,
                         );
                     }
-                } else if (pressure_hints_view and procs_box_height >= 5) {
-                    const ph_data = render.buildPressureHints(
-                        display_mem,
-                        memoryUsagePercent(display_mem),
-                        display_cpu.usage_percent,
-                        display_disk.read_bytes_ps + display_disk.write_bytes_ps,
-                        display_net.rx_bytes_ps + display_net.tx_bytes_ps,
-                        display_thermal,
-                        cached_procs,
-                        cached_connections,
-                        timeline,
-                    );
-                    try render.renderPressureHintsView(
-                        &app_tui,
-                        theme,
-                        procs_box_x,
-                        procs_box_y,
-                        procs_box_width,
-                        procs_box_height,
-                        ph_data,
-                    );
                 } else if (procs_box_height >= 3) {
                     if (thread_view) {
                         try main_view.renderThreadTable(
@@ -935,8 +930,6 @@ pub fn main(main_init: std.process.Init) !void {
                 .thread_view_pid = &thread_view_pid,
                 .thread_view_name_buf = &thread_view_name_buf,
                 .thread_view_name_len = &thread_view_name_len,
-                .why_busy_view = &why_busy_view,
-                .why_busy_spike_kind = &why_busy_spike_kind,
                 .causality_view = &causality_view,
                 .causality_pid = &causality_pid,
                 .causality_name_buf = &causality_name_buf,
@@ -946,7 +939,6 @@ pub fn main(main_init: std.process.Init) !void {
                 .lifeline_name_buf = &lifeline_name_buf,
                 .lifeline_name_len = &lifeline_name_len,
                 .active_tracer = &active_tracer,
-                .pressure_hints_view = &pressure_hints_view,
                 .is_following = &is_following,
                 .follow_pid = &follow_pid,
                 .status_buf = &status_buf,

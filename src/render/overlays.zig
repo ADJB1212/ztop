@@ -11,7 +11,7 @@ const HelpItem = struct {
 };
 
 const help_items = [_]HelpItem{
-    .{ .key = "1, 2, 3, 4", .description = "Switch tabs" },
+    .{ .key = "1–5", .description = "Switch tabs (5 = Diagnostics)" },
     .{ .key = "j/k, Up/Down", .description = "Navigate processes" },
     .{ .key = "c,m,p,n,u", .description = "Sort by CPU/Mem/PID/Name/Wakeups" },
     .{ .key = "v", .description = "Toggle tree view" },
@@ -21,8 +21,7 @@ const help_items = [_]HelpItem{
     .{ .key = "t", .description = "Send SIGTERM to selected" },
     .{ .key = "K", .description = "Send SIGKILL to selected" },
     .{ .key = "g", .description = "Resource causality graph" },
-    .{ .key = "w", .description = "Why is this busy? (ranked explanation)" },
-    .{ .key = "P", .description = "Pressure root-cause hints (swap/log/fd)" },
+    .{ .key = "5", .description = "Diagnostics tab (why busy + pressure hints)" },
     .{ .key = "u", .description = "Wakeup attribution sort" },
     .{ .key = "l", .description = "Follow selected process" },
     .{ .key = "T", .description = "Timeline scrub (←→ step, [] jump)" },

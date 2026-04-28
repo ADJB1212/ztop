@@ -105,8 +105,6 @@ pub const Context = struct {
     thread_view_pid: *u32,
     thread_view_name_buf: *[64]u8,
     thread_view_name_len: *u8,
-    why_busy_view: *bool,
-    why_busy_spike_kind: *render.SpikeKind,
     causality_view: *bool,
     causality_pid: *u32,
     causality_name_buf: *[64]u8,
@@ -116,7 +114,6 @@ pub const Context = struct {
     lifeline_name_buf: *[64]u8,
     lifeline_name_len: *u8,
     active_tracer: *?*process_tracer.ProcessTracer,
-    pressure_hints_view: *bool,
     is_following: *bool,
     follow_pid: *u32,
     status_buf: *[160]u8,
@@ -356,6 +353,10 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
                 try setCurrentTab(ctx.allocator, ctx.sys_info, ctx.cached_connections, ctx.current_tab, ctx.selected_idx, ctx.scroll_offset, 4);
                 return true;
             },
+            '5' => {
+                try setCurrentTab(ctx.allocator, ctx.sys_info, ctx.cached_connections, ctx.current_tab, ctx.selected_idx, ctx.scroll_offset, 5);
+                return true;
+            },
             'q' => {
                 ctx.quit_flag.* = true;
                 return true;
@@ -522,26 +523,8 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
                 }
                 return true;
             },
-            'w' => {
-                if (ctx.why_busy_view.*) {
-                    ctx.why_busy_view.* = false;
-                    ctx.status_len.* = 0;
-                } else if (!ctx.thread_view.* and !ctx.causality_view.*) {
-                    enterWhyBusyView(ctx);
-                }
-                return true;
-            },
-            'P' => {
-                ctx.pressure_hints_view.* = !ctx.pressure_hints_view.*;
-                if (ctx.pressure_hints_view.*) {
-                    render.setStatus(ctx.status_buf, ctx.status_len, "Pressure hints — P or Esc to close", .{});
-                } else {
-                    ctx.status_len.* = 0;
-                }
-                return true;
-            },
             'g' => {
-                if (!ctx.thread_view.* and !ctx.causality_view.* and !ctx.is_scrubbing.* and !ctx.why_busy_view.* and ctx.current_tab.* != 4) {
+                if (!ctx.thread_view.* and !ctx.causality_view.* and !ctx.is_scrubbing.* and ctx.current_tab.* != 4 and ctx.current_tab.* != 5) {
                     try enterCausalityView(ctx);
                 }
                 return true;
@@ -639,53 +622,6 @@ fn executeCommand(ctx: *Context) void {
     }
 }
 
-fn enterWhyBusyView(ctx: *Context) void {
-    // If scrubbing, find the nearest spike event to the current scrub position
-    // and use its kind. Otherwise default to .auto (detect from live metrics).
-    const kind: render.SpikeKind = blk: {
-        if (ctx.is_scrubbing.*) {
-            const snap = ctx.timeline.getSnapshot(ctx.scrub_offset.*) orelse break :blk .auto;
-            const ts = snap.timestamp_ms;
-
-            var best_dist: u64 = 30_000; // 30-second search window
-            var best_kind: render.SpikeKind = .auto;
-
-            for (0..ctx.timeline.ev_count) |i| {
-                const ev = ctx.timeline.events[(ctx.timeline.ev_start + i) % timeline_mod.MAX_EVENTS];
-                const ek: render.SpikeKind = switch (ev.kind) {
-                    .cpu_spike => .cpu,
-                    .mem_pressure => .mem,
-                    .disk_spike => .disk,
-                    .net_spike => .net,
-                    .thermal_high => .thermal,
-                    else => continue,
-                };
-                const dist: u64 = @abs(ev.timestamp_ms - ts);
-                if (dist < best_dist) {
-                    best_dist = dist;
-                    best_kind = ek;
-                }
-            }
-            break :blk best_kind;
-        }
-        break :blk .auto;
-    };
-
-    ctx.why_busy_spike_kind.* = kind;
-    ctx.why_busy_view.* = true;
-
-    const kind_label: []const u8 = switch (kind) {
-        .auto => "system resources",
-        .cpu => "CPU",
-        .mem => "memory",
-        .disk => "disk I/O",
-        .net => "network",
-        .thermal => "thermal",
-        .wakeup => "wakeup churn",
-    };
-    render.setStatus(ctx.status_buf, ctx.status_len, "Why is {s} busy? — w or Esc to close", .{kind_label});
-}
-
 fn enterLifelineView(ctx: *Context) !void {
     if (ctx.current_tab.* == 4 or ctx.causality_view.* or ctx.thread_view.* or ctx.lifeline_view.* or ctx.filtered_count.* == 0 or ctx.selected_idx.* >= ctx.filtered_count.*) {
         return;
@@ -771,13 +707,6 @@ fn enterThreadView(ctx: *Context) !void {
 fn clearCurrentView(ctx: *Context) void {
     if (ctx.diff_anchor.* != null) {
         ctx.diff_anchor.* = null;
-    } else if (ctx.why_busy_view.*) {
-        // Close why-busy overlay before exiting scrub mode
-        ctx.why_busy_view.* = false;
-        ctx.status_len.* = 0;
-    } else if (ctx.pressure_hints_view.*) {
-        ctx.pressure_hints_view.* = false;
-        ctx.status_len.* = 0;
     } else if (ctx.is_scrubbing.*) {
         ctx.is_scrubbing.* = false;
         ctx.scrub_offset.* = 0;

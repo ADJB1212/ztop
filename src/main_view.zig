@@ -83,12 +83,14 @@ pub fn renderHeader(
     const tab2_label = if (app_tui.hasNerdFonts()) "[2] 󰕒 I/O" else "[2] I/O";
     const tab3_label = if (app_tui.hasNerdFonts()) "[3]  Sensors" else "[3] Sensors";
     const tab4_label = if (app_tui.hasNerdFonts()) "[4] 󰈀 Network" else "[4] Network";
+    const tab5_label = if (app_tui.hasNerdFonts()) "[5] \u{f0b1} Diagnostics" else "[5] Diagnostics";
     const tab1_w = displayWidth(tab1_label);
     const tab2_w = displayWidth(tab2_label);
     const tab3_w = displayWidth(tab3_label);
     const tab4_w = displayWidth(tab4_label);
+    const tab5_w = displayWidth(tab5_label);
     const gap: u16 = 2;
-    const tabs_width = tab1_w + tab2_w + tab3_w + tab4_w + @as(usize, gap) * 3;
+    const tabs_width = tab1_w + tab2_w + tab3_w + tab4_w + tab5_w + @as(usize, gap) * 4;
 
     if (width <= tabs_width + 30) return;
 
@@ -96,11 +98,13 @@ pub fn renderHeader(
     const tab2_x = tabs_x + @as(u16, @intCast(tab1_w)) + gap;
     const tab3_x = tab2_x + @as(u16, @intCast(tab2_w)) + gap;
     const tab4_x = tab3_x + @as(u16, @intCast(tab3_w)) + gap;
+    const tab5_x = tab4_x + @as(u16, @intCast(tab4_w)) + gap;
 
     mouse_regions.addTab(1, .{ .x = tabs_x, .y = 1, .width = @as(u16, @intCast(tab1_w)), .height = 1 });
     mouse_regions.addTab(2, .{ .x = tab2_x, .y = 1, .width = @as(u16, @intCast(tab2_w)), .height = 1 });
     mouse_regions.addTab(3, .{ .x = tab3_x, .y = 1, .width = @as(u16, @intCast(tab3_w)), .height = 1 });
     mouse_regions.addTab(4, .{ .x = tab4_x, .y = 1, .width = @as(u16, @intCast(tab4_w)), .height = 1 });
+    mouse_regions.addTab(5, .{ .x = tab5_x, .y = 1, .width = @as(u16, @intCast(tab5_w)), .height = 1 });
 
     try app_tui.moveCursor(tabs_x, 1);
     if (current_tab == 1) {
@@ -128,6 +132,13 @@ pub fn renderHeader(
         try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab4_label});
     } else {
         try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab4_label});
+    }
+
+    try app_tui.bufWrite("  ");
+    if (current_tab == 5) {
+        try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab5_label});
+    } else {
+        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab5_label});
     }
 }
 
