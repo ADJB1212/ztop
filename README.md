@@ -14,7 +14,7 @@ Built for people who want a focused dashboard in the terminal: quick enough to k
 
 ## Features
 
-- Four focused views: `Main`, `I/O`, `Sensors`, and `Network`
+- Five focused views: `Main`, `I/O`, `Sensors`, `Network`, and `Diagnostics`
 - Live process table with sorting, filtering, tree view, and per-thread drill-down
 - CPU topology map grouping logical threads by physical core, cache domain, and heterogeneous cluster
 - GPU monitoring on supported hardware:
@@ -29,6 +29,7 @@ Built for people who want a focused dashboard in the terminal: quick enough to k
 - **Resource causality graph** (`g`) — per-process view linking a selected process to its child tree, open network connections, and a resource summary
 - **Diagnostics tab** (`5`) — pressure root-cause hints (swap storms, runaway log writers, reconnect loops, file descriptor pressure, memory leak suspects, CPU runaways, thermal throttle risk, cache starvation) alongside the why-busy ranked spike analysis
 - **Process lifeline view** (`L`) — high-fidelity timeline for a selected process showing state transitions, CPU bursts, memory growth, thread count changes, and socket opens/closes over time
+- **Build/test pipeline lens** (`P`) — groups compiler, linker, and test-runner processes under their root build orchestrator with aggregated and per-process CPU, memory, and disk I/O metrics
 - Built-in process actions: `SIGTERM`, `SIGKILL`, `:killall`, `:show zombie`, `:search`
 - Process follow mode (`l`): lock the view to a selected process as it moves through the list
 - Responsive layout for narrow terminals
@@ -80,32 +81,32 @@ ztop [--version]
 
 ### Key Bindings
 
-| Key                     | Action                                                                                 |
-| ----------------------- | -------------------------------------------------------------------------------------- |
-| `1`, `2`, `3`, `4`, `5` | Switch to `Main`, `I/O`, `Sensors`, `Network`, `Diagnostics`                           |
-| `j` / `k` or arrow keys | Move through the process list                                                          |
-| `Enter`                 | Drill into threads of the selected process                                             |
-| `Esc`                   | Return from any view; clear follow, filter, status, or zombie view                     |
-| `c`, `m`, `p`, `n`, `u` | Sort by CPU, memory, PID, name, or wakeups/churn                                       |
-| `C`                     | Toggle process-table columns for the current view                                      |
-| `v`                     | Toggle tree view (process hierarchy)                                                   |
-| `/`                     | Filter processes by name or PID                                                        |
-| `:`                     | Open command mode                                                                      |
-| `l`                     | Follow selected process (lock view to it as it moves)                                  |
-| `L`                     | Process lifeline view for selected process (timeline of events)                        |
-| `g`                     | Resource causality graph for selected process (children + connections)                 |
-| `5`                     | Diagnostics tab — why-busy analysis + pressure root-cause hints                        |
-| `T`                     | Toggle timeline scrubbing mode (requires enough collected history)                     |
-| `←` / `→`               | While scrubbing: move older/newer by one snapshot                                      |
-| `[` / `]`               | While scrubbing: jump older/newer by 10 snapshots                                      |
-| `b`                     | While scrubbing: drop a bookmark at the current position                               |
-| `B`                     | While scrubbing: remove the nearest bookmark                                           |
-| `{` / `}`               | While scrubbing: jump to previous/next bookmark                                        |
-| `d`                     | While scrubbing: toggle diff view (set anchor, then navigate to compare)               |
-| `t`                     | Send `SIGTERM` to the selected process                                                 |
-| `K`                     | Send `SIGKILL` to the selected process                                                 |
-| `?`                     | Open help overlay                                                                      |
-| `q`                     | Quit                                                                                   |
+| Key                     | Action                                                                   |
+| ----------------------- | ------------------------------------------------------------------------ |
+| `1`, `2`, `3`, `4`, `5` | Switch to `Main`, `I/O`, `Sensors`, `Network`, `Diagnostics`             |
+| `j` / `k` or arrow keys | Move through the process list                                            |
+| `Enter`                 | Drill into threads of the selected process                               |
+| `Esc`                   | Return from any view; clear follow, filter, status, or zombie view       |
+| `c`, `m`, `p`, `n`, `u` | Sort by CPU, memory, PID, name, or wakeups/churn                         |
+| `C`                     | Toggle process-table columns for the current view                        |
+| `v`                     | Toggle tree view (process hierarchy)                                     |
+| `/`                     | Filter processes by name or PID                                          |
+| `:`                     | Open command mode                                                        |
+| `l`                     | Follow selected process (lock view to it as it moves)                    |
+| `L`                     | Process lifeline view for selected process (timeline of events)          |
+| `P`                     | Build/test pipeline lens (groups build processes by orchestrator)        |
+| `g`                     | Resource causality graph for selected process (children + connections)   |
+| `T`                     | Toggle timeline scrubbing mode (requires enough collected history)       |
+| `←` / `→`               | While scrubbing: move older/newer by one snapshot                        |
+| `[` / `]`               | While scrubbing: jump older/newer by 10 snapshots                        |
+| `b`                     | While scrubbing: drop a bookmark at the current position                 |
+| `B`                     | While scrubbing: remove the nearest bookmark                             |
+| `{` / `}`               | While scrubbing: jump to previous/next bookmark                          |
+| `d`                     | While scrubbing: toggle diff view (set anchor, then navigate to compare) |
+| `t`                     | Send `SIGTERM` to the selected process                                   |
+| `K`                     | Send `SIGKILL` to the selected process                                   |
+| `?`                     | Open help overlay                                                        |
+| `q`                     | Quit                                                                     |
 
 While scrubbing is active, destructive process actions and view-mutating actions are disabled until you exit scrubbing.
 Press `Esc` or `T` to leave scrubbing and return to live view.
@@ -154,9 +155,9 @@ Press `L` with a process selected to open a high-fidelity timeline of its behavi
 - **Network Activity**: Lists socket opens and closes with protocol and address details.
 - **Graphs**: Live sparklines for the process's CPU and memory history.
 
-### Pressure Root-Cause Hints (`P`)
+### Pressure Root-Cause Hints (Diagnostics tab)
 
-Press `P` to surface automatically detected pathological patterns from current system state. Each hint includes a severity level (`!!` critical, `!` warning), a description, and the most likely culprit process where applicable.
+Open the Diagnostics tab (`5`) to surface automatically detected pathological patterns from current system state. The top box shows pressure hints; each includes a severity level (`!!` critical, `!` warning), a description, and the most likely culprit process where applicable.
 
 Patterns detected:
 
@@ -173,7 +174,16 @@ Patterns detected:
 | Thermal throttle risk | CPU temperature ≥ 85 °C                                                               |
 | Cache starvation      | Page cache < 5% of RAM while memory pressure > 80%                                    |
 
-Press `P` or `Esc` to close.
+### Build/Test Pipeline Lens (`P`)
+
+Press `P` (on tabs 1–3) to switch the process box into pipeline lens mode. `ztop` scans the live process list, identifies build orchestrators (`make`, `cargo`, `cmake`, `ninja`, `go`, `zig`, `npm`, `pytest`, and others), and groups their child processes underneath them.
+
+Each group shows:
+
+- **Root row** — orchestrator name and PID with aggregated CPU%, memory%, and disk I/O across all children
+- **Child rows** — individual compiler, linker, test runner, or helper processes with a stage badge (`[compile]`, `[link]`, `[test]`, `[package]`, `[build]`) and per-process metrics
+
+Navigate with `j`/`k` or arrow keys. Press `P` or `Esc` to return to the normal process list.
 
 ## Configuration
 
