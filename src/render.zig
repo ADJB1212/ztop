@@ -16,6 +16,7 @@ const causality = @import("render/causality.zig");
 const why_busy = @import("render/why_busy.zig");
 const pressure_hints = @import("render/pressure_hints.zig");
 const process_lifeline = @import("render/process_lifeline.zig");
+const pipeline_lens = @import("render/pipeline_lens.zig");
 const overlays = @import("render/overlays.zig");
 const footer = @import("render/footer.zig");
 
@@ -85,6 +86,9 @@ pub const renderPressureHintsView = pressure_hints.renderPressureHintsView;
 
 // Re-exports from process_lifeline.zig
 pub const renderLifelineView = process_lifeline.renderLifelineView;
+
+// Re-exports from pipeline_lens.zig
+pub const renderPipelineLensView = pipeline_lens.renderPipelineLensView;
 
 // Re-exports from overlays.zig
 pub const renderHelpOverlay = overlays.renderHelpOverlay;

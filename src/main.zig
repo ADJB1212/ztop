@@ -119,6 +119,8 @@ pub fn main(main_init: std.process.Init) !void {
     var lifeline_view: bool = false;
     var lifeline_name_buf: [64]u8 = std.mem.zeroes([64]u8);
     var lifeline_name_len: u8 = 0;
+    var pipeline_view: bool = false;
+    var pipeline_row_count: usize = 0;
     var active_tracer: ?*ztop.process_tracer.ProcessTracer = null;
     defer {
         if (active_tracer) |tracer| tracer.deinit();
@@ -652,6 +654,19 @@ pub fn main(main_init: std.process.Init) !void {
                             &scroll_offset,
                             &mouse_regions,
                         );
+                    } else if (pipeline_view and !is_scrubbing) {
+                        pipeline_row_count = try render.renderPipelineLensView(
+                            &app_tui,
+                            theme,
+                            procs_box_x,
+                            procs_box_y,
+                            procs_box_width,
+                            procs_box_height,
+                            allocator,
+                            cached_procs,
+                            selected_idx,
+                            &scroll_offset,
+                        );
                     } else {
                         var title_buf: [96]u8 = undefined;
                         const sort_name = switch (sort_by) {
@@ -957,6 +972,8 @@ pub fn main(main_init: std.process.Init) !void {
                 .diff_anchor = &diff_anchor,
                 .refresh_interval_ms = &refresh_interval_ms,
                 .top_n = &top_n,
+                .pipeline_view = &pipeline_view,
+                .pipeline_row_count = &pipeline_row_count,
             };
             force_redraw = try input_handler.handleAvailableInput(&input_ctx);
         }

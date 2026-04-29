@@ -28,6 +28,7 @@ const help_items = [_]HelpItem{
     .{ .key = "b/B, {}/{}", .description = "Bookmark add/del, jump prev/next" },
     .{ .key = "d", .description = "Diff view (compare two moments)" },
     .{ .key = "L", .description = "View process lifeline" },
+    .{ .key = "P", .description = "Build/test pipeline lens" },
     .{ .key = "q", .description = "Quit" },
     .{ .key = ":", .description = "Command mode (pid/signal/renice/interval/top...)" },
 };

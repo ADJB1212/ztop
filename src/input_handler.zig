@@ -131,6 +131,8 @@ pub const Context = struct {
     diff_anchor: *?usize,
     refresh_interval_ms: *?u32,
     top_n: *?usize,
+    pipeline_view: *bool,
+    pipeline_row_count: *usize,
 };
 
 pub fn handleAvailableInput(ctx: *Context) !bool {
@@ -266,6 +268,8 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
         ctx.cached_connections.*.len
     else if (ctx.thread_view.*)
         ctx.cached_threads.*.len
+    else if (ctx.pipeline_view.*)
+        ctx.pipeline_row_count.*
     else
         ctx.filtered_count.*;
 
@@ -533,7 +537,7 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
             },
 
             'l' => {
-                if (!ctx.thread_view.* and !ctx.causality_view.* and !ctx.lifeline_view.* and !ctx.is_scrubbing.* and ctx.filtered_count.* > 0) {
+                if (!ctx.thread_view.* and !ctx.causality_view.* and !ctx.lifeline_view.* and !ctx.pipeline_view.* and !ctx.is_scrubbing.* and ctx.filtered_count.* > 0) {
                     if (ctx.is_following.*) {
                         ctx.is_following.* = false;
                         ctx.follow_pid.* = 0;
@@ -545,8 +549,16 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
                 return true;
             },
             'L' => {
-                if (!ctx.thread_view.* and !ctx.causality_view.* and !ctx.lifeline_view.* and !ctx.is_scrubbing.* and ctx.current_tab.* != 4) {
+                if (!ctx.thread_view.* and !ctx.causality_view.* and !ctx.lifeline_view.* and !ctx.pipeline_view.* and !ctx.is_scrubbing.* and ctx.current_tab.* != 4) {
                     try enterLifelineView(ctx);
+                }
+                return true;
+            },
+            'P' => {
+                if (!ctx.thread_view.* and !ctx.causality_view.* and !ctx.lifeline_view.* and !ctx.is_scrubbing.* and ctx.current_tab.* != 4 and ctx.current_tab.* != 5) {
+                    ctx.pipeline_view.* = !ctx.pipeline_view.*;
+                    ctx.selected_idx.* = 0;
+                    ctx.scroll_offset.* = 0;
                 }
                 return true;
             },
@@ -779,7 +791,7 @@ fn sendSignalByName(pid: u32, sig_name: []const u8) void {
 }
 
 fn enterLifelineView(ctx: *Context) !void {
-    if (ctx.current_tab.* == 4 or ctx.causality_view.* or ctx.thread_view.* or ctx.lifeline_view.* or ctx.filtered_count.* == 0 or ctx.selected_idx.* >= ctx.filtered_count.*) {
+    if (ctx.current_tab.* == 4 or ctx.causality_view.* or ctx.thread_view.* or ctx.lifeline_view.* or ctx.pipeline_view.* or ctx.filtered_count.* == 0 or ctx.selected_idx.* >= ctx.filtered_count.*) {
         return;
     }
 
@@ -800,7 +812,7 @@ fn enterLifelineView(ctx: *Context) !void {
 }
 
 fn enterCausalityView(ctx: *Context) !void {
-    if (ctx.current_tab.* == 4 or ctx.causality_view.* or ctx.thread_view.* or ctx.filtered_count.* == 0 or ctx.selected_idx.* >= ctx.filtered_count.*) {
+    if (ctx.current_tab.* == 4 or ctx.causality_view.* or ctx.thread_view.* or ctx.pipeline_view.* or ctx.filtered_count.* == 0 or ctx.selected_idx.* >= ctx.filtered_count.*) {
         return;
     }
 
@@ -842,7 +854,7 @@ pub fn fetchProcConnections(allocator: std.mem.Allocator, sys_info: *SysInfo, pi
 }
 
 fn enterThreadView(ctx: *Context) !void {
-    if (ctx.current_tab.* == 4 or ctx.thread_view.* or ctx.causality_view.* or ctx.filtered_count.* == 0 or ctx.selected_idx.* >= ctx.filtered_count.*) {
+    if (ctx.current_tab.* == 4 or ctx.thread_view.* or ctx.causality_view.* or ctx.pipeline_view.* or ctx.filtered_count.* == 0 or ctx.selected_idx.* >= ctx.filtered_count.*) {
         return;
     }
 
@@ -888,6 +900,10 @@ fn clearCurrentView(ctx: *Context) void {
             tracer.deinit();
             ctx.active_tracer.* = null;
         }
+        ctx.selected_idx.* = 0;
+        ctx.scroll_offset.* = 0;
+    } else if (ctx.pipeline_view.*) {
+        ctx.pipeline_view.* = false;
         ctx.selected_idx.* = 0;
         ctx.scroll_offset.* = 0;
     } else if (ctx.is_following.*) {

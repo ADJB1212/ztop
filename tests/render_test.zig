@@ -112,8 +112,8 @@ test "renderDualRateBox shows disk usage as static row with spacer before live r
     );
 
     const output = app_tui.frame_buf[0..app_tui.frame_len];
-    try expectCursorBeforeText(output, "\x1b[2;3H", " USED ");
-    try expectCursorBeforeText(output, "\x1b[4;3H", " READ ");
-    try expectCursorBeforeText(output, "\x1b[5;3H", " WRITE ");
+    try expectCursorBeforeText(output, "\x1b[2;3H", "USED ");
+    try expectCursorBeforeText(output, "\x1b[4;3H", "READ ");
+    try expectCursorBeforeText(output, "\x1b[5;3H", "WRITE ");
     try std.testing.expect(std.mem.indexOf(u8, output, "U ") == null);
 }
