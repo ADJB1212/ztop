@@ -46,11 +46,8 @@ fn renderUsageMetricRow(
 
     try app_tui.moveCursor(x, y);
 
-    var used: usize = try util.writeChip(
-        app_tui,
-        .{ .fg = theme.selection_fg, .bg = series.color, .bold = true },
-        series.label,
-    );
+    try app_tui.printStyled(.{ .fg = series.color, .bold = true }, "{s}", .{series.label});
+    var used: usize = series.label.len;
     if (used >= width) return;
 
     try app_tui.bufWrite(" ");
@@ -99,11 +96,8 @@ fn renderRateMetricRow(
 
     try app_tui.moveCursor(x, y);
 
-    var used: usize = try util.writeChip(
-        app_tui,
-        .{ .fg = theme.selection_fg, .bg = series.color, .bold = true },
-        series.label,
-    );
+    try app_tui.printStyled(.{ .fg = series.color, .bold = true }, "{s}", .{series.label});
+    var used: usize = series.label.len;
     if (used >= width) return;
 
     try app_tui.bufWrite(" ");

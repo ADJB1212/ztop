@@ -158,26 +158,6 @@ fn efficiencyAccentColor(theme: config.Theme, class: CpuEfficiencyClass) Tui.Col
     };
 }
 
-fn collectLogicalIndicesForPhysical(topology: CpuTopology, physical_id: u16, out: *[sysinfo.common.MAX_CORES]usize) []usize {
-    var count: usize = 0;
-    for (topology.logical_cores, 0..) |logical_core, idx| {
-        if (logical_core.physical_id != physical_id or count >= out.len) continue;
-        out[count] = idx;
-        count += 1;
-    }
-
-    std.mem.sort(usize, out[0..count], topology, struct {
-        fn lessThan(topology_ctx: CpuTopology, a_idx: usize, b_idx: usize) bool {
-            const a = topology_ctx.logical_cores[a_idx];
-            const b = topology_ctx.logical_cores[b_idx];
-            if (a.thread_index != b.thread_index) return a.thread_index < b.thread_index;
-            return a.logical_id < b.logical_id;
-        }
-    }.lessThan);
-
-    return out[0..count];
-}
-
 fn renderTopologyHeaderLine(app_tui: *Tui, theme: config.Theme, column_width: u16, header_row: TopologyPhysicalRow, topology: CpuTopology) !void {
     var header_buf: [64]u8 = undefined;
     const label = buildTopologyHeaderText(&header_buf, header_row, topology);
@@ -213,23 +193,16 @@ fn renderTopologyPhysicalRowLine(
     cpu: sysinfo.CpuStats,
     topology: CpuTopology,
 ) !void {
-    var logical_indices: [sysinfo.common.MAX_CORES]usize = undefined;
-    const indices = collectLogicalIndicesForPhysical(topology, physical_row.physical_id, &logical_indices);
     if (column_width == 0) return;
 
     const core_usage = averageCoreUsage(cpu, topology, physical_row.physical_id);
     const core_heat = util.usageColor(theme, core_usage);
     var written: usize = 0;
 
-    written += try util.writeChip(
-        app_tui,
-        .{
-            .fg = theme.selection_fg,
-            .bg = efficiencyAccentColor(theme, physical_row.efficiency_class),
-            .bold = true,
-        },
-        efficiencyLabel(physical_row.efficiency_class),
-    );
+    const eff_color = efficiencyAccentColor(theme, physical_row.efficiency_class);
+    const eff_label = efficiencyLabel(physical_row.efficiency_class);
+    try app_tui.printStyled(.{ .fg = eff_color, .bold = true }, "{s}", .{eff_label});
+    written += eff_label.len;
     if (written >= column_width) return;
 
     try app_tui.bufWrite(" ");
@@ -238,7 +211,7 @@ fn renderTopologyPhysicalRowLine(
 
     var prefix_buf: [8]u8 = undefined;
     const prefix = std.fmt.bufPrint(&prefix_buf, "C{d:0>2}", .{physical_row.physical_id}) catch "C??";
-    try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "{s}", .{prefix});
+    try app_tui.printStyled(.{ .fg = theme.text }, "{s}", .{prefix});
     written += prefix.len;
     if (written >= column_width) return;
 
@@ -246,53 +219,25 @@ fn renderTopologyPhysicalRowLine(
     written += 1;
     if (written >= column_width) return;
 
-    const min_bar_width: usize = 6;
-    var hidden_threads: usize = 0;
-    var visible_threads: usize = indices.len;
+    const suffix_width: usize = 5; // " 100%"
+    const min_bar_width: usize = 4;
+    const avail = @as(usize, @intCast(column_width)) -| written;
 
-    while (true) {
-        var tail_width: usize = 5; // " 100%"
-        tail_width += visible_threads * 5; // " 00 " per thread
-        if (hidden_threads > 0) {
-            tail_width += 2 + std.fmt.count("{d}", .{hidden_threads});
-        }
-
-        const available_for_bar = @as(usize, @intCast(column_width)) -| written -| tail_width;
-        if (available_for_bar >= min_bar_width or visible_threads == 0) break;
-        visible_threads -= 1;
-        hidden_threads += 1;
-    }
-
-    const bar_width: u16 = @intCast(@as(usize, @intCast(column_width)) -| written -| 5 -| (visible_threads * 5) -| if (hidden_threads > 0) 2 + std.fmt.count("{d}", .{hidden_threads}) else 0);
-    try util.renderMeter(
-        app_tui,
-        bar_width,
-        core_usage,
-        .{ .fg = core_heat, .bold = core_usage >= 70 },
-        .{ .fg = theme.muted, .dim = true },
-    );
-    written += bar_width;
-    if (written >= column_width) return;
-
-    const usage_int: u16 = @intFromFloat(@round(@max(core_usage, 0.0)));
-    try app_tui.printStyled(.{ .fg = core_heat, .bold = core_usage >= 70 }, " {d:>3}%", .{usage_int});
-    written += 5;
-
-    for (indices[0..visible_threads]) |logical_idx| {
-        const logical_core = topology.logical_cores[logical_idx];
-        const usage = logicalCoreUsage(cpu, logical_core.logical_id);
-        const heat = util.usageColor(theme, usage);
-        try app_tui.printStyled(
-            .{ .fg = theme.selection_fg, .bg = heat, .bold = usage >= 70 },
-            " {d:0>2} ",
-            .{logical_core.logical_id},
+    if (avail > suffix_width + min_bar_width) {
+        const bar_width: u16 = @intCast(avail - suffix_width);
+        try util.renderMeter(
+            app_tui,
+            bar_width,
+            core_usage,
+            .{ .fg = core_heat, .bold = core_usage >= 70 },
+            .{ .fg = theme.muted, .dim = true },
         );
-        written += 5;
-        if (written >= column_width) return;
+        written += bar_width;
     }
 
-    if (hidden_threads > 0 and written < column_width) {
-        try app_tui.printStyled(.{ .fg = theme.muted }, " +{d}", .{hidden_threads});
+    if (written + suffix_width <= @as(usize, @intCast(column_width))) {
+        const usage_int: u16 = @intFromFloat(@round(@max(core_usage, 0.0)));
+        try app_tui.printStyled(.{ .fg = core_heat, .bold = core_usage >= 70 }, " {d:>3}%", .{usage_int});
     }
 }
 
@@ -410,7 +355,8 @@ pub fn renderCpuTopologyBox(
     const body_height: usize = topology_height;
     const usable_width: usize = content_width;
     const columns = @max(std.math.divCeil(usize, line_count, body_height) catch 1, 1);
-    const column_width = if (columns > 0) usable_width / columns else usable_width;
+    const column_gap: usize = if (columns > 1) 2 else 0;
+    const column_width = if (columns > 0) (usable_width -| column_gap * (columns - 1)) / columns else usable_width;
     if (column_width == 0) {
         try renderPerCoreUsageArea(app_tui, theme, content_x, base_body_y, content_width, topology_height, cpu);
         if (graph_height > 0) {
@@ -425,13 +371,8 @@ pub fn renderCpuTopologyBox(
         const header = buildTopologyHeaderText(&header_buf, row, topology);
         max_row_width = @max(max_row_width, header.len + 4);
 
-        var threads: usize = 0;
-        for (topology.logical_cores) |logical_core| {
-            if (logical_core.physical_id == row.physical_id) threads += 1;
-        }
-        // Layout estimate for the core-card rows:
-        // " X  C00 " + meter + " 100%" + thread heat tiles.
-        const row_width = 14 + threads * 5;
+        // Layout: "P C00 " (6) + min bar (4) + " 100%" (5) = 15
+        const row_width: usize = 15;
         max_row_width = @max(max_row_width, row_width);
     }
 
@@ -441,7 +382,7 @@ pub fn renderCpuTopologyBox(
         for (lines[0..line_count], 0..) |line, idx| {
             const column = idx / body_height;
             const row = idx % body_height;
-            const x = content_x + @as(u16, @intCast(column * column_width));
+            const x = content_x + @as(u16, @intCast(column * (column_width + column_gap)));
             const y = base_body_y + @as(u16, @intCast(row));
             try app_tui.moveCursor(x, y);
 
