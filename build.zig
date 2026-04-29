@@ -77,6 +77,9 @@ pub fn build(b: *std.Build) void {
         tests.root_module.linkFramework("CoreFoundation", .{});
         tests.root_module.linkFramework("Foundation", .{});
         tests.root_module.linkFramework("CoreWLAN", .{});
+    } else {
+        exe.root_module.link_libc = true;
+        tests.root_module.link_libc = true;
     }
 
     b.installArtifact(exe);
