@@ -122,6 +122,11 @@ Press `:` to open command mode. Available commands:
 :show zombie          Show zombie processes and jump to their parent
 :killall <name>       Send SIGTERM to all processes matching <name>
 :search <term>        Filter the process list by name or PID
+:pid <n>              Jump to and select a process by PID
+:signal <SIG> <name>  Send a signal to all processes matching <name> (STOP/CONT/HUP/INT/USR1/USR2/QUIT)
+:renice <value> <name> Set nice value (-20 to 19) for all processes matching <name>
+:interval <ms>        Override the refresh interval (e.g. :interval 250); use :interval reset to restore default
+:top <n>              Limit the process list to the top N entries by current sort; use :top off to clear
 :quit                 Quit ztop
 ```
 

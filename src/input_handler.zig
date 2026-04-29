@@ -129,6 +129,8 @@ pub const Context = struct {
     scrub_offset: *usize,
     timeline: *timeline_mod.Timeline,
     diff_anchor: *?usize,
+    refresh_interval_ms: *?u32,
+    top_n: *?usize,
 };
 
 pub fn handleAvailableInput(ctx: *Context) !bool {
@@ -617,8 +619,162 @@ fn executeCommand(ctx: *Context) void {
         ctx.status_len.* = 0;
     } else if (std.mem.eql(u8, cmd, "q") or std.mem.eql(u8, cmd, "quit")) {
         ctx.quit_flag.* = true;
+    } else if (std.mem.startsWith(u8, cmd, "pid ")) {
+        const pid_str = std.mem.trim(u8, cmd[4..], " ");
+        const target_pid = std.fmt.parseInt(u32, pid_str, 10) catch {
+            render.setStatus(ctx.status_buf, ctx.status_len, "Invalid PID: {s}", .{pid_str});
+            return;
+        };
+        var found = false;
+        for (ctx.filtered_indices[0..ctx.filtered_count.*], 0..) |proc_idx, list_idx| {
+            if (ctx.cached_procs[proc_idx].pid == target_pid) {
+                ctx.selected_idx.* = list_idx;
+                ctx.scroll_offset.* = if (list_idx > 5) list_idx - 5 else 0;
+                render.setStatus(ctx.status_buf, ctx.status_len, "Jumped to PID {d}", .{target_pid});
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            render.setStatus(ctx.status_buf, ctx.status_len, "PID {d} not found", .{target_pid});
+        }
+    } else if (std.mem.startsWith(u8, cmd, "signal ")) {
+        const rest = cmd[7..];
+        if (std.mem.indexOf(u8, rest, " ")) |space_idx| {
+            const sig_name = rest[0..space_idx];
+            const target = rest[space_idx + 1 ..];
+            const valid_signals = [_][]const u8{ "STOP", "CONT", "HUP", "INT", "USR1", "USR2", "QUIT" };
+            var sig_valid = false;
+            for (valid_signals) |s| {
+                if (std.mem.eql(u8, sig_name, s)) {
+                    sig_valid = true;
+                    break;
+                }
+            }
+            if (!sig_valid) {
+                render.setStatus(ctx.status_buf, ctx.status_len, "Unknown signal: {s}. Try STOP/CONT/HUP/INT/USR1/USR2/QUIT", .{sig_name});
+                return;
+            }
+            var l_target: [64]u8 = undefined;
+            const target_len = @min(target.len, 64);
+            @memcpy(l_target[0..target_len], target[0..target_len]);
+            for (l_target[0..target_len]) |*c| c.* = std.ascii.toLower(c.*);
+            const t_str = l_target[0..target_len];
+            var l_name: [64]u8 = undefined;
+            var matches: usize = 0;
+            for (ctx.cached_procs) |proc| {
+                const name_len = proc.name().len;
+                @memcpy(l_name[0..name_len], proc.name());
+                const n_str = l_name[0..name_len];
+                for (n_str) |*c| c.* = std.ascii.toLower(c.*);
+                if (std.mem.indexOf(u8, n_str, t_str) != null) {
+                    sendSignalByName(proc.pid, sig_name);
+                    matches += 1;
+                }
+            }
+            if (matches == 0) {
+                render.setStatus(ctx.status_buf, ctx.status_len, "No processes matched '{s}'", .{target});
+            } else {
+                render.setStatus(ctx.status_buf, ctx.status_len, "Sent SIG{s} to {d} matching processes", .{ sig_name, matches });
+            }
+        } else {
+            render.setStatus(ctx.status_buf, ctx.status_len, "Usage: signal <SIG> <name>", .{});
+        }
+    } else if (std.mem.startsWith(u8, cmd, "renice ")) {
+        const rest = cmd[7..];
+        if (std.mem.indexOf(u8, rest, " ")) |space_idx| {
+            const value_str = rest[0..space_idx];
+            const target = rest[space_idx + 1 ..];
+            const nice_val = std.fmt.parseInt(i32, value_str, 10) catch {
+                render.setStatus(ctx.status_buf, ctx.status_len, "Invalid nice value: {s}", .{value_str});
+                return;
+            };
+            if (nice_val < -20 or nice_val > 19) {
+                render.setStatus(ctx.status_buf, ctx.status_len, "Nice value must be -20 to 19", .{});
+                return;
+            }
+            var l_target: [64]u8 = undefined;
+            const target_len = @min(target.len, 64);
+            @memcpy(l_target[0..target_len], target[0..target_len]);
+            for (l_target[0..target_len]) |*c| c.* = std.ascii.toLower(c.*);
+            const t_str = l_target[0..target_len];
+            var l_name: [64]u8 = undefined;
+            var matches: usize = 0;
+            for (ctx.cached_procs) |proc| {
+                const name_len = proc.name().len;
+                @memcpy(l_name[0..name_len], proc.name());
+                const n_str = l_name[0..name_len];
+                for (n_str) |*c| c.* = std.ascii.toLower(c.*);
+                if (std.mem.indexOf(u8, n_str, t_str) != null) {
+                    _ = setpriority(PRIO_PROCESS, @intCast(proc.pid), nice_val);
+                    matches += 1;
+                }
+            }
+            if (matches == 0) {
+                render.setStatus(ctx.status_buf, ctx.status_len, "No processes matched '{s}'", .{target});
+            } else {
+                render.setStatus(ctx.status_buf, ctx.status_len, "Reniced {d} matching processes to {d}", .{ matches, nice_val });
+            }
+        } else {
+            render.setStatus(ctx.status_buf, ctx.status_len, "Usage: renice <value> <name>", .{});
+        }
+    } else if (std.mem.startsWith(u8, cmd, "interval ")) {
+        const val_str = std.mem.trim(u8, cmd[9..], " ");
+        if (std.mem.eql(u8, val_str, "reset") or std.mem.eql(u8, val_str, "off")) {
+            ctx.refresh_interval_ms.* = null;
+            render.setStatus(ctx.status_buf, ctx.status_len, "Refresh interval reset to default", .{});
+        } else {
+            const ms = std.fmt.parseInt(u32, val_str, 10) catch {
+                render.setStatus(ctx.status_buf, ctx.status_len, "Invalid interval: {s}", .{val_str});
+                return;
+            };
+            if (ms < 100) {
+                render.setStatus(ctx.status_buf, ctx.status_len, "Interval must be >= 100ms", .{});
+                return;
+            }
+            ctx.refresh_interval_ms.* = ms;
+            render.setStatus(ctx.status_buf, ctx.status_len, "Refresh interval set to {d}ms", .{ms});
+        }
+    } else if (std.mem.startsWith(u8, cmd, "top ")) {
+        const val_str = std.mem.trim(u8, cmd[4..], " ");
+        if (std.mem.eql(u8, val_str, "off") or std.mem.eql(u8, val_str, "reset")) {
+            ctx.top_n.* = null;
+            render.setStatus(ctx.status_buf, ctx.status_len, "Top-N filter cleared", .{});
+        } else {
+            const n = std.fmt.parseInt(usize, val_str, 10) catch {
+                render.setStatus(ctx.status_buf, ctx.status_len, "Invalid number: {s}", .{val_str});
+                return;
+            };
+            if (n == 0) {
+                render.setStatus(ctx.status_buf, ctx.status_len, "N must be > 0", .{});
+                return;
+            }
+            ctx.top_n.* = n;
+            render.setStatus(ctx.status_buf, ctx.status_len, "Showing top {d} processes", .{n});
+        }
     } else if (cmd.len > 0) {
         render.setStatus(ctx.status_buf, ctx.status_len, "Unknown command: {s}", .{cmd});
+    }
+}
+
+const PRIO_PROCESS: c_int = 0;
+extern fn setpriority(which: c_int, who: c_uint, prio: c_int) c_int;
+
+fn sendSignalByName(pid: u32, sig_name: []const u8) void {
+    if (std.mem.eql(u8, sig_name, "STOP")) {
+        _ = posix.kill(@intCast(pid), posix.SIG.STOP) catch {};
+    } else if (std.mem.eql(u8, sig_name, "CONT")) {
+        _ = posix.kill(@intCast(pid), posix.SIG.CONT) catch {};
+    } else if (std.mem.eql(u8, sig_name, "HUP")) {
+        _ = posix.kill(@intCast(pid), posix.SIG.HUP) catch {};
+    } else if (std.mem.eql(u8, sig_name, "INT")) {
+        _ = posix.kill(@intCast(pid), posix.SIG.INT) catch {};
+    } else if (std.mem.eql(u8, sig_name, "USR1")) {
+        _ = posix.kill(@intCast(pid), posix.SIG.USR1) catch {};
+    } else if (std.mem.eql(u8, sig_name, "USR2")) {
+        _ = posix.kill(@intCast(pid), posix.SIG.USR2) catch {};
+    } else if (std.mem.eql(u8, sig_name, "QUIT")) {
+        _ = posix.kill(@intCast(pid), posix.SIG.QUIT) catch {};
     }
 }
 

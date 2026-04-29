@@ -148,6 +148,8 @@ pub fn main(main_init: std.process.Init) !void {
     var is_scrubbing: bool = false;
     var scrub_offset: usize = 0;
     var diff_anchor: ?usize = null;
+    var refresh_interval_ms: ?u32 = null;
+    var top_n: ?usize = null;
     // Buffer for snapshot procs when displaying scrubbed view
     var scrub_proc_buf: [timeline_mod.MAX_SNAPSHOT_PROCS]ztop.sysinfo.ProcStats = undefined;
     var scrub_proc_count: usize = 0;
@@ -217,7 +219,7 @@ pub fn main(main_init: std.process.Init) !void {
 
         const current_time = nowMs(io);
         const elapsed = current_time - last_fetch_time;
-        const fetch_interval_ms: i64 = @intCast(app_config.effectiveIntervalMs(current_tab));
+        const fetch_interval_ms: i64 = @intCast(refresh_interval_ms orelse app_config.effectiveIntervalMs(current_tab));
 
         if (elapsed >= fetch_interval_ms) {
             cpu = sys_info.getCpuStats();
@@ -749,6 +751,10 @@ pub fn main(main_init: std.process.Init) !void {
                                 }
                             }
 
+                            if (top_n) |n| {
+                                filtered_count = @min(filtered_count, n);
+                            }
+
                             if (is_following and follow_pid != 0) {
                                 var found = false;
                                 for (0..filtered_count) |fi| {
@@ -949,6 +955,8 @@ pub fn main(main_init: std.process.Init) !void {
                 .scrub_offset = &scrub_offset,
                 .timeline = timeline,
                 .diff_anchor = &diff_anchor,
+                .refresh_interval_ms = &refresh_interval_ms,
+                .top_n = &top_n,
             };
             force_redraw = try input_handler.handleAvailableInput(&input_ctx);
         }
