@@ -11,7 +11,8 @@ const HelpItem = struct {
 };
 
 const help_items = [_]HelpItem{
-    .{ .key = "1–5", .description = "Switch tabs (5 = Diagnostics)" },
+    .{ .key = "1–5", .description = "Switch tabs" },
+    .{ .key = "Tab", .description = "Run AI diagnosis (Diagnostics tab)" },
     .{ .key = "j/k, Up/Down", .description = "Navigate processes" },
     .{ .key = "c,m,p,n,u", .description = "Sort by CPU/Mem/PID/Name/Wakeups" },
     .{ .key = "v", .description = "Toggle tree view" },
@@ -21,7 +22,6 @@ const help_items = [_]HelpItem{
     .{ .key = "t", .description = "Send SIGTERM to selected" },
     .{ .key = "K", .description = "Send SIGKILL to selected" },
     .{ .key = "g", .description = "Resource causality graph" },
-    .{ .key = "5", .description = "Diagnostics tab (why busy + pressure hints)" },
     .{ .key = "u", .description = "Wakeup attribution sort" },
     .{ .key = "l", .description = "Follow selected process" },
     .{ .key = "T", .description = "Timeline scrub (←→ step, [] jump)" },
@@ -30,7 +30,7 @@ const help_items = [_]HelpItem{
     .{ .key = "L", .description = "View process lifeline" },
     .{ .key = "P", .description = "Build/test pipeline lens" },
     .{ .key = "q", .description = "Quit" },
-    .{ .key = ":", .description = "Command mode (pid/signal/renice/interval/top...)" },
+    .{ .key = ":", .description = "Command mode" },
 };
 
 fn textWidth(text: []const u8) usize {
@@ -204,7 +204,7 @@ pub fn renderHelpOverlay(
         const clipped_repo_label = util.clipUtf8(repo_label, repo_label_width);
         const clipped_repo_label_width = textWidth(clipped_repo_label);
         try app_tui.writeStyledHyperlink(.{ .fg = theme.tab_active, .underline = true }, repo_url, clipped_repo_label);
-        for (clipped_repo_label_width..repo_label_width) |_| try app_tui.bufWrite(" ");
+        for (clipped_repo_label_width..repo_label_width) |_| try app_tui.writeStyled(.{ .fg = theme.text }, " ");
     }
 
     try app_tui.moveCursor(content_x, footer_close_y);

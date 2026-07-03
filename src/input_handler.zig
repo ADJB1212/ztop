@@ -364,9 +364,11 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
                 return true;
             },
             '\t' => {
-                try setCurrentTab(ctx.allocator, ctx.sys_info, ctx.cached_connections, ctx.current_tab, ctx.selected_idx, ctx.scroll_offset, 5);
-                render.triggerAiDiagnostic();
-                return true;
+                if (ctx.current_tab.* == 5) {
+                    render.triggerAiDiagnostic();
+                    return true;
+                }
+                return false;
             },
             'q' => {
                 ctx.quit_flag.* = true;

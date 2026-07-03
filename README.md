@@ -24,7 +24,7 @@ Built for people who want a focused dashboard in the terminal: quick enough to k
 - **Why is this busy?** — ranked explanation view showing which processes are driving the current CPU, memory, disk, network, or wakeup-churn spike, with delta indicators against a 5-tick baseline
 - **Wakeup attribution** (`u` sort + optional `wakeups` column) — surfaces timer wakeups and scheduler churn (`W` wakeups/sec, `C` context-switches/sec), including low-CPU/high-churn workloads
 - **Resource causality graph** (`g`) — per-process view linking a selected process to its child tree, open network connections, and a resource summary
-- **Diagnostics tab** (`5`) — pressure root-cause hints (swap storms, runaway log writers, reconnect loops, file descriptor pressure, memory leak suspects, CPU runaways, thermal throttle risk, cache starvation) alongside the why-busy ranked spike analysis
+- **Diagnostics tab** (`5`) — pressure root-cause hints (swap storms, runaway log writers, reconnect loops, file descriptor pressure, memory leak suspects, CPU runaways, thermal throttle risk, cache starvation) alongside the why-busy ranked spike analysis; supports on-device **Apple Intelligence diagnosis** triggered via the `Tab` key
 - **Process lifeline view** (`L`) — high-fidelity timeline for a selected process showing state transitions, CPU bursts, memory growth, thread count changes, and socket opens/closes over time
 - **Build/test pipeline lens** (`P`) — groups compiler, linker, and test-runner processes under their root build orchestrator with aggregated and per-process CPU, memory, and disk I/O metrics
 - Built-in process actions: `SIGTERM`, `SIGKILL`, `:killall`, `:show zombie`, `:search`
@@ -78,32 +78,33 @@ ztop [--version]
 
 ### Key Bindings
 
-| Key                     | Action                                                                   |
-| ----------------------- | ------------------------------------------------------------------------ |
-| `1`, `2`, `3`, `4`, `5` | Switch to `Main`, `I/O`, `Sensors`, `Network`, `Diagnostics`             |
-| `j` / `k` or arrow keys | Move through the process list                                            |
-| `Enter`                 | Drill into threads of the selected process                               |
-| `Esc`                   | Return from any view; clear follow, filter, status, or zombie view       |
-| `c`, `m`, `p`, `n`, `u` | Sort by CPU, memory, PID, name, or wakeups/churn                         |
-| `C`                     | Toggle process-table columns for the current view                        |
-| `v`                     | Toggle tree view (process hierarchy)                                     |
-| `/`                     | Filter processes by name or PID                                          |
-| `:`                     | Open command mode                                                        |
-| `l`                     | Follow selected process (lock view to it as it moves)                    |
-| `L`                     | Process lifeline view for selected process (timeline of events)          |
-| `P`                     | Build/test pipeline lens (groups build processes by orchestrator)        |
-| `g`                     | Resource causality graph for selected process (children + connections)   |
-| `T`                     | Toggle timeline scrubbing mode (requires enough collected history)       |
-| `←` / `→`               | While scrubbing: move older/newer by one snapshot                        |
-| `[` / `]`               | While scrubbing: jump older/newer by 10 snapshots                        |
-| `b`                     | While scrubbing: drop a bookmark at the current position                 |
-| `B`                     | While scrubbing: remove the nearest bookmark                             |
-| `{` / `}`               | While scrubbing: jump to previous/next bookmark                          |
-| `d`                     | While scrubbing: toggle diff view (set anchor, then navigate to compare) |
-| `t`                     | Send `SIGTERM` to the selected process                                   |
-| `K`                     | Send `SIGKILL` to the selected process                                   |
-| `?`                     | Open help overlay                                                        |
-| `q`                     | Quit                                                                     |
+| Key                     | Action                                                                     |
+| ----------------------- | -------------------------------------------------------------------------- |
+| `1`, `2`, `3`, `4`, `5` | Switch to `Main`, `I/O`, `Sensors`, `Network`, `Diagnostics`               |
+| `Tab`                   | Trigger on-device Apple Intelligence diagnosis (when on `Diagnostics` tab) |
+| `j` / `k` or arrow keys | Move through the process list                                              |
+| `Enter`                 | Drill into threads of the selected process                                 |
+| `Esc`                   | Return from any view; clear follow, filter, status, or zombie view         |
+| `c`, `m`, `p`, `n`, `u` | Sort by CPU, memory, PID, name, or wakeups/churn                           |
+| `C`                     | Toggle process-table columns for the current view                          |
+| `v`                     | Toggle tree view (process hierarchy)                                       |
+| `/`                     | Filter processes by name or PID                                            |
+| `:`                     | Open command mode                                                          |
+| `l`                     | Follow selected process (lock view to it as it moves)                      |
+| `L`                     | Process lifeline view for selected process (timeline of events)            |
+| `P`                     | Build/test pipeline lens (groups build processes by orchestrator)          |
+| `g`                     | Resource causality graph for selected process (children + connections)     |
+| `T`                     | Toggle timeline scrubbing mode (requires enough collected history)         |
+| `←` / `→`               | While scrubbing: move older/newer by one snapshot                          |
+| `[` / `]`               | While scrubbing: jump older/newer by 10 snapshots                          |
+| `b`                     | While scrubbing: drop a bookmark at the current position                   |
+| `B`                     | While scrubbing: remove the nearest bookmark                               |
+| `{` / `}`               | While scrubbing: jump to previous/next bookmark                            |
+| `d`                     | While scrubbing: toggle diff view (set anchor, then navigate to compare)   |
+| `t`                     | Send `SIGTERM` to the selected process                                     |
+| `K`                     | Send `SIGKILL` to the selected process                                     |
+| `?`                     | Open help overlay                                                          |
+| `q`                     | Quit                                                                       |
 
 While scrubbing is active, destructive process actions and view-mutating actions are disabled until you exit scrubbing.
 Press `Esc` or `T` to leave scrubbing and return to live view.
@@ -198,6 +199,7 @@ update_interval_ms = 500
 process_columns = pid,cpu,mem,threads,state,wakeups
 io_process_columns = pid,disk_read,disk_write,ppid
 color.tab_active = 141
+enable_ai = true
 ```
 
 ### Configuration Reference
@@ -210,6 +212,7 @@ color.tab_active = 141
 | `default_tree_view`    | `true` / `false` (also `yes`/`no`, `1`/`0`)                                                                                                 |
 | `show_help_on_startup` | `true` / `false`                                                                                                                            |
 | `update_interval_ms`   | Refresh interval in milliseconds                                                                                                            |
+| `enable_ai`            | `true` / `false` — Enable on-device Apple Intelligence diagnosis (macOS 15.0+)                                                              |
 | `process_columns`      | Comma-separated list of `pid`, `ppid`, `state`, `cpu`, `mem`, `threads`, `disk_read`, `disk_write`, `wakeups` — or `none`, `default`, `all` |
 | `io_process_columns`   | Same column names, applied to the I/O tab process table                                                                                     |
 | `color.<key>`          | Named ANSI color (e.g. `bright_cyan`) or xterm-256 index (e.g. `141`)                                                                       |
@@ -218,7 +221,7 @@ The process name column is always visible. Press `C` inside `ztop` to toggle col
 
 ## Platform Notes
 
-**macOS:** Uses Mach APIs and `libproc` for process and system data. GPU data is read from IORegistry on Apple Silicon. No additional setup is required.
+**macOS:** Uses Mach APIs and `libproc` for process and system data. GPU data is read from IORegistry on Apple Silicon. Interactive process diagnostics utilize on-device Apple Intelligence models via Swift FoundationModels (macOS 15.0+ required for AI features). No additional setup is required.
 
 ## Contributing
 
