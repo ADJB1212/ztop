@@ -246,6 +246,7 @@ pub const Config = struct {
     nerd_fonts: bool,
     disable_history: bool,
     persist_session: bool,
+    enable_ai: bool,
 
     pub fn defaults() Config {
         return .{
@@ -265,6 +266,7 @@ pub const Config = struct {
             .nerd_fonts = false,
             .disable_history = false,
             .persist_session = false,
+            .enable_ai = true,
         };
     }
 
@@ -653,6 +655,14 @@ fn applyEntry(config: *Config, raw_key: []const u8, raw_value: []const u8) !void
 
     if (std.mem.eql(u8, key, "disable_history")) {
         config.disable_history = try parseBool(value);
+        return;
+    }
+
+    if (std.mem.eql(u8, key, "enable_ai") or
+        std.mem.eql(u8, key, "ai") or
+        std.mem.eql(u8, key, "ai_diagnostics"))
+    {
+        config.enable_ai = try parseBool(value);
         return;
     }
 

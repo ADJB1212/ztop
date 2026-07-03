@@ -74,6 +74,8 @@ pub const findWhyBusyProcByPid = why_busy.findProcByPid;
 pub const fmtWhyBusyTimestamp = why_busy.fmtTimestamp;
 pub const detectWhyBusyKind = why_busy.detectKind;
 pub const renderWhyBusyView = why_busy.renderWhyBusyView;
+pub const triggerAiDiagnostic = why_busy.triggerAiDiagnostic;
+pub const isAiQuerying = why_busy.isAiQuerying;
 
 // Re-exports from pressure_hints.zig
 pub const MAX_PRESSURE_HINTS = pressure_hints.MAX_HINTS;

@@ -3,7 +3,21 @@ const tui = @import("../tui.zig");
 const sysinfo = @import("../sysinfo.zig");
 const config = @import("../config.zig");
 const util = @import("util.zig");
+const ai = @import("../AI.zig");
 const Tui = tui.Tui;
+
+var ai_query = ai.AsyncQuery.init();
+var pending_ai_trigger: bool = false;
+var query_counter: u64 = 100;
+var spinner_frame: usize = 0;
+
+pub fn triggerAiDiagnostic() void {
+    pending_ai_trigger = true;
+}
+
+pub fn isAiQuerying() bool {
+    return ai_query.getStatus() == .querying;
+}
 
 const MAX_TOP = 8;
 
@@ -13,6 +27,7 @@ pub const SpikeKind = enum { auto, cpu, mem, disk, net, thermal, wakeup };
 /// All data needed for the "Why is this busy?" view.
 pub const WhyBusyData = struct {
     kind: SpikeKind,
+    enable_ai: bool = true,
     /// Current (at-spike) metric values
     cpu_pct: f32,
     mem_pct: f32,
@@ -359,7 +374,9 @@ pub fn renderWhyBusyView(
     var proc_total: f64 = 0;
     for (data.procs) |p| proc_total += procMetricValue(p, proc_metric);
 
-    const proc_rows = remaining -| 1; // minus header row
+    const use_ai = data.enable_ai and ai.isAvailable();
+    const ai_box_height: u16 = if (use_ai and remaining >= 8) 4 else if (use_ai and remaining >= 7) 3 else 0;
+    const proc_rows = (remaining -| 1) -| ai_box_height;
     const show = @min(count, proc_rows);
 
     for (0..show) |si| {
@@ -373,5 +390,116 @@ pub fn renderWhyBusyView(
     if (count == 0 and cur_y < y + height - 1) {
         try app_tui.moveCursor(inner_x, cur_y);
         try app_tui.printStyled(.{ .fg = theme.muted, .dim = true }, "no significant process activity", .{});
+        cur_y += 1;
+    }
+
+    if (use_ai) {
+        if (pending_ai_trigger and count > 0) {
+            pending_ai_trigger = false;
+            const top_proc = data.procs[indices[0]];
+            const top_name = top_proc.name();
+            query_counter +%= 1;
+            const sig = query_counter;
+
+            var prompt_buf: [512]u8 = undefined;
+            if (std.fmt.bufPrintZ(&prompt_buf, "You are a macOS system monitor assistant. In 1 or 2 concise sentences (max 25 words total, no markdown bullets), explain why the process '{s}' might be causing a '{s}' usage spike at {d:.1}%. Give a direct, practical explanation.", .{ top_name, spikeLabel(kind), data.cpu_pct })) |prompt| {
+                _ = ai_query.request(sig, prompt);
+            } else |_| {}
+        }
+
+        const ai_status = ai_query.getStatus();
+        if (ai_status == .idle or ai_status == .failed) {
+            if (cur_y < y + height - 2) {
+                if (cur_y < y + height - 3) cur_y += 1;
+                try app_tui.moveCursor(inner_x, cur_y);
+                try app_tui.printStyled(.{ .fg = theme.command_prompt, .bold = true }, "✨ Apple Intelligence:", .{});
+                try app_tui.printStyled(.{ .fg = theme.muted }, " Press [Tab] for AI Diagnostic", .{});
+                cur_y += 1;
+            }
+        } else if (ai_status == .querying) {
+            if (cur_y < y + height - 3) cur_y += 1;
+            if (cur_y < y + height - 1) {
+                try app_tui.moveCursor(inner_x, cur_y);
+                try app_tui.printStyled(.{ .fg = theme.command_prompt, .bold = true }, "✨ Apple Intelligence Diagnosis:", .{});
+                cur_y += 1;
+            }
+            if (cur_y < y + height - 1) {
+                const spinner_frames = [_][]const u8{ "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" };
+                spinner_frame = (spinner_frame + 1) % spinner_frames.len;
+                try app_tui.moveCursor(inner_x, cur_y);
+                try app_tui.printStyled(.{ .fg = theme.command_prompt, .bold = true }, "{s} ", .{spinner_frames[spinner_frame]});
+                try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "Running on-device model diagnosis...", .{});
+                cur_y += 1;
+            }
+        } else if (ai_status == .ready) {
+            if (cur_y < y + height - 3) cur_y += 1;
+            if (cur_y < y + height - 1) {
+                try app_tui.moveCursor(inner_x, cur_y);
+                try app_tui.printStyled(.{ .fg = theme.command_prompt, .bold = true }, "✨ Apple Intelligence Diagnosis", .{});
+                try app_tui.printStyled(.{ .fg = theme.muted, .dim = true }, " (Press [Tab] to refresh):", .{});
+                cur_y += 1;
+            }
+            if (cur_y < y + height - 1) {
+                var res_buf: [1024]u8 = undefined;
+                if (ai_query.getResult(&res_buf)) |res| {
+                    if (ai.parseDiagnosisJson(std.heap.c_allocator, res)) |parsed| {
+                        defer parsed.deinit();
+                        if (parsed.value.explanation.len > 0) {
+                            if (cur_y < y + height - 1) {
+                                try app_tui.moveCursor(inner_x, cur_y);
+                                try app_tui.printStyled(.{ .fg = theme.command_prompt, .bold = true }, "⚡ [{s}] ", .{parsed.value.bottleneck});
+                                try app_tui.printStyled(.{ .fg = theme.usage_good, .bold = true }, "💡 {s}", .{parsed.value.advice});
+                                cur_y += 1;
+                            }
+                            var line_start: usize = 0;
+                            const exp = parsed.value.explanation;
+                            while (line_start < exp.len and cur_y < y + height - 1) {
+                                const max_len = @min(exp.len - line_start, @as(usize, inner_width));
+                                var line_end = line_start + max_len;
+                                if (line_end < exp.len) {
+                                    var break_pos = line_end;
+                                    while (break_pos > line_start + max_len / 2) : (break_pos -= 1) {
+                                        if (exp[break_pos] == ' ') {
+                                            line_end = break_pos;
+                                            break;
+                                        }
+                                    }
+                                }
+                                const line = std.mem.trim(u8, exp[line_start..line_end], " \r\n");
+                                if (line.len > 0) {
+                                    try app_tui.moveCursor(inner_x, cur_y);
+                                    try app_tui.printStyled(.{ .fg = theme.text }, "{s}", .{line});
+                                    cur_y += 1;
+                                }
+                                line_start = line_end;
+                            }
+                            return;
+                        }
+                    } else |_| {}
+
+                    var line_start: usize = 0;
+                    while (line_start < res.len and cur_y < y + height - 1) {
+                        const max_len = @min(res.len - line_start, @as(usize, inner_width));
+                        var line_end = line_start + max_len;
+                        if (line_end < res.len) {
+                            var break_pos = line_end;
+                            while (break_pos > line_start + max_len / 2) : (break_pos -= 1) {
+                                if (res[break_pos] == ' ') {
+                                    line_end = break_pos;
+                                    break;
+                                }
+                            }
+                        }
+                        const line = std.mem.trim(u8, res[line_start..line_end], " \r\n");
+                        if (line.len > 0) {
+                            try app_tui.moveCursor(inner_x, cur_y);
+                            try app_tui.printStyled(.{ .fg = theme.text }, "{s}", .{line});
+                            cur_y += 1;
+                        }
+                        line_start = line_end;
+                    }
+                }
+            }
+        }
     }
 }

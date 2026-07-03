@@ -597,6 +597,7 @@ pub fn main(main_init: std.process.Init) !void {
                         procs_box_height,
                         .{
                             .kind = .auto,
+                            .enable_ai = app_config.enable_ai,
                             .cpu_pct = display_cpu.usage_percent,
                             .mem_pct = memoryUsagePercent(display_mem),
                             .disk_rate = display_disk.read_bytes_ps + display_disk.write_bytes_ps,
@@ -914,6 +915,9 @@ pub fn main(main_init: std.process.Init) !void {
         const now = nowMs(io);
         var remaining_ms = fetch_interval_ms - (now - last_fetch_time);
         if (remaining_ms < 0) remaining_ms = 0;
+        if (render.isAiQuerying() and remaining_ms > 80) {
+            remaining_ms = 80;
+        }
 
         const poll_res = posix.poll(&fds, @intCast(remaining_ms)) catch 0;
 
@@ -976,6 +980,8 @@ pub fn main(main_init: std.process.Init) !void {
                 .pipeline_row_count = &pipeline_row_count,
             };
             force_redraw = try input_handler.handleAvailableInput(&input_ctx);
+        } else if (render.isAiQuerying()) {
+            force_redraw = true;
         }
     }
 

@@ -226,6 +226,17 @@ test "config loader falls back to HOME from environ map" {
     try std.testing.expectEqual(true, loaded.show_help_on_startup);
 }
 
+test "config parse enable_ai option" {
+    const default_cfg = config.Config.defaults();
+    try std.testing.expectEqual(true, default_cfg.enable_ai);
+
+    const parsed = config.parse("enable_ai = false");
+    try std.testing.expectEqual(false, parsed.enable_ai);
+
+    const parsed2 = config.parse("ai = false");
+    try std.testing.expectEqual(false, parsed2.enable_ai);
+}
+
 fn absoluteTmpPath(allocator: std.mem.Allocator, tmp: *const std.testing.TmpDir, sub_path: []const u8) ![]u8 {
     const cwd = try std.process.currentPathAlloc(std.testing.io, allocator);
     defer allocator.free(cwd);

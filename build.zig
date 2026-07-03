@@ -57,6 +57,23 @@ pub fn build(b: *std.Build) void {
         std.debug.panic("ztop is only supported on macOS", .{});
     }
 
+    const swiftc = b.addSystemCommand(&.{
+        "swiftc",
+        "-O",
+        "-emit-library",
+        "-static",
+        "-framework",
+        "FoundationModels",
+    });
+    if (sdk_root) |root| {
+        swiftc.addArgs(&.{ "-sdk", root });
+    }
+    const fm_lib = swiftc.addPrefixedOutputFileArg("-o", "libfmbridge.a");
+    swiftc.addFileArg(b.path("src/ai/fm_bridge.swift"));
+
+    exe.root_module.addObjectFile(fm_lib);
+    tests.root_module.addObjectFile(fm_lib);
+
     exe.root_module.addCSourceFile(.{
         .file = b.path("src/sysinfo/darwin/wifi.m"),
     });
@@ -64,22 +81,57 @@ pub fn build(b: *std.Build) void {
         .file = b.path("src/sysinfo/darwin/wifi.m"),
     });
 
-    // Allow explicit SDK root for cross-compilation (e.g. aarch64 from x86_64 host).
-    // Pass with: -Dsdk-root=$(xcrun --show-sdk-path)
-    if (sdk_root) |root| {
+    var sdk_path_buf: [1024]u8 = undefined;
+    const effective_sdk_root: ?[]const u8 = if (sdk_root) |root| root else blk: {
+        var code: u8 = 0;
+        if (b.runAllowFail(&.{ "xcrun", "--show-sdk-path" }, &code, .ignore)) |out| {
+            if (code == 0) {
+                const trimmed = std.mem.trimEnd(u8, out, "\r\n ");
+                if (trimmed.len > 0 and trimmed.len < sdk_path_buf.len) {
+                    @memcpy(sdk_path_buf[0..trimmed.len], trimmed);
+                    break :blk sdk_path_buf[0..trimmed.len];
+                }
+            }
+        } else |_| {}
+        break :blk null;
+    };
+
+    if (effective_sdk_root) |root| {
         exe.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/include" }) });
         exe.root_module.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ root, "System/Library/Frameworks" }) });
+        exe.root_module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/lib/swift" }) });
         tests.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/include" }) });
         tests.root_module.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ root, "System/Library/Frameworks" }) });
+        tests.root_module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/lib/swift" }) });
     }
+    exe.root_module.addLibraryPath(.{ .cwd_relative = "/usr/lib/swift" });
+    tests.root_module.addLibraryPath(.{ .cwd_relative = "/usr/lib/swift" });
+
+    exe.root_module.linkSystemLibrary("c", .{});
+    tests.root_module.linkSystemLibrary("c", .{});
+
+    const swift_libs: []const []const u8 = &.{
+        "swiftCore",           "swift_Concurrency",      "swiftDispatch",
+        "swiftCoreFoundation", "swiftIOKit",             "swiftObjectiveC",
+        "swiftXPC",            "swift_Builtin_float",    "swift_errno",
+        "swift_math",          "swift_signal",           "swift_stdio",
+        "swift_time",          "swift_StringProcessing", "swift_Volatile",
+    };
+    for (swift_libs) |lib| {
+        exe.root_module.linkSystemLibrary(lib, .{});
+        tests.root_module.linkSystemLibrary(lib, .{});
+    }
+
     exe.root_module.linkFramework("IOKit", .{});
     exe.root_module.linkFramework("CoreFoundation", .{});
     exe.root_module.linkFramework("Foundation", .{});
     exe.root_module.linkFramework("CoreWLAN", .{});
+    exe.root_module.linkFramework("FoundationModels", .{ .weak = true });
     tests.root_module.linkFramework("IOKit", .{});
     tests.root_module.linkFramework("CoreFoundation", .{});
     tests.root_module.linkFramework("Foundation", .{});
     tests.root_module.linkFramework("CoreWLAN", .{});
+    tests.root_module.linkFramework("FoundationModels", .{ .weak = true });
 
     b.installArtifact(exe);
 

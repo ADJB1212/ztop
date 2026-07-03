@@ -216,3 +216,8 @@ test "detectWhyBusyKind cpu beats mem when equal" {
     const data = makeData(.auto, 50.0, 50.0, 0, 0, &.{});
     try std.testing.expectEqual(render.SpikeKind.cpu, render.detectWhyBusyKind(data));
 }
+
+test "WhyBusyData defaults enable_ai to true" {
+    const data = makeData(.auto, 0, 0, 0, 0, &.{});
+    try std.testing.expectEqual(true, data.enable_ai);
+}

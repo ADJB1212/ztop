@@ -14,4 +14,5 @@ test {
     _ = @import("version_test.zig");
     _ = @import("sysinfo_test.zig");
     _ = @import("darwin_test.zig");
+    _ = @import("ai_test.zig");
 }
