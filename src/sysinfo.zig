@@ -23,11 +23,9 @@ pub const SortBy = common.SortBy;
 pub const sortProcStats = common.sortProcStats;
 pub const sortThreadStats = common.sortThreadStats;
 
-pub const sys_linux = @import("sysinfo/linux.zig");
 pub const sys_darwin = @import("sysinfo/darwin.zig");
 
 pub const SysInfo = switch (builtin.target.os.tag) {
     .macos => @import("sysinfo/darwin.zig").SysInfo,
-    .linux => @import("sysinfo/linux.zig").SysInfo,
-    else => @compileError("ztop sysinfo is only implemented for macOS and Linux"),
+    else => @compileError("ztop is only supported on macOS"),
 };

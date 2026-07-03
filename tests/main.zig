@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 
 test {
     _ = @import("common_test.zig");
@@ -13,7 +12,6 @@ test {
     _ = @import("timeline_test.zig");
     _ = @import("tui_test.zig");
     _ = @import("version_test.zig");
-    _ = @import("linux_test.zig");
     _ = @import("sysinfo_test.zig");
-    if (builtin.target.os.tag == .macos) _ = @import("darwin_test.zig");
+    _ = @import("darwin_test.zig");
 }

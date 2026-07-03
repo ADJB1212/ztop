@@ -53,34 +53,33 @@ pub fn build(b: *std.Build) void {
         .root_module = tests_module,
     });
 
-    if (target.result.os.tag == .macos) {
-        exe.root_module.addCSourceFile(.{
-            .file = b.path("src/sysinfo/darwin/wifi.m"),
-        });
-        tests.root_module.addCSourceFile(.{
-            .file = b.path("src/sysinfo/darwin/wifi.m"),
-        });
-
-        // Allow explicit SDK root for cross-compilation (e.g. aarch64 from x86_64 host).
-        // Pass with: -Dsdk-root=$(xcrun --show-sdk-path)
-        if (sdk_root) |root| {
-            exe.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/include" }) });
-            exe.root_module.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ root, "System/Library/Frameworks" }) });
-            tests.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/include" }) });
-            tests.root_module.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ root, "System/Library/Frameworks" }) });
-        }
-        exe.root_module.linkFramework("IOKit", .{});
-        exe.root_module.linkFramework("CoreFoundation", .{});
-        exe.root_module.linkFramework("Foundation", .{});
-        exe.root_module.linkFramework("CoreWLAN", .{});
-        tests.root_module.linkFramework("IOKit", .{});
-        tests.root_module.linkFramework("CoreFoundation", .{});
-        tests.root_module.linkFramework("Foundation", .{});
-        tests.root_module.linkFramework("CoreWLAN", .{});
-    } else {
-        exe.root_module.link_libc = true;
-        tests.root_module.link_libc = true;
+    if (target.result.os.tag != .macos) {
+        std.debug.panic("ztop is only supported on macOS", .{});
     }
+
+    exe.root_module.addCSourceFile(.{
+        .file = b.path("src/sysinfo/darwin/wifi.m"),
+    });
+    tests.root_module.addCSourceFile(.{
+        .file = b.path("src/sysinfo/darwin/wifi.m"),
+    });
+
+    // Allow explicit SDK root for cross-compilation (e.g. aarch64 from x86_64 host).
+    // Pass with: -Dsdk-root=$(xcrun --show-sdk-path)
+    if (sdk_root) |root| {
+        exe.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/include" }) });
+        exe.root_module.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ root, "System/Library/Frameworks" }) });
+        tests.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/include" }) });
+        tests.root_module.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ root, "System/Library/Frameworks" }) });
+    }
+    exe.root_module.linkFramework("IOKit", .{});
+    exe.root_module.linkFramework("CoreFoundation", .{});
+    exe.root_module.linkFramework("Foundation", .{});
+    exe.root_module.linkFramework("CoreWLAN", .{});
+    tests.root_module.linkFramework("IOKit", .{});
+    tests.root_module.linkFramework("CoreFoundation", .{});
+    tests.root_module.linkFramework("Foundation", .{});
+    tests.root_module.linkFramework("CoreWLAN", .{});
 
     b.installArtifact(exe);
 

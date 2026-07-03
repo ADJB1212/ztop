@@ -2,13 +2,13 @@
 
 ![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)
 ![Zig](https://img.shields.io/badge/Zig-0.16%2B-orange)
-![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
+![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 
 <p align="center">
     <img src="./assets/screenshot.png" width="800"/>
 </p>
 
-`ztop` is a terminal system monitor for macOS and Linux. It gives you a fast, keyboard-driven view of CPU load, memory pressure, disk and network throughput, hardware sensors, GPU activity, battery status, and the busiest processes — without leaving the shell.
+`ztop` is a terminal system monitor for macOS. It gives you a fast, keyboard-driven view of CPU load, memory pressure, disk and network throughput, hardware sensors, GPU activity, battery status, and the busiest processes — without leaving the shell.
 
 Built for people who want a focused dashboard in the terminal: quick enough to keep open all day, detailed enough to answer "what is using this machine right now?", and interactive enough to act on what you find.
 
@@ -17,10 +17,7 @@ Built for people who want a focused dashboard in the terminal: quick enough to k
 - Five focused views: `Main`, `I/O`, `Sensors`, `Network`, and `Diagnostics`
 - Live process table with sorting, filtering, tree view, and per-thread drill-down
 - CPU topology map grouping logical threads by physical core, cache domain, and heterogeneous cluster
-- GPU monitoring on supported hardware:
-  - NVIDIA via NVML when `libnvidia-ml` is present
-  - AMD via DRM/sysfs counters exposed by `amdgpu`
-  - Apple Silicon via IORegistry accelerator performance statistics
+- GPU monitoring on Apple Silicon via IORegistry accelerator performance statistics
 - Dynamic process-table columns with an in-app picker (PID, PPID, state, CPU, memory, threads, disk rates, wakeups/churn)
 - Mouse support for tab switching, list navigation, and scrolling
 - Timeline scrubbing with incident bookmarks and before/after diff: pause live view, scrub through recent history, drop markers to jump back to interesting moments, and compare two captured snapshots side-by-side
@@ -38,7 +35,7 @@ Built for people who want a focused dashboard in the terminal: quick enough to k
 
 ## Installation
 
-### Homebrew (macOS & Linux)
+### Homebrew (macOS)
 
 ```bash
 brew tap ADJB1212/ztop
@@ -47,7 +44,7 @@ brew install ztop
 
 ### Build from Source
 
-**Requirements:** Zig `0.16.0` or newer, a POSIX terminal.
+**Requirements:** Zig `0.16.0` or newer, macOS, a POSIX terminal.
 
 ```bash
 git clone https://github.com/ADJB1212/ztop.git
@@ -222,8 +219,6 @@ The process name column is always visible. Press `C` inside `ztop` to toggle col
 ## Platform Notes
 
 **macOS:** Uses Mach APIs and `libproc` for process and system data. GPU data is read from IORegistry on Apple Silicon. No additional setup is required.
-
-**Linux:** Uses `/proc`-based polling. NVIDIA GPU monitoring requires `libnvidia-ml` to be present at runtime. AMD GPU data is read from `amdgpu` sysfs counters.
 
 ## Contributing
 
