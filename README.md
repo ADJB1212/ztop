@@ -44,7 +44,7 @@ brew install ztop
 
 ### Build from Source
 
-**Requirements:** Zig `0.16.0` or newer, macOS, a POSIX terminal.
+**Requirements:** Zig `0.16.0` or newer, macOS (ARM / Apple Silicon), a POSIX terminal.
 
 ```bash
 git clone https://github.com/ADJB1212/ztop.git
@@ -221,7 +221,7 @@ The process name column is always visible. Press `C` inside `ztop` to toggle col
 
 ## Platform Notes
 
-**macOS:** Uses Mach APIs and `libproc` for process and system data. GPU data is read from IORegistry on Apple Silicon. Interactive process diagnostics utilize on-device Apple Intelligence models via Swift FoundationModels (macOS 15.0+ required for AI features). No additional setup is required.
+**macOS:** Requires an ARM (Apple Silicon) Mac. Uses Mach APIs and `libproc` for process and system data. GPU data is read from IORegistry. Interactive process diagnostics utilize on-device Apple Intelligence models via Swift FoundationModels (macOS 15.0+ required for AI features). No additional setup is required.
 
 ## Contributing
 

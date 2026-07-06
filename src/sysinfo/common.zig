@@ -109,16 +109,11 @@ pub const ThermalStats = struct {
 };
 
 pub const GpuVendor = enum {
-    nvidia,
-    amd,
     apple,
-    intel,
     unknown,
 };
 
 pub const GpuBackend = enum {
-    nvml,
-    sysfs,
     iokit,
     unknown,
 };

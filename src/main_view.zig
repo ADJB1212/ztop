@@ -35,10 +35,7 @@ pub fn aggregateGpuTemp(thermal: sysinfo.ThermalStats, gpus: []const sysinfo.Gpu
 
 pub fn gpuVendorLabel(vendor: sysinfo.GpuVendor) []const u8 {
     return switch (vendor) {
-        .nvidia => "NVIDIA",
-        .amd => "AMD",
         .apple => "Apple",
-        .intel => "Intel",
         .unknown => "Unknown",
     };
 }

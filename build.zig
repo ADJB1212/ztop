@@ -12,10 +12,6 @@ pub fn build(b: *std.Build) void {
     build_options.addOption([]const u8, "version", manifest.version);
     const strip = b.option(bool, "strip", "Strip symbols") orelse false;
 
-    if (sdk_root) |root| {
-        b.sysroot = root;
-    }
-
     const mod = b.addModule("ztop", .{
         .root_source_file = b.path("src/root.zig"),
 
@@ -55,6 +51,9 @@ pub fn build(b: *std.Build) void {
 
     if (target.result.os.tag != .macos) {
         std.debug.panic("ztop is only supported on macOS", .{});
+    }
+    if (target.result.cpu.arch != .aarch64) {
+        std.debug.panic("ztop is only supported on ARM (Apple Silicon) Macs", .{});
     }
 
     const swiftc = b.addSystemCommand(&.{
@@ -100,12 +99,16 @@ pub fn build(b: *std.Build) void {
         exe.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/include" }) });
         exe.root_module.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ root, "System/Library/Frameworks" }) });
         exe.root_module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/lib/swift" }) });
+        exe.root_module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/lib" }) });
         tests.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/include" }) });
         tests.root_module.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ root, "System/Library/Frameworks" }) });
         tests.root_module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/lib/swift" }) });
+        tests.root_module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/lib" }) });
     }
     exe.root_module.addLibraryPath(.{ .cwd_relative = "/usr/lib/swift" });
+    exe.root_module.addLibraryPath(.{ .cwd_relative = "/usr/lib" });
     tests.root_module.addLibraryPath(.{ .cwd_relative = "/usr/lib/swift" });
+    tests.root_module.addLibraryPath(.{ .cwd_relative = "/usr/lib" });
 
     exe.root_module.linkSystemLibrary("c", .{});
     tests.root_module.linkSystemLibrary("c", .{});

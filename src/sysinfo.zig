@@ -26,6 +26,9 @@ pub const sortThreadStats = common.sortThreadStats;
 pub const sys_darwin = @import("sysinfo/darwin.zig");
 
 pub const SysInfo = switch (builtin.target.os.tag) {
-    .macos => @import("sysinfo/darwin.zig").SysInfo,
+    .macos => switch (builtin.target.cpu.arch) {
+        .aarch64 => @import("sysinfo/darwin.zig").SysInfo,
+        else => @compileError("ztop is only supported on ARM (Apple Silicon) Macs"),
+    },
     else => @compileError("ztop is only supported on macOS"),
 };
