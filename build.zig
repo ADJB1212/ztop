@@ -79,6 +79,12 @@ pub fn build(b: *std.Build) void {
     tests.root_module.addCSourceFile(.{
         .file = b.path("src/sysinfo/darwin/wifi.m"),
     });
+    exe.root_module.addCSourceFile(.{
+        .file = b.path("src/sysinfo/darwin/power.m"),
+    });
+    tests.root_module.addCSourceFile(.{
+        .file = b.path("src/sysinfo/darwin/power.m"),
+    });
 
     var sdk_path_buf: [1024]u8 = undefined;
     const effective_sdk_root: ?[]const u8 = if (sdk_root) |root| root else blk: {
@@ -130,11 +136,13 @@ pub fn build(b: *std.Build) void {
     exe.root_module.linkFramework("Foundation", .{});
     exe.root_module.linkFramework("CoreWLAN", .{});
     exe.root_module.linkFramework("FoundationModels", .{ .weak = true });
+    exe.root_module.linkSystemLibrary("IOReport", .{});
     tests.root_module.linkFramework("IOKit", .{});
     tests.root_module.linkFramework("CoreFoundation", .{});
     tests.root_module.linkFramework("Foundation", .{});
     tests.root_module.linkFramework("CoreWLAN", .{});
     tests.root_module.linkFramework("FoundationModels", .{ .weak = true });
+    tests.root_module.linkSystemLibrary("IOReport", .{});
 
     b.installArtifact(exe);
 

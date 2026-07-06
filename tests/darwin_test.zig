@@ -81,6 +81,7 @@ test "mapWifiGeneration maps modern WiFi generations" {
 
 test "getBatteryStats does not crash" {
     var si = darwin.SysInfo.init(std.testing.io);
+    defer si.deinit();
     const stats = si.getBatteryStats();
     if (stats.charge_percent) |charge| {
         try std.testing.expect(charge >= 0 and charge <= 100);
@@ -89,5 +90,18 @@ test "getBatteryStats does not crash" {
 
 test "getThermalStats does not crash" {
     var si = darwin.SysInfo.init(std.testing.io);
+    defer si.deinit();
     _ = si.getThermalStats();
+}
+
+test "power sampling init, sample, and deinit" {
+    var si = darwin.SysInfo.init(std.testing.io);
+    defer si.deinit();
+
+    const stats = si.getBatteryStats();
+    _ = stats;
+    if (si.power_handle) |handle| {
+        const reading = darwin.bindings.ztop_power_sample(handle, 1.0);
+        try std.testing.expect(reading.soc_watts >= 0.0);
+    }
 }

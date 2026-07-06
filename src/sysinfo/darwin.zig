@@ -1,7 +1,7 @@
 const std = @import("std");
 const common = @import("common.zig");
 
-const bindings = @import("darwin/bindings.zig");
+pub const bindings = @import("darwin/bindings.zig");
 const cf_util = @import("darwin/cf_util.zig");
 const gpu_mod = @import("darwin/gpu.zig");
 const net_mod = @import("darwin/net.zig");
@@ -113,6 +113,9 @@ pub const SysInfo = struct {
     wifi_details: common.WifiDetails = .{},
     wifi_fetched: bool = false,
     hid_client: ?c.IOHIDEventSystemClientRef = null,
+    power_handle: ?*anyopaque = null,
+    prev_power_ms: i64 = 0,
+    last_power_reading: ?bindings.PowerReadingRaw = null,
 
     pub fn init(io: std.Io) SysInfo {
         const host_port = bindings.mach_host_self();
@@ -145,6 +148,8 @@ pub const SysInfo = struct {
             .prev_disk_ms = now,
             .prev_net_ms = now,
             .hid_client = c.IOHIDEventSystemClientCreate(null),
+            .power_handle = bindings.ztop_power_init(),
+            .prev_power_ms = now,
         };
         self.loadTopology();
         return self;
@@ -156,6 +161,26 @@ pub const SysInfo = struct {
 
     fn loadTopology(self: *SysInfo) void {
         readCpuTopology(self) catch self.synthesizeTopology(@intCast(self.ncpu));
+    }
+
+    pub fn deinit(self: *SysInfo) void {
+        if (self.power_handle) |handle| {
+            bindings.ztop_power_deinit(handle);
+            self.power_handle = null;
+        }
+    }
+
+    fn updatePowerSample(self: *SysInfo) void {
+        const now = nowMs(self.io);
+        const elapsed = @as(f64, @floatFromInt(now - self.prev_power_ms)) / 1000.0;
+        if (elapsed < 0.05) return;
+        if (self.power_handle) |handle| {
+            const reading = bindings.ztop_power_sample(handle, elapsed);
+            if (reading.is_valid != 0) {
+                self.last_power_reading = reading;
+            }
+            self.prev_power_ms = now;
+        }
     }
 
     fn synthesizeTopology(self: *SysInfo, logical_count: usize) void {
@@ -444,7 +469,6 @@ pub const SysInfo = struct {
     }
 
     pub fn getBatteryStats(self: *SysInfo) BatteryStats {
-        _ = self;
         var stats = BatteryStats{};
 
         const blob = c.IOPSCopyPowerSourcesInfo() orelse return stats;
@@ -484,47 +508,10 @@ pub const SysInfo = struct {
             }
         }
 
-        var amp_ma_opt: ?i64 = null;
-        var volt_mv_opt: ?u64 = null;
-
-        if (c.IOServiceMatching("AppleSmartBattery")) |matching| {
-            var iter: c.io_iterator_t = 0;
-            if (c.IOServiceGetMatchingServices(c.kIOMainPortDefault, matching, &iter) == c.KERN_SUCCESS) {
-                defer _ = c.IOObjectRelease(iter);
-
-                const service = c.IOIteratorNext(iter);
-                if (service != 0) {
-                    defer _ = c.IOObjectRelease(service);
-
-                    if (c.CFStringCreateWithCString(null, "Amperage", c.kCFStringEncodingUTF8)) |amp_key| {
-                        defer c.CFRelease(amp_key);
-                        if (c.IORegistryEntryCreateCFProperty(service, amp_key, null, 0)) |amp_ref| {
-                            defer c.CFRelease(amp_ref);
-                            amp_ma_opt = cf_util.getCFSignedNumberValue(amp_ref);
-                        }
-                    }
-
-                    if (c.CFStringCreateWithCString(null, "Voltage", c.kCFStringEncodingUTF8)) |volt_key| {
-                        defer c.CFRelease(volt_key);
-                        if (c.IORegistryEntryCreateCFProperty(service, volt_key, null, 0)) |volt_ref| {
-                            defer c.CFRelease(volt_ref);
-                            if (cf_util.getCFNumberValue(volt_ref)) |volt_mv| {
-                                volt_mv_opt = volt_mv;
-                            } else if (cf_util.getCFSignedNumberValue(volt_ref)) |volt_signed| {
-                                if (volt_signed >= 0) volt_mv_opt = @intCast(volt_signed);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if (amp_ma_opt) |amp_ma| {
-            if (volt_mv_opt) |volt_mv| {
-                if (volt_mv > 0) {
-                    const watts = @abs(@as(f64, @floatFromInt(amp_ma))) * @as(f64, @floatFromInt(volt_mv)) / 1_000_000.0;
-                    if (watts > 0) stats.power_draw_w = @floatCast(watts);
-                }
+        self.updatePowerSample();
+        if (self.last_power_reading) |last| {
+            if (last.soc_watts > 0) {
+                stats.power_draw_w = @floatCast(last.soc_watts);
             }
         }
 
@@ -532,11 +519,18 @@ pub const SysInfo = struct {
     }
 
     pub fn getGpuStats(self: *SysInfo, allocator: std.mem.Allocator) ![]GpuStats {
-        _ = self;
         var result: std.ArrayList(GpuStats) = .empty;
         errdefer result.deinit(allocator);
 
         try gpu_mod.appendAppleGpuStats(allocator, &result);
+        self.updatePowerSample();
+        if (self.last_power_reading) |last| {
+            if (last.gpu_watts > 0) {
+                for (result.items) |*gpu| {
+                    gpu.power_draw_w = @floatCast(last.gpu_watts);
+                }
+            }
+        }
 
         return result.toOwnedSlice(allocator);
     }

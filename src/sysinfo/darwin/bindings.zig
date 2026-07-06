@@ -284,3 +284,16 @@ pub const TH_STATE_STOPPED: i32 = 2;
 pub const TH_STATE_WAITING: i32 = 3;
 pub const TH_STATE_UNINTERRUPTIBLE: i32 = 4;
 pub const TH_STATE_HALTED: i32 = 5;
+
+pub const PowerReadingRaw = extern struct {
+    soc_watts: f64,
+    cpu_watts: f64,
+    gpu_watts: f64,
+    ane_watts: f64,
+    dram_watts: f64,
+    is_valid: i32,
+};
+
+pub extern "c" fn ztop_power_init() ?*anyopaque;
+pub extern "c" fn ztop_power_sample(handle: ?*anyopaque, elapsed_seconds: f64) PowerReadingRaw;
+pub extern "c" fn ztop_power_deinit(handle: ?*anyopaque) void;
