@@ -1,7 +1,9 @@
 const std = @import("std");
 const common = @import("sysinfo/common.zig");
+const config = @import("config.zig");
 
 pub const MAX_SNAPSHOTS: usize = 180; // ~3 min at 1s intervals
+
 pub const MAX_EVENTS: usize = 500;
 pub const MAX_SNAPSHOT_PROCS: usize = 32;
 pub const MAX_BIRTH_DEATH_PER_TICK: usize = 8;
@@ -242,7 +244,7 @@ pub const Timeline = struct {
 
     /// Detect events by comparing snap against previous state, then record them.
     /// Call this before recordSnapshot on each fetch tick.
-    pub fn detectAndRecordEvents(self: *Timeline, snap: *const SystemSnapshot, procs: []const common.ProcStats) void {
+    pub fn detectAndRecordEvents(self: *Timeline, snap: *const SystemSnapshot, procs: []const common.ProcStats, temp_unit: config.TemperatureUnit) void {
         const ts = snap.timestamp_ms;
 
         if (self.cpu_spike_cooldown > 0) self.cpu_spike_cooldown -= 1;
@@ -266,7 +268,7 @@ pub const Timeline = struct {
         // Thermal high (CPU >85°C)
         if (snap.thermal.cpu_temp) |temp| {
             if (temp >= 85.0 and self.thermal_cooldown == 0) {
-                self.appendEvent(makeEvent(.thermal_high, ts, 0, "CPU {d:.0}C", .{temp}));
+                self.appendEvent(makeEvent(.thermal_high, ts, 0, "CPU {d:.0}{s}", .{ temp_unit.format(temp), temp_unit.label() }));
                 self.thermal_cooldown = 10;
             }
         }

@@ -38,6 +38,7 @@ pub fn renderDiffView(
     width: u16,
     height: u16,
     diff: timeline_mod.SnapshotDiff,
+    temp_unit: config.TemperatureUnit,
 ) !void {
     if (width < 20 or height < 6) return;
 
@@ -148,22 +149,23 @@ pub fn renderDiffView(
         try app_tui.moveCursor(inner_x, row);
         try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Temp  ", .{});
         if (diff.temp_before) |tb| {
-            try app_tui.printStyled(.{ .fg = if (tb >= 85) theme.usage_critical else if (tb >= 70) theme.usage_warn else theme.text }, "{d:5.1}°C", .{tb});
+            try app_tui.printStyled(.{ .fg = if (tb >= 85) theme.usage_critical else if (tb >= 70) theme.usage_warn else theme.text }, "{d:5.1}{s}", .{ temp_unit.format(tb), temp_unit.suffix() });
         } else {
             try app_tui.printStyled(.{ .fg = theme.muted }, "  N/A  ", .{});
         }
         try app_tui.printStyled(.{ .fg = theme.muted }, " → ", .{});
         if (diff.temp_after) |ta| {
-            try app_tui.printStyled(.{ .fg = if (ta >= 85) theme.usage_critical else if (ta >= 70) theme.usage_warn else theme.text }, "{d:5.1}°C", .{ta});
+            try app_tui.printStyled(.{ .fg = if (ta >= 85) theme.usage_critical else if (ta >= 70) theme.usage_warn else theme.text }, "{d:5.1}{s}", .{ temp_unit.format(ta), temp_unit.suffix() });
             if (diff.temp_before) |tb| {
                 const temp_d = ta - tb;
                 try app_tui.printStyled(.{ .fg = theme.muted }, "  ", .{});
                 const temp_sign: []const u8 = if (temp_d >= 0) "+" else "-";
-                try app_tui.printStyled(.{ .fg = deltaColor(theme, ta, tb), .bold = true }, "{s} {s}{d:.1}°C", .{ deltaSign(ta, tb), temp_sign, @abs(temp_d) });
+                try app_tui.printStyled(.{ .fg = deltaColor(theme, ta, tb), .bold = true }, "{s} {s}{d:.1}{s}", .{ deltaSign(ta, tb), temp_sign, @abs(temp_unit.formatDelta(temp_d)), temp_unit.suffix() });
             }
         } else {
             try app_tui.printStyled(.{ .fg = theme.muted }, "  N/A  ", .{});
         }
+
         row += 1;
     }
 

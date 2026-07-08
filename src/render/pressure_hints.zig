@@ -55,6 +55,7 @@ pub const PressureHintsData = struct {
     disk_rate: u64 = 0,
     net_rate: u64 = 0,
     thermal: sysinfo.common.ThermalStats = .{},
+    temp_unit: config.TemperatureUnit = .celsius,
 };
 
 fn addHint(
@@ -299,8 +300,10 @@ fn detectThermalThrottle(data: *PressureHintsData, thermal: sysinfo.common.Therm
     var title_buf: [52]u8 = undefined;
     var detail_buf: [128]u8 = undefined;
     const sv: HintSeverity = if (temp >= 95.0) .critical else .warn;
-    const title = std.fmt.bufPrint(&title_buf, "Thermal throttle risk ({d:.0}°C)", .{temp}) catch "Thermal throttle";
-    const detail = std.fmt.bufPrint(&detail_buf, "CPU at {d:.0}°C with {d:.0}% utilization. Throttling may reduce throughput — check cooling.", .{ temp, cpu_pct }) catch "";
+    const formatted_temp = data.temp_unit.format(temp);
+    const suffix = data.temp_unit.suffix();
+    const title = std.fmt.bufPrint(&title_buf, "Thermal throttle risk ({d:.0}{s})", .{ formatted_temp, suffix }) catch "Thermal throttle";
+    const detail = std.fmt.bufPrint(&detail_buf, "CPU at {d:.0}{s} with {d:.0}% utilization. Throttling may reduce throughput — check cooling.", .{ formatted_temp, suffix, cpu_pct }) catch "";
     addHint(data, .thermal_throttle, sv, title, detail, 0, "");
 }
 
@@ -327,6 +330,7 @@ pub fn buildPressureHints(
     procs: []const sysinfo.ProcStats,
     connections: []const sysinfo.common.NetConnection,
     timeline: *const timeline_mod.Timeline,
+    temp_unit: config.TemperatureUnit,
 ) PressureHintsData {
     var data = PressureHintsData{
         .mem = mem,
@@ -335,6 +339,7 @@ pub fn buildPressureHints(
         .disk_rate = disk_rate,
         .net_rate = net_rate,
         .thermal = thermal,
+        .temp_unit = temp_unit,
     };
 
     detectSwapPatterns(&data, mem, procs, timeline);
@@ -428,7 +433,7 @@ pub fn renderPressureHintsView(
             if (data.thermal.cpu_temp) |temp| {
                 const tc: Tui.Color = if (temp >= 95.0) theme.usage_critical else if (temp >= 85.0) theme.usage_warn else theme.usage_good;
                 try app_tui.printStyled(.{ .fg = theme.muted }, "  ", .{});
-                try app_tui.printStyled(.{ .fg = tc }, "{d:.0}°C", .{temp});
+                try app_tui.printStyled(.{ .fg = tc }, "{d:.0}{s}", .{ data.temp_unit.format(temp), data.temp_unit.suffix() });
             }
         }
         cur_y += 1;

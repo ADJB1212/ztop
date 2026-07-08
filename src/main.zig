@@ -292,7 +292,7 @@ pub fn main(main_init: std.process.Init) !void {
                 .thermal = thermal,
                 .battery = battery,
             };
-            timeline.detectAndRecordEvents(&tl_snap, cached_procs);
+            timeline.detectAndRecordEvents(&tl_snap, cached_procs, app_config.temperature_unit);
             // Only grow ring when not scrubbing; scrub_offset is relative to
             // snap_count, so adding snapshots while scrubbing drifts the view.
             if (!is_scrubbing) {
@@ -410,7 +410,7 @@ pub fn main(main_init: std.process.Init) !void {
                 if (diff_active) {
                     if (timeline.computeDiff(diff_anchor.?, scrub_offset)) |snap_diff| {
                         const diff_box_height = size.height -| 2 -| 1 -| @as(u16, if (timeline_bar_active) 1 else 0);
-                        try render.renderDiffView(&app_tui, theme, 1, 2, size.width, diff_box_height, snap_diff);
+                        try render.renderDiffView(&app_tui, theme, 1, 2, size.width, diff_box_height, snap_diff, app_config.temperature_unit);
                     }
                 }
 
@@ -506,6 +506,7 @@ pub fn main(main_init: std.process.Init) !void {
                         display_thermal,
                         display_battery,
                         cached_gpus,
+                        app_config.temperature_unit,
                     );
                 } else if (current_tab == 4) {
                     try main_view.renderNetworkTotalsBox(
@@ -530,6 +531,7 @@ pub fn main(main_init: std.process.Init) !void {
                         cached_procs,
                         cached_connections,
                         timeline,
+                        app_config.temperature_unit,
                     );
                     try render.renderPressureHintsView(
                         &app_tui,

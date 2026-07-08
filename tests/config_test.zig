@@ -237,6 +237,25 @@ test "config parse enable_ai option" {
     try std.testing.expectEqual(false, parsed2.enable_ai);
 }
 
+test "config parse temperature_unit option and format calculations" {
+    const default_cfg = config.Config.defaults();
+    try std.testing.expectEqual(config.TemperatureUnit.celsius, default_cfg.temperature_unit);
+
+    const parsed_f = config.parse("temperature_unit = fahrenheit");
+    try std.testing.expectEqual(config.TemperatureUnit.fahrenheit, parsed_f.temperature_unit);
+
+    const parsed_f_alias = config.parse("unit = f");
+    try std.testing.expectEqual(config.TemperatureUnit.fahrenheit, parsed_f_alias.temperature_unit);
+
+    const parsed_k = config.parse("temp_unit = k");
+    try std.testing.expectEqual(config.TemperatureUnit.kelvin, parsed_k.temperature_unit);
+
+    // Verify conversions
+    try std.testing.expectEqual(@as(f32, 100.0), config.TemperatureUnit.celsius.format(100.0));
+    try std.testing.expectEqual(@as(f32, 212.0), config.TemperatureUnit.fahrenheit.format(100.0));
+    try std.testing.expectEqual(@as(f32, 373.15), config.TemperatureUnit.kelvin.format(100.0));
+}
+
 fn absoluteTmpPath(allocator: std.mem.Allocator, tmp: *const std.testing.TmpDir, sub_path: []const u8) ![]u8 {
     const cwd = try std.process.currentPathAlloc(std.testing.io, allocator);
     defer allocator.free(cwd);

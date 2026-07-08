@@ -28,6 +28,51 @@ pub const ThemeName = enum {
     }
 };
 
+pub const TemperatureUnit = enum {
+    celsius,
+    fahrenheit,
+    kelvin,
+
+    pub fn label(self: TemperatureUnit) []const u8 {
+        return switch (self) {
+            .celsius => "C",
+            .fahrenheit => "F",
+            .kelvin => "K",
+        };
+    }
+
+    pub fn suffix(self: TemperatureUnit) []const u8 {
+        return switch (self) {
+            .celsius => "°C",
+            .fahrenheit => "°F",
+            .kelvin => "K",
+        };
+    }
+
+    pub fn format(self: TemperatureUnit, celsius_val: f32) f32 {
+        return switch (self) {
+            .celsius => celsius_val,
+            .fahrenheit => celsius_val * 9.0 / 5.0 + 32.0,
+            .kelvin => celsius_val + 273.15,
+        };
+    }
+
+    pub fn formatDouble(self: TemperatureUnit, celsius_val: f64) f64 {
+        return switch (self) {
+            .celsius => celsius_val,
+            .fahrenheit => celsius_val * 9.0 / 5.0 + 32.0,
+            .kelvin => celsius_val + 273.15,
+        };
+    }
+
+    pub fn formatDelta(self: TemperatureUnit, celsius_delta: f32) f32 {
+        return switch (self) {
+            .celsius, .kelvin => celsius_delta,
+            .fahrenheit => celsius_delta * 9.0 / 5.0,
+        };
+    }
+};
+
 pub const Theme = struct {
     brand: tui.Tui.Color,
     text: tui.Tui.Color,
@@ -247,6 +292,7 @@ pub const Config = struct {
     disable_history: bool,
     persist_session: bool,
     enable_ai: bool,
+    temperature_unit: TemperatureUnit,
 
     pub fn defaults() Config {
         return .{
@@ -267,6 +313,7 @@ pub const Config = struct {
             .disable_history = false,
             .persist_session = false,
             .enable_ai = true,
+            .temperature_unit = .celsius,
         };
     }
 
@@ -613,6 +660,14 @@ fn applyEntry(config: *Config, raw_key: []const u8, raw_value: []const u8) !void
         return;
     }
 
+    if (std.mem.eql(u8, key, "temperature_unit") or
+        std.mem.eql(u8, key, "temp_unit") or
+        std.mem.eql(u8, key, "unit"))
+    {
+        config.temperature_unit = try parseTemperatureUnit(value);
+        return;
+    }
+
     if (std.mem.eql(u8, key, "update_interval_ms") or std.mem.eql(u8, key, "refresh_interval_ms")) {
         const interval_ms = try std.fmt.parseInt(u32, raw_value, 10);
         if (interval_ms < 100 or interval_ms > 10_000) return error.InvalidUpdateInterval;
@@ -789,6 +844,13 @@ fn parseThemeName(value: []const u8) !ThemeName {
     if (std.mem.eql(u8, value, "palenight") or std.mem.eql(u8, value, "pale_night")) return .palenight;
     if (std.mem.eql(u8, value, "colorblind")) return .colorblind;
     return error.UnknownTheme;
+}
+
+fn parseTemperatureUnit(value: []const u8) !TemperatureUnit {
+    if (std.mem.eql(u8, value, "c") or std.mem.eql(u8, value, "celsius")) return .celsius;
+    if (std.mem.eql(u8, value, "f") or std.mem.eql(u8, value, "fahrenheit")) return .fahrenheit;
+    if (std.mem.eql(u8, value, "k") or std.mem.eql(u8, value, "kelvin")) return .kelvin;
+    return error.UnknownTemperatureUnit;
 }
 
 fn parseSortBy(value: []const u8) !sysinfo.SortBy {

@@ -65,7 +65,7 @@ fn buildHints(
     tl: *const timeline_mod.Timeline,
 ) render.PressureHintsData {
     const thermal: sysinfo.common.ThermalStats = .{ .cpu_temp = thermal_temp };
-    return render.buildPressureHints(mem, mem_pct, cpu_pct, disk_rate, 0, thermal, procs, conns, tl);
+    return render.buildPressureHints(mem, mem_pct, cpu_pct, disk_rate, 0, thermal, procs, conns, tl, .celsius);
 }
 
 fn findPattern(data: render.PressureHintsData, pattern: render.PatternKind) ?render.PressureHint {
@@ -529,6 +529,7 @@ test "hint count never exceeds MAX_HINTS" {
         &procs,
         &conns,
         &tl,
+        .celsius,
     );
 
     try std.testing.expect(data.hint_count <= render.MAX_PRESSURE_HINTS);

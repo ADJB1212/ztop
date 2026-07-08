@@ -160,7 +160,7 @@ pub fn renderMemoryBox(app_tui: *Tui, theme: config.Theme, x: u16, y: u16, width
     }
 }
 
-pub fn renderSensorsTab(app_tui: *Tui, theme: config.Theme, cpu_box_x: u16, cpu_box_y: u16, cpu_box_width: u16, cpu_box_height: u16, gpu_box_x: u16, gpu_box_y: u16, gpu_box_width: u16, gpu_box_height: u16, thermal: sysinfo.ThermalStats, battery: sysinfo.BatteryStats, gpus: []const sysinfo.GpuStats) !void {
+pub fn renderSensorsTab(app_tui: *Tui, theme: config.Theme, cpu_box_x: u16, cpu_box_y: u16, cpu_box_width: u16, cpu_box_height: u16, gpu_box_x: u16, gpu_box_y: u16, gpu_box_width: u16, gpu_box_height: u16, thermal: sysinfo.ThermalStats, battery: sysinfo.BatteryStats, gpus: []const sysinfo.GpuStats, temp_unit: config.TemperatureUnit) !void {
     try app_tui.drawBoxStyled(
         cpu_box_x,
         cpu_box_y,
@@ -175,7 +175,7 @@ pub fn renderSensorsTab(app_tui: *Tui, theme: config.Theme, cpu_box_x: u16, cpu_
         try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 1);
         try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "CPU Temp: ", .{});
         if (thermal.cpu_temp) |t| {
-            try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} C", .{t});
+            try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} {s}", .{ temp_unit.format(t), temp_unit.label() });
         } else {
             try app_tui.printStyled(.{ .fg = theme.muted }, "N/A", .{});
         }
@@ -184,7 +184,7 @@ pub fn renderSensorsTab(app_tui: *Tui, theme: config.Theme, cpu_box_x: u16, cpu_
             try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 2);
             try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "GPU Temp: ", .{});
             if (aggregateGpuTemp(thermal, gpus)) |t| {
-                try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} C", .{t});
+                try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} {s}", .{ temp_unit.format(t), temp_unit.label() });
             } else {
                 try app_tui.printStyled(.{ .fg = theme.muted }, "N/A", .{});
             }
@@ -283,7 +283,7 @@ pub fn renderSensorsTab(app_tui: *Tui, theme: config.Theme, cpu_box_x: u16, cpu_
             if (gpu.temperature_c) |temp_c| {
                 if (wrote_detail) try app_tui.printStyled(.{ .fg = theme.muted }, "  ", .{});
                 try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Temp: ", .{});
-                try app_tui.printStyled(.{ .fg = theme.io_rate }, "{d:4.1} C", .{temp_c});
+                try app_tui.printStyled(.{ .fg = theme.io_rate }, "{d:4.1} {s}", .{ temp_unit.format(temp_c), temp_unit.label() });
                 wrote_detail = true;
             }
 

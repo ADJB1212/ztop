@@ -94,7 +94,7 @@ test "detectAndRecordEvents detects CPU spike" {
     var tl = Timeline.init();
 
     const snap = makeSnap(1000, 90.0);
-    tl.detectAndRecordEvents(&snap, &.{});
+    tl.detectAndRecordEvents(&snap, &.{}, .celsius);
 
     try std.testing.expect(tl.ev_count >= 1);
     const ev = tl.getEvent(0).?;
@@ -106,23 +106,24 @@ test "CPU spike cooldown prevents spam" {
 
     // First spike
     var snap = makeSnap(1000, 95.0);
-    tl.detectAndRecordEvents(&snap, &.{});
+    tl.detectAndRecordEvents(&snap, &.{}, .celsius);
     const count_after_first = tl.ev_count;
 
     // Immediate second spike — should be suppressed by cooldown
     snap = makeSnap(2000, 95.0);
-    tl.detectAndRecordEvents(&snap, &.{});
+    tl.detectAndRecordEvents(&snap, &.{}, .celsius);
     try std.testing.expectEqual(count_after_first, tl.ev_count);
 
     // After cooldown ticks (5)
     for (0..4) |i| {
         snap = makeSnap(@intCast(3000 + i * 1000), 50.0);
-        tl.detectAndRecordEvents(&snap, &.{});
+        tl.detectAndRecordEvents(&snap, &.{}, .celsius);
     }
 
     // Now another spike should register
     snap = makeSnap(8000, 92.0);
-    tl.detectAndRecordEvents(&snap, &.{});
+    tl.detectAndRecordEvents(&snap, &.{}, .celsius);
+
     try std.testing.expect(tl.ev_count > count_after_first);
 }
 
@@ -130,7 +131,7 @@ test "eventMaskInRange returns correct bitmask" {
     var tl = Timeline.init();
 
     const snap1 = makeSnap(1000, 95.0); // triggers cpu_spike
-    tl.detectAndRecordEvents(&snap1, &.{});
+    tl.detectAndRecordEvents(&snap1, &.{}, .celsius);
 
     const mask = tl.eventMaskInRange(500, 1500);
     const cpu_bit = @as(u8, 1) << @intFromEnum(timeline_mod.EventKind.cpu_spike);
@@ -145,7 +146,8 @@ test "getEventsNearSnapshot collects nearby events" {
     var tl = Timeline.init();
 
     const snap = makeSnap(1000, 95.0); // triggers cpu_spike at ts=1000
-    tl.detectAndRecordEvents(&snap, &.{});
+    tl.detectAndRecordEvents(&snap, &.{}, .celsius);
+
     tl.recordSnapshot(snap, &.{});
 
     var out: [8]timeline_mod.TimelineEvent = undefined;
@@ -165,7 +167,7 @@ test "birth/death detection finds new and exited processes" {
     procs1[1].pid = 20;
 
     var snap1 = makeSnap(1000, 10.0);
-    tl.detectAndRecordEvents(&snap1, procs1[0..]);
+    tl.detectAndRecordEvents(&snap1, procs1[0..], .celsius);
 
     // Second tick: PID 20 gone, PID 30 new
     var procs2: [2]common.ProcStats = undefined;
@@ -175,7 +177,7 @@ test "birth/death detection finds new and exited processes" {
     procs2[1].pid = 30;
 
     var snap2 = makeSnap(2000, 10.0);
-    tl.detectAndRecordEvents(&snap2, procs2[0..]);
+    tl.detectAndRecordEvents(&snap2, procs2[0..], .celsius);
 
     // Should have a death (PID 20) and a birth (PID 30)
     var found_death = false;
@@ -199,7 +201,7 @@ test "birth/death capped at MAX_BIRTH_DEATH_PER_TICK" {
         p.pid = @intCast(i + 1);
     }
     var snap1 = makeSnap(1000, 10.0);
-    tl.detectAndRecordEvents(&snap1, procs1[0..]);
+    tl.detectAndRecordEvents(&snap1, procs1[0..], .celsius);
 
     // New tick: entirely different PIDs (all old die, many new born)
     const new_count = timeline_mod.MAX_BIRTH_DEATH_PER_TICK + 10;
@@ -210,7 +212,7 @@ test "birth/death capped at MAX_BIRTH_DEATH_PER_TICK" {
     }
 
     var snap2 = makeSnap(2000, 10.0);
-    tl.detectAndRecordEvents(&snap2, procs2[0..new_count]);
+    tl.detectAndRecordEvents(&snap2, procs2[0..new_count], .celsius);
 
     // Count birth+death events at ts=2000
     var bd_count: usize = 0;
@@ -350,7 +352,8 @@ test "toBytes/fromBytes preserves events" {
     var tl = Timeline.init();
     // Drive a CPU spike event
     const snap = makeSnap(10_000, 95.0);
-    tl.detectAndRecordEvents(&snap, &.{});
+    tl.detectAndRecordEvents(&snap, &.{}, .celsius);
+
     try std.testing.expect(tl.ev_count >= 1);
 
     const bytes = try tl.toBytes(allocator);
