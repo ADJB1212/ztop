@@ -118,11 +118,23 @@ pub const c = struct {
     pub const IOHIDEventSystemClientRef = *anyopaque;
     pub const IOHIDServiceClientRef = *anyopaque;
     pub extern fn IOHIDEventSystemClientCreate(allocator: ?CFAllocatorRef) ?IOHIDEventSystemClientRef;
+    pub extern fn IOHIDEventSystemClientSetMatching(client: IOHIDEventSystemClientRef, matching: ?CFDictionaryRef) void;
     pub extern fn IOHIDEventSystemClientCopyServices(client: IOHIDEventSystemClientRef) ?CFArrayRef;
     pub extern fn IOHIDServiceClientCopyProperty(service: IOHIDServiceClientRef, property: CFStringRef) ?CFTypeRef;
     pub extern fn IOHIDServiceClientConformsTo(service: IOHIDServiceClientRef, usagePage: u32, usage: u32) i32;
     pub extern fn IOHIDServiceClientCopyEvent(service: IOHIDServiceClientRef, event_type: i64, options: i32, reserved: i64) ?*anyopaque;
     pub extern fn IOHIDEventGetFloatValue(event: *anyopaque, field: u32) f64;
+    pub extern fn CFNumberCreate(allocator: ?CFAllocatorRef, theType: CFNumberType, valuePtr: *const anyopaque) ?CFNumberRef;
+    pub extern fn CFDictionaryCreate(
+        allocator: ?CFAllocatorRef,
+        keys: ?*const CFTypeRef,
+        values: ?*const CFTypeRef,
+        numValues: CFIndex,
+        keyCallBacks: ?*const anyopaque,
+        valueCallBacks: ?*const anyopaque,
+    ) ?CFDictionaryRef;
+    pub extern const kCFTypeDictionaryKeyCallBacks: anyopaque;
+    pub extern const kCFTypeDictionaryValueCallBacks: anyopaque;
 };
 
 pub const mach_port_t = u32;
@@ -296,4 +308,5 @@ pub const PowerReadingRaw = extern struct {
 
 pub extern "c" fn ztop_power_init() ?*anyopaque;
 pub extern "c" fn ztop_power_sample(handle: ?*anyopaque, elapsed_seconds: f64) PowerReadingRaw;
+pub extern "c" fn ztop_smc_read_temperature(handle: ?*anyopaque, key: [*c]const u8) f64;
 pub extern "c" fn ztop_power_deinit(handle: ?*anyopaque) void;

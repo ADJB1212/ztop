@@ -88,10 +88,18 @@ test "getBatteryStats does not crash" {
     }
 }
 
-test "getThermalStats does not crash" {
+test "getThermalStats does not crash and respects valid bounds" {
     var si = darwin.SysInfo.init(std.testing.io);
     defer si.deinit();
-    _ = si.getThermalStats();
+    try std.testing.expect(si.hid_client != null);
+    const thermal = si.getThermalStats();
+    std.debug.print("CPU Temp: {any}, GPU Temp: {any}\n", .{ thermal.cpu_temp, thermal.gpu_temp });
+    if (thermal.cpu_temp) |c_temp| {
+        try std.testing.expect(c_temp > 5.0 and c_temp < 130.0);
+    }
+    if (thermal.gpu_temp) |g_temp| {
+        try std.testing.expect(g_temp > 5.0 and g_temp < 130.0);
+    }
 }
 
 test "power sampling init, sample, and deinit" {

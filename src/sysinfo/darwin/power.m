@@ -350,4 +350,15 @@ void ztop_power_deinit(void *handle) {
     free(state);
 }
 
+double ztop_smc_read_temperature(void *handle, const char *key) {
+    if (!handle || !key) return 0.0;
+    ztop_power_state_t *state = (ztop_power_state_t *)handle;
+    if (state->smc_conn == 0) return 0.0;
+    double val = 0.0;
+    if (smc_read_double(state->smc_conn, key, &val)) {
+        if (val > 5.0 && val < 130.0) return val;
+    }
+    return 0.0;
+}
+
 

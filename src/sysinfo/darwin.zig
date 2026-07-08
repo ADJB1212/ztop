@@ -82,6 +82,41 @@ fn IOHIDEventFieldBase(t: i64) u32 {
     return @intCast(t << 16);
 }
 
+fn createThermalHidClient() ?c.IOHIDEventSystemClientRef {
+    const client = c.IOHIDEventSystemClientCreate(null) orelse return null;
+
+    // kHIDPage_AppleVendor
+    var page: i32 = 0xff00;
+    // kHIDUsage_AppleVendor_TemperatureSensor
+    var usage: i32 = 5;
+
+    const page_key = c.CFStringCreateWithCString(null, "PrimaryUsagePage", c.kCFStringEncodingUTF8) orelse return client;
+    defer c.CFRelease(page_key);
+    const usage_key = c.CFStringCreateWithCString(null, "PrimaryUsage", c.kCFStringEncodingUTF8) orelse return client;
+    defer c.CFRelease(usage_key);
+
+    const page_val = c.CFNumberCreate(null, c.kCFNumberSInt32Type, @ptrCast(&page)) orelse return client;
+    defer c.CFRelease(page_val);
+    const usage_val = c.CFNumberCreate(null, c.kCFNumberSInt32Type, @ptrCast(&usage)) orelse return client;
+    defer c.CFRelease(usage_val);
+
+    const keys = [_]c.CFTypeRef{ page_key, usage_key };
+    const vals = [_]c.CFTypeRef{ page_val, usage_val };
+    if (c.CFDictionaryCreate(
+        null,
+        @ptrCast(&keys),
+        @ptrCast(&vals),
+        2,
+        &c.kCFTypeDictionaryKeyCallBacks,
+        &c.kCFTypeDictionaryValueCallBacks,
+    )) |matching| {
+        defer c.CFRelease(matching);
+        c.IOHIDEventSystemClientSetMatching(client, matching);
+    }
+
+    return client;
+}
+
 pub const SysInfo = struct {
     io: std.Io,
     prev_ticks: [4]u64 = .{ 0, 0, 0, 0 },
@@ -147,7 +182,7 @@ pub const SysInfo = struct {
             .prev_ms = now,
             .prev_disk_ms = now,
             .prev_net_ms = now,
-            .hid_client = c.IOHIDEventSystemClientCreate(null),
+            .hid_client = createThermalHidClient(),
             .power_handle = bindings.ztop_power_init(),
             .prev_power_ms = now,
         };
@@ -432,7 +467,7 @@ pub const SysInfo = struct {
             defer c.CFRelease(event);
 
             const val = c.IOHIDEventGetFloatValue(event, IOHIDEventFieldBase(kIOHIDEventTypeTemperature));
-            if (val <= 0) continue;
+            if (val <= 5.0 or val >= 140.0) continue;
 
             var name_buf: [64]u8 = undefined;
             var name: []const u8 = "";
@@ -444,21 +479,74 @@ pub const SysInfo = struct {
                 }
             }
 
-            // Apple Silicon HID thermal sensor naming:
-            //   "PMU tdie*"  = SoC die cluster temps (CPU E/P-core clusters)
-            //   "PMU tdev*"  = thermal device sensors (GPU/ANE proximity)
-            //   "PMU tcal"   = PMU calibration reference — NOT a component temp, excluded
-            //   "PMU TP*"    = temperature probes (ambient/board)
-            if (std.mem.indexOf(u8, name, "tdie") != null or
-                std.mem.indexOf(u8, name, "Soc Die") != null or
-                std.mem.indexOf(u8, name, "TD0P") != null)
+            var lower_buf: [64]u8 = undefined;
+            const len = @min(name.len, lower_buf.len);
+            for (0..len) |j| {
+                lower_buf[j] = std.ascii.toLower(name[j]);
+            }
+            const lower_name = lower_buf[0..len];
+
+            // Exclude PMU tcal / tCal calibration references
+            if (std.mem.indexOf(u8, lower_name, "tcal") != null) continue;
+
+            // Apple Silicon HID & SMC thermal sensor categorization
+            if (std.mem.indexOf(u8, lower_name, "battery") != null or
+                std.mem.indexOf(u8, lower_name, "gas gauge") != null or
+                std.mem.indexOf(u8, lower_name, "nand") != null or
+                std.mem.indexOf(u8, lower_name, "ssd") != null or
+                std.mem.indexOf(u8, lower_name, "flash") != null or
+                std.mem.indexOf(u8, lower_name, "dram") != null or
+                std.mem.indexOf(u8, lower_name, "ddr") != null or
+                std.mem.indexOf(u8, lower_name, "tm") != null or
+                std.mem.indexOf(u8, lower_name, "tb") != null)
             {
-                if (val > max_cpu_temp) max_cpu_temp = val;
-            } else if (std.mem.indexOf(u8, name, "tdev") != null or
-                std.mem.indexOf(u8, name, "GPU Die") != null or
-                std.mem.indexOf(u8, name, "TG0P") != null)
-            {
+                continue;
+            }
+
+            // GPU: "gpu", "tdev", "tg", "tf1", "tf2"
+            const is_gpu = std.mem.indexOf(u8, lower_name, "gpu") != null or
+                std.mem.indexOf(u8, lower_name, "tdev") != null or
+                std.mem.indexOf(u8, lower_name, "tg") != null or
+                std.mem.indexOf(u8, lower_name, "tf1") != null or
+                std.mem.indexOf(u8, lower_name, "tf2") != null;
+
+            // CPU/SoC: eacc, pacc, tdie, soc, e-core, p-core, tp, te, tf0, tf4, cpu, td0p, tc0p
+            const is_cpu = std.mem.indexOf(u8, lower_name, "eacc") != null or
+                std.mem.indexOf(u8, lower_name, "pacc") != null or
+                std.mem.indexOf(u8, lower_name, "tdie") != null or
+                std.mem.indexOf(u8, lower_name, "soc") != null or
+                std.mem.indexOf(u8, lower_name, "e-core") != null or
+                std.mem.indexOf(u8, lower_name, "p-core") != null or
+                std.mem.indexOf(u8, lower_name, "tp") != null or
+                std.mem.indexOf(u8, lower_name, "te") != null or
+                std.mem.indexOf(u8, lower_name, "tf0") != null or
+                std.mem.indexOf(u8, lower_name, "tf4") != null or
+                std.mem.indexOf(u8, lower_name, "cpu") != null or
+                std.mem.indexOf(u8, lower_name, "td0p") != null or
+                std.mem.indexOf(u8, lower_name, "tc0p") != null;
+
+            if (is_gpu) {
                 if (val > max_gpu_temp) max_gpu_temp = val;
+            } else if (is_cpu) {
+                if (val > max_cpu_temp) max_cpu_temp = val;
+            }
+        }
+
+        // SMC fallback
+        if (self.power_handle) |handle| {
+            if (max_cpu_temp == 0) {
+                const cpu_keys = [_][:0]const u8{ "Tp01", "Tp09", "Tp0D", "Te05", "Tf04", "TC0P" };
+                for (cpu_keys) |key| {
+                    const val = bindings.ztop_smc_read_temperature(handle, key.ptr);
+                    if (val > max_cpu_temp) max_cpu_temp = val;
+                }
+            }
+            if (max_gpu_temp == 0) {
+                const gpu_keys = [_][:0]const u8{ "Tg05", "Tg0D", "Tg0L", "Tg0f", "Tg0j", "Tg0G", "Tg0U", "Tf14", "TG0P", "TG0D" };
+                for (gpu_keys) |key| {
+                    const val = bindings.ztop_smc_read_temperature(handle, key.ptr);
+                    if (val > max_gpu_temp) max_gpu_temp = val;
+                }
             }
         }
 
