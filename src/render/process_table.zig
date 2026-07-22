@@ -12,14 +12,17 @@ pub const ProcessTableLayout = struct {
     count: usize = 0,
     name_width: usize = 0,
     dropped_count: usize = 0,
+    launch_path_extra: usize = 0,
 };
 
 pub const min_process_name_width: usize = 8;
+pub const default_process_name_width: usize = 20;
 
 pub fn processColumnWidth(column: ProcessColumn) usize {
     return switch (column) {
         .pid => 6,
         .ppid => 6,
+        .launch_path => 24,
         .state => 9,
         .cpu => 10,
         .mem => 10,
@@ -51,7 +54,16 @@ pub fn planProcessTableLayout(columns: ProcessColumns, available_width: usize) P
         @memcpy(layout.columns[0..layout.count], visible[0..layout.count]);
     }
 
-    layout.name_width = available_width -| fixed_width;
+    const remaining = available_width -| fixed_width;
+    const has_launch_path = std.mem.indexOfScalar(ProcessColumn, layout.columns[0..layout.count], .launch_path) != null;
+
+    if (has_launch_path and remaining > default_process_name_width) {
+        layout.name_width = default_process_name_width;
+        layout.launch_path_extra = remaining - default_process_name_width;
+    } else {
+        layout.name_width = remaining;
+    }
+
     return layout;
 }
 
@@ -111,7 +123,7 @@ pub fn renderProcessRow(
     var rendered_name = false;
     for (layout.columns[0..layout.count]) |column| {
         if (!rendered_name and switch (column) {
-            .state, .cpu, .mem, .threads, .disk_read, .disk_write, .wakeups => true,
+            .launch_path, .state, .cpu, .mem, .threads, .disk_read, .disk_write, .wakeups => true,
             .pid, .ppid => false,
         }) {
             try renderProcessNameCell(app_tui, name_style, layout.name_width, prefix, prefix_width, proc.name());
@@ -126,6 +138,12 @@ pub fn renderProcessRow(
             .ppid => {
                 const text = std.fmt.bufPrint(&buf, "{d}", .{proc.ppid}) catch "";
                 try util.writeAlignedCell(app_tui, ppid_style, processColumnWidth(.ppid), .right, text);
+            },
+            .launch_path => {
+                const style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.muted } else .{ .fg = theme.muted };
+                const launch = proc.launchCommand();
+                const text = if (launch.len > 0) launch else "-";
+                try util.writeAlignedCell(app_tui, style, processColumnWidth(.launch_path) + layout.launch_path_extra, .left, text);
             },
             .state => {
                 const style: Tui.Style = if (is_selected)

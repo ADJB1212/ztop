@@ -89,12 +89,13 @@ test "config parse supports launch command ignore substring list" {
 
 test "config parse supports process column selection" {
     const parsed = config.parse(
-        \\process_columns = pid, ppid, state, cpu, name
+        \\process_columns = pid, ppid, launch_path, state, cpu, name
         \\io_process_columns = disk_io, pid, mem
     );
 
     try std.testing.expectEqual(true, parsed.process_columns.pid);
     try std.testing.expectEqual(true, parsed.process_columns.ppid);
+    try std.testing.expectEqual(true, parsed.process_columns.launch_path);
     try std.testing.expectEqual(true, parsed.process_columns.state);
     try std.testing.expectEqual(true, parsed.process_columns.cpu);
     try std.testing.expectEqual(false, parsed.process_columns.mem);
@@ -105,6 +106,12 @@ test "config parse supports process column selection" {
     try std.testing.expectEqual(true, parsed.io_process_columns.disk_read);
     try std.testing.expectEqual(true, parsed.io_process_columns.disk_write);
     try std.testing.expectEqual(false, parsed.io_process_columns.cpu);
+}
+
+test "process columns keep launch path disabled by default" {
+    const defaults = config.Config.defaults();
+    try std.testing.expectEqual(false, defaults.process_columns.launch_path);
+    try std.testing.expectEqual(false, defaults.io_process_columns.launch_path);
 }
 
 test "config parse supports process column presets" {

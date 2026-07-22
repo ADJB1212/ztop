@@ -140,6 +140,7 @@ pub const ThemeOverrides = struct {
 pub const ProcessColumn = enum(u8) {
     pid,
     ppid,
+    launch_path,
     state,
     cpu,
     mem,
@@ -152,6 +153,7 @@ pub const ProcessColumn = enum(u8) {
         return switch (self) {
             .pid => "PID",
             .ppid => "PPID",
+            .launch_path => "Launch Path",
             .state => "State",
             .cpu => "CPU%",
             .mem => "MEM%",
@@ -166,6 +168,7 @@ pub const ProcessColumn = enum(u8) {
 pub const process_column_order = [_]ProcessColumn{
     .pid,
     .ppid,
+    .launch_path,
     .state,
     .cpu,
     .mem,
@@ -178,6 +181,7 @@ pub const process_column_order = [_]ProcessColumn{
 pub const ProcessColumns = struct {
     pid: bool = false,
     ppid: bool = false,
+    launch_path: bool = false,
     state: bool = false,
     cpu: bool = false,
     mem: bool = false,
@@ -207,6 +211,7 @@ pub const ProcessColumns = struct {
         return .{
             .pid = true,
             .ppid = true,
+            .launch_path = true,
             .state = true,
             .cpu = true,
             .mem = true,
@@ -225,6 +230,7 @@ pub const ProcessColumns = struct {
         return switch (column) {
             .pid => self.pid,
             .ppid => self.ppid,
+            .launch_path => self.launch_path,
             .state => self.state,
             .cpu => self.cpu,
             .mem => self.mem,
@@ -239,6 +245,7 @@ pub const ProcessColumns = struct {
         switch (column) {
             .pid => self.pid = visible,
             .ppid => self.ppid = visible,
+            .launch_path => self.launch_path = visible,
             .state => self.state = visible,
             .cpu => self.cpu = visible,
             .mem => self.mem = visible,
@@ -905,6 +912,7 @@ fn parseProcessColumns(value: []const u8, defaults: ProcessColumns) !ProcessColu
 
 fn parseProcessColumn(value: []const u8) !ProcessColumn {
     if (std.mem.eql(u8, value, "parent_pid")) return .ppid;
+    if (std.mem.eql(u8, value, "launch") or std.mem.eql(u8, value, "path") or std.mem.eql(u8, value, "launch_command")) return .launch_path;
     if (std.mem.eql(u8, value, "status")) return .state;
     if (std.mem.eql(u8, value, "cpu_percent")) return .cpu;
     if (std.mem.eql(u8, value, "memory") or std.mem.eql(u8, value, "memory_percent") or std.mem.eql(u8, value, "mem_percent")) return .mem;

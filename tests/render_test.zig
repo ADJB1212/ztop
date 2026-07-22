@@ -50,14 +50,26 @@ test "planProcessTableLayout keeps enabled columns when width allows" {
 test "planProcessTableLayout drops trailing columns to preserve name width" {
     const layout = render.planProcessTableLayout(config.ProcessColumns.all(), 40);
 
-    try std.testing.expectEqual(@as(usize, 4), layout.count);
-    try std.testing.expectEqual(@as(usize, 9), layout.name_width);
-    try std.testing.expectEqual(@as(usize, 5), layout.dropped_count);
+    try std.testing.expectEqual(@as(usize, 2), layout.count);
+    try std.testing.expectEqual(@as(usize, 28), layout.name_width);
+    try std.testing.expectEqual(@as(usize, 8), layout.dropped_count);
     try std.testing.expect(layout.name_width >= render.min_process_name_width);
     try std.testing.expectEqual(config.ProcessColumn.pid, layout.columns[0]);
     try std.testing.expectEqual(config.ProcessColumn.ppid, layout.columns[1]);
-    try std.testing.expectEqual(config.ProcessColumn.state, layout.columns[2]);
-    try std.testing.expectEqual(config.ProcessColumn.cpu, layout.columns[3]);
+}
+
+test "planProcessTableLayout gives launch_path extra width from leftover space" {
+    var columns = config.ProcessColumns.none();
+    columns.pid = true;
+    columns.launch_path = true;
+    columns.cpu = true;
+
+    const layout = render.planProcessTableLayout(columns, 80);
+
+    // fixed_width = pid(6) + launch_path(24) + cpu(10) = 40, remaining = 40
+    // remaining > default_process_name_width(20), so name gets 20 and launch_path gets the rest.
+    try std.testing.expectEqual(@as(usize, 20), layout.name_width);
+    try std.testing.expectEqual(@as(usize, 20), layout.launch_path_extra);
 }
 
 test "diskUsagePercent reports used out of total capacity" {

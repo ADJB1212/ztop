@@ -220,7 +220,7 @@ pub fn renderColumnPickerOverlay(
     picker_columns: config.ProcessColumns,
 ) !void {
     const picker_width = 45;
-    const picker_height = 15;
+    const picker_height: u16 = @intCast(@max(@as(usize, 15), config.process_column_order.len + 6));
     const picker_x = if (width > picker_width) (width - picker_width) / 2 else 1;
     const picker_y = if (height > picker_height) (height - picker_height) / 2 else 1;
     const picker_title = if (current_tab == 2) "I/O Columns" else "Process Columns";
@@ -246,7 +246,10 @@ pub fn renderColumnPickerOverlay(
     }
 
     try app_tui.moveCursor(picker_x + 2, picker_y + picker_height - 2);
-    var picker_help_buf: [64]u8 = undefined;
-    const picker_help = std.fmt.bufPrint(&picker_help_buf, "Press 1-{d} to toggle, Enter/Esc to close", .{config.process_column_order.len}) catch "Press number to toggle, Enter/Esc to close";
+    var picker_help_buf: [80]u8 = undefined;
+    const picker_help = if (config.process_column_order.len <= 9)
+        std.fmt.bufPrint(&picker_help_buf, "Press 1-{d} to toggle, Enter/Esc to close", .{config.process_column_order.len}) catch "Press number to toggle, Enter/Esc to close"
+    else
+        "Press 1-9,0 to toggle, Enter/Esc to close";
     try app_tui.printStyled(.{ .fg = theme.muted }, "{s}", .{picker_help});
 }

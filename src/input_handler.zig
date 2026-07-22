@@ -205,10 +205,15 @@ fn handleColumnPickerToken(ctx: *Context, token: Tui.InputToken) bool {
                 return true;
             }
 
-            const max_column_digit: u8 = @as(u8, @intCast('0' + config.process_column_order.len));
-            if (ch < '1' or ch > max_column_digit) return false;
+            const column_idx: usize = if (ch >= '1' and ch <= '9')
+                @as(usize, ch - '1')
+            else if (ch == '0' and config.process_column_order.len >= 10)
+                9
+            else
+                return false;
+            if (column_idx >= config.process_column_order.len) return false;
 
-            const column = config.process_column_order[@as(usize, ch - '1')];
+            const column = config.process_column_order[column_idx];
             const visible = activeColumns(ctx).toggle(column);
             render.setStatus(
                 ctx.status_buf,

@@ -682,15 +682,11 @@ pub const SysInfo = struct {
                 };
             }
 
-            var nbuf: [64]u8 = std.mem.zeroes([64]u8);
-            const name_ret = bindings.proc_name(raw_pid, &nbuf, 64);
-            const name_len: u8 = if (name_ret > 0) @intCast(@min(@as(usize, @intCast(name_ret)), 63)) else 0;
-            if (name_len == 0) continue;
-
             const cpu_total = task_info.pti_total_user +| task_info.pti_total_system;
 
             var rusage: rusage_info_v2 = undefined;
             const ru_ret = bindings.proc_pidinfo(raw_pid, PROC_PIDRUSAGE, 0, @ptrCast(&rusage), @sizeOf(rusage_info_v2));
+            const proc_start_abstime: u64 = if (ru_ret > 0) rusage.ri_proc_start_abstime else 0;
             const disk_read = if (ru_ret > 0) rusage.ri_diskio_bytesread else 0;
             const disk_write = if (ru_ret > 0) rusage.ri_diskio_byteswritten else 0;
             const wakeups_total = if (ru_ret > 0) rusage.ri_pkg_idle_wkups +| rusage.ri_interrupt_wkups else 0;
@@ -701,6 +697,8 @@ pub const SysInfo = struct {
             var disk_write_ps: u64 = 0;
             var wakeups_ps: u64 = 0;
             var context_switches_ps: u64 = 0;
+            var name_buf: [64]u8 = std.mem.zeroes([64]u8);
+            var name_len: u8 = 0;
 
             var launch_cmd_buf: [256]u8 = std.mem.zeroes([256]u8);
             var launch_cmd_len: u16 = 0;
@@ -708,25 +706,43 @@ pub const SysInfo = struct {
             const prev_entry = self.findPrevProcEntry(pid);
 
             if (prev_entry) |prev| {
-                if (wall_delta_ns > 0) {
-                    if (cpu_total >= prev.cpu_total) {
-                        const delta_cpu = cpu_total - prev.cpu_total;
-                        cpu_percent = @as(f32, @floatFromInt(delta_cpu)) / @as(f32, @floatFromInt(wall_delta_ns)) * 100.0;
+                const same_process = prev.proc_start_abstime == 0 or proc_start_abstime == 0 or prev.proc_start_abstime == proc_start_abstime;
+                if (same_process) {
+                    if (wall_delta_ns > 0) {
+                        if (cpu_total >= prev.cpu_total) {
+                            const delta_cpu = cpu_total - prev.cpu_total;
+                            cpu_percent = @as(f32, @floatFromInt(delta_cpu)) / @as(f32, @floatFromInt(wall_delta_ns)) * 100.0;
+                        }
                     }
+                    if (elapsed_ms > 0) {
+                        const d_read = disk_read -| prev.disk_read;
+                        const d_write = disk_write -| prev.disk_write;
+                        disk_read_ps = (d_read *| 1000) / @as(u64, @intCast(elapsed_ms));
+                        disk_write_ps = (d_write *| 1000) / @as(u64, @intCast(elapsed_ms));
+                        const d_wakeups = wakeups_total -| prev.wakeups;
+                        const d_csw = context_switches_total -| prev.context_switches;
+                        wakeups_ps = (d_wakeups *| 1000) / @as(u64, @intCast(elapsed_ms));
+                        context_switches_ps = (d_csw *| 1000) / @as(u64, @intCast(elapsed_ms));
+                    }
+                    @memcpy(name_buf[0..prev.name_len], prev.name_buf[0..prev.name_len]);
+                    name_len = prev.name_len;
+                    @memcpy(launch_cmd_buf[0..prev.launch_cmd_len], prev.launch_cmd_buf[0..prev.launch_cmd_len]);
+                    launch_cmd_len = prev.launch_cmd_len;
                 }
-                if (elapsed_ms > 0) {
-                    const d_read = disk_read -| prev.disk_read;
-                    const d_write = disk_write -| prev.disk_write;
-                    disk_read_ps = (d_read *| 1000) / @as(u64, @intCast(elapsed_ms));
-                    disk_write_ps = (d_write *| 1000) / @as(u64, @intCast(elapsed_ms));
-                    const d_wakeups = wakeups_total -| prev.wakeups;
-                    const d_csw = context_switches_total -| prev.context_switches;
-                    wakeups_ps = (d_wakeups *| 1000) / @as(u64, @intCast(elapsed_ms));
-                    context_switches_ps = (d_csw *| 1000) / @as(u64, @intCast(elapsed_ms));
-                }
-                @memcpy(launch_cmd_buf[0..prev.launch_cmd_len], prev.launch_cmd_buf[0..prev.launch_cmd_len]);
-                launch_cmd_len = prev.launch_cmd_len;
             }
+
+            if (name_len == 0) {
+                const name_ret = bindings.proc_name(raw_pid, &name_buf, 64);
+                name_len = if (name_ret > 0) @intCast(@min(@as(usize, @intCast(name_ret)), 63)) else 0;
+            }
+            if (name_len == 0 and bsd_ret > 0) {
+                const fallback_name_len = std.mem.indexOfScalar(u8, &bsd_info.pbsi_comm, 0) orelse bsd_info.pbsi_comm.len;
+                name_len = @intCast(@min(fallback_name_len, 63));
+                if (name_len > 0) {
+                    @memcpy(name_buf[0..name_len], bsd_info.pbsi_comm[0..name_len]);
+                }
+            }
+            if (name_len == 0) continue;
 
             if (launch_cmd_len == 0) {
                 const launch_cmd = process_mod.readLaunchCommand(raw_pid, &launch_cmd_buf) catch &[_]u8{};
@@ -736,11 +752,14 @@ pub const SysInfo = struct {
             if (new_proc_count < MAX_PROCS) {
                 new_procs[new_proc_count] = .{
                     .pid = pid,
+                    .proc_start_abstime = proc_start_abstime,
                     .cpu_total = cpu_total,
                     .disk_read = disk_read,
                     .disk_write = disk_write,
                     .wakeups = wakeups_total,
                     .context_switches = context_switches_total,
+                    .name_buf = name_buf,
+                    .name_len = name_len,
                     .launch_cmd_buf = launch_cmd_buf,
                     .launch_cmd_len = launch_cmd_len,
                 };
@@ -767,7 +786,7 @@ pub const SysInfo = struct {
                 .name_len = name_len,
                 .state = state,
             };
-            @memcpy(out_buf[proc_count].name_buf[0..name_len], nbuf[0..name_len]);
+            @memcpy(out_buf[proc_count].name_buf[0..name_len], name_buf[0..name_len]);
             @memcpy(out_buf[proc_count].launch_cmd_buf[0..launch_cmd_len], launch_cmd_buf[0..launch_cmd_len]);
             out_buf[proc_count].launch_cmd_len = launch_cmd_len;
 
