@@ -30,7 +30,7 @@ pub const TabRegion = struct {
 };
 
 pub const MouseRegions = struct {
-    tabs: [4]TabRegion = undefined,
+    tabs: [5]TabRegion = undefined,
     tab_count: usize = 0,
     list_rect: Rect = .{},
 
@@ -548,7 +548,7 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
                 return true;
             },
 
-            'l' => {
+            'f' => {
                 if (!ctx.thread_view.* and !ctx.causality_view.* and !ctx.lifeline_view.* and !ctx.pipeline_view.* and !ctx.is_scrubbing.* and ctx.filtered_count.* > 0) {
                     if (ctx.is_following.*) {
                         ctx.is_following.* = false;

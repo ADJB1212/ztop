@@ -90,7 +90,7 @@ ztop [--version]
 | `v`                     | Toggle tree view (process hierarchy)                                       |
 | `/`                     | Filter processes by name or PID                                            |
 | `:`                     | Open command mode                                                          |
-| `l`                     | Follow selected process (lock view to it as it moves)                      |
+| `f`                     | Follow selected process (lock view to it as it moves)                      |
 | `L`                     | Process lifeline view for selected process (timeline of events)            |
 | `P`                     | Build/test pipeline lens (groups build processes by orchestrator)          |
 | `g`                     | Resource causality graph for selected process (children + connections)     |

@@ -23,7 +23,7 @@ const help_items = [_]HelpItem{
     .{ .key = "K", .description = "Send SIGKILL to selected" },
     .{ .key = "g", .description = "Resource causality graph" },
     .{ .key = "u", .description = "Wakeup attribution sort" },
-    .{ .key = "l", .description = "Follow selected process" },
+    .{ .key = "f", .description = "Follow selected process" },
     .{ .key = "T", .description = "Timeline scrub (←→ step, [] jump)" },
     .{ .key = "b/B, {}/{}", .description = "Bookmark add/del, jump prev/next" },
     .{ .key = "d", .description = "Diff view (compare two moments)" },
