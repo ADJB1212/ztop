@@ -129,12 +129,23 @@ pub fn renderPipelineLensView(
 
             const is_last_child = ci + 1 == g.child_count;
             const branch = if (is_last_child) "└─ " else "├─ ";
+            const stage_color = stageColor(theme, stage);
+            const child_style: Tui.Style = .{ .fg = stage_color };
+            const pill_label = stage.label();
+            const pill_width: usize = pill_label.len + 2;
+            const branch_width: usize = 3;
 
-            var label_buf: [96]u8 = undefined;
-            const row_label = std.fmt.bufPrint(&label_buf, "{s}[{s}] {s}", .{ branch, stage.label(), child_name }) catch child_name;
-
-            const child_style: Tui.Style = .{ .fg = stageColor(theme, stage) };
-            try util.writeAlignedCell(app_tui, child_style, name_w, .left, row_label);
+            if (name_w >= branch_width + pill_width + 4) {
+                try app_tui.printStyled(child_style, "{s}", .{branch});
+                _ = try util.writePill(app_tui, .{ .bg = stage_color, .fg = theme.selection_fg, .bold = true }, pill_label);
+                try app_tui.bufWrite(" ");
+                const name_avail = name_w -| (branch_width + pill_width + 1);
+                try util.writeAlignedCell(app_tui, child_style, name_avail, .left, child_name);
+            } else {
+                var label_buf: [96]u8 = undefined;
+                const row_label = std.fmt.bufPrint(&label_buf, "{s}[{s}] {s}", .{ branch, pill_label, child_name }) catch child_name;
+                try util.writeAlignedCell(app_tui, child_style, name_w, .left, row_label);
+            }
             try renderStats(app_tui, theme, child_cpu, child_mem, child_disk, cpu_w, mem_w, disk_w);
         }
 

@@ -364,11 +364,14 @@ fn severityColor(theme: config.Theme, severity: HintSeverity) Tui.Color {
 
 fn severityLabel(severity: HintSeverity) []const u8 {
     return switch (severity) {
-        .critical => "!!",
-        .warn => "! ",
-        .info => "i ",
+        .critical => "CRIT",
+        .warn => "WARN",
+        .info => "INFO",
     };
 }
+
+/// Width of the filled severity chip plus its trailing gap before the title.
+const severity_chip_width: u16 = 7;
 
 /// Render the Pressure Root-Cause Hints view.
 pub fn renderPressureHintsView(
@@ -472,24 +475,23 @@ pub fn renderPressureHintsView(
         if (cur_y >= y + height - 1) break;
 
         const sev_col = severityColor(theme, hint.severity);
-        const sev_str = severityLabel(hint.severity);
 
         try app_tui.moveCursor(inner_x, cur_y);
-        try app_tui.printStyled(.{ .fg = sev_col, .bold = true }, "{s}", .{sev_str});
+        _ = try util.writePill(app_tui, .{ .bg = sev_col, .fg = theme.selection_fg, .bold = true }, severityLabel(hint.severity));
         try app_tui.bufWrite(" ");
 
         // Title — clip to available width
         const title = hint.titleSlice();
-        const title_avail = inner_width -| 5;
+        const title_avail = inner_width -| (severity_chip_width + 2);
         const title_clip = @min(title.len, title_avail);
         try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "{s}", .{title[0..title_clip]});
 
         if (use_expanded) {
             cur_y += 1;
             if (cur_y < y + height - 1) {
-                try app_tui.moveCursor(inner_x + 3, cur_y);
+                try app_tui.moveCursor(inner_x + severity_chip_width, cur_y);
                 const detail = hint.detailSlice();
-                const detail_clip = @min(detail.len, inner_width -| 3);
+                const detail_clip = @min(detail.len, inner_width -| severity_chip_width);
                 try app_tui.printStyled(.{ .fg = theme.muted }, "{s}", .{detail[0..detail_clip]});
 
                 // Append culprit inline if it fits
@@ -497,7 +499,7 @@ pub fn renderPressureHintsView(
                     const cname = hint.culpritNameSlice();
                     var culprit_buf: [48]u8 = undefined;
                     const culprit_str = std.fmt.bufPrint(&culprit_buf, "  → {s} [{d}]", .{ cname, hint.culprit_pid }) catch "";
-                    const used = inner_x + 3 + detail_clip;
+                    const used = inner_x + severity_chip_width + detail_clip;
                     const remaining = (x + width -| 2) -| used;
                     if (remaining >= culprit_str.len) {
                         try app_tui.printStyled(.{ .fg = theme.process_title }, "{s}", .{culprit_str});
@@ -516,7 +518,7 @@ pub fn renderPressureHintsView(
             // Compact: show culprit inline on title row
             if (hint.culprit_pid > 0) {
                 const cname = hint.culpritNameSlice();
-                const used_cols: usize = 3 + title_clip;
+                const used_cols: usize = severity_chip_width + title_clip;
                 const avail_cols = inner_width -| used_cols;
                 if (avail_cols > 8) {
                     var tag_buf: [40]u8 = undefined;

@@ -5,6 +5,14 @@ const config = @import("../config.zig");
 const util = @import("util.zig");
 const Tui = tui.Tui;
 
+fn writeProtoPill(app_tui: *Tui, style: Tui.Style, label: []const u8) !void {
+    const written = try util.writePill(app_tui, style, label);
+    const total: usize = 6;
+    if (written < total) {
+        for (0..total - written) |_| try app_tui.bufWrite(" ");
+    }
+}
+
 /// Render the Resource Causality Graph view for a selected process.
 /// Shows child processes, network connections, and resource summary with meters.
 pub fn renderCausalityGraph(
@@ -146,8 +154,7 @@ pub fn renderCausalityGraph(
                 .udp, .udp6 => theme.io_rate,
                 else => theme.muted,
             };
-            try app_tui.printStyled(.{ .fg = proto_color, .bold = true }, "{s:<4}", .{@tagName(conn.protocol)});
-            try app_tui.writeStyled(.{}, " ");
+            try writeProtoPill(app_tui, .{ .bg = proto_color, .fg = theme.selection_fg, .bold = true }, @tagName(conn.protocol));
 
             // Local address:port
             const local_str = std.mem.sliceTo(&conn.local_addr, 0);
@@ -172,7 +179,8 @@ pub fn renderCausalityGraph(
                         .time_wait, .close_wait => theme.usage_warn,
                         else => theme.muted,
                     };
-                    try app_tui.printStyled(.{ .fg = state_color, .dim = true }, " {s}", .{state_str});
+                    try app_tui.bufWrite(" ");
+                    _ = try util.writePill(app_tui, .{ .bg = state_color, .fg = theme.selection_fg }, state_str);
                 }
             }
 

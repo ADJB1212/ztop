@@ -166,7 +166,7 @@ fn renderTopologyHeaderLine(app_tui: *Tui, theme: config.Theme, column_width: u1
     const visible_label = label[0..@min(label.len, available_label)];
 
     try app_tui.printStyled(.{ .fg = theme.muted }, "╺", .{});
-    _ = try util.writeChip(
+    _ = try util.writePill(
         app_tui,
         .{
             .fg = theme.selection_fg,
