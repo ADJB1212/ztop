@@ -113,6 +113,19 @@ pub fn writeChip(app_tui: *Tui, style: Tui.Style, label: []const u8) !usize {
     return label.len + 2;
 }
 
+/// A filled badge/chip (status pill)
+pub fn writePill(app_tui: *Tui, style: Tui.Style, label: []const u8) !usize {
+    if (app_tui.hasNerdFonts()) {
+        if (style.bg) |bg| {
+            try app_tui.printStyled(.{ .fg = bg }, "\u{e0b6}", .{});
+            try app_tui.printStyled(style, " {s} ", .{label});
+            try app_tui.printStyled(.{ .fg = bg }, "\u{e0b4}", .{});
+            return label.len + 4;
+        }
+    }
+    return writeChip(app_tui, style, label);
+}
+
 const meter_blocks = [_][]const u8{ " ", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█" };
 
 pub fn renderMeter(
@@ -139,7 +152,7 @@ pub fn renderMeter(
         } else if (idx == full_blocks and partial_block > 0) {
             try app_tui.writeStyled(fill_style, meter_blocks[partial_block]);
         } else {
-            try app_tui.writeStyled(empty_style, "░");
+            try app_tui.writeStyled(empty_style, "─");
         }
     }
 }

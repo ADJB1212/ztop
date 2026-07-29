@@ -2,6 +2,7 @@ const std = @import("std");
 const config = @import("../config.zig");
 const timeline_mod = @import("../timeline.zig");
 const tui = @import("../tui.zig");
+const util = @import("util.zig");
 
 const Tui = tui.Tui;
 
@@ -21,25 +22,29 @@ pub const FooterState = struct {
     scrub_offset: usize,
 };
 
+/// Renders a single key-hint as a small filled badge
+fn key(app_tui: *Tui, theme: config.Theme, label: []const u8) !void {
+    _ = try util.writePill(app_tui, .{ .bg = theme.border, .fg = theme.text, .bold = true }, label);
+}
+
+fn modeBadge(app_tui: *Tui, theme: config.Theme, label: []const u8) !void {
+    _ = try util.writePill(app_tui, .{ .bg = theme.usage_warn, .fg = theme.selection_fg, .bold = true }, label);
+}
+
 pub fn renderFooter(app_tui: *Tui, theme: config.Theme, width: u16, height: u16, state: FooterState) !void {
     _ = width;
 
     try app_tui.moveCursor(1, height);
     if (state.diff_active) {
-        try app_tui.writeStyled(
-            .{ .fg = theme.usage_warn, .bold = true },
-            if (app_tui.hasNerdFonts()) "󰛿 DIFF  " else "◆ DIFF  ",
-        );
-        try app_tui.printStyled(.{ .fg = theme.muted }, "←/→ move compare point  ", .{});
-        try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "d", .{});
+        try modeBadge(app_tui, theme, if (app_tui.hasNerdFonts()) "󰛿 DIFF" else "◆ DIFF");
+        try app_tui.printStyled(.{ .fg = theme.muted }, "  ←/→ move compare point  ", .{});
+        try key(app_tui, theme, "d");
         try app_tui.printStyled(.{ .fg = theme.muted }, "/", .{});
-        try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "Esc", .{});
+        try key(app_tui, theme, "Esc");
         try app_tui.printStyled(.{ .fg = theme.muted }, " close diff", .{});
     } else if (state.is_scrubbing) {
-        try app_tui.writeStyled(
-            .{ .fg = theme.usage_warn, .bold = true },
-            if (app_tui.hasNerdFonts()) "󱊓 SCRUB  " else "◀◀ SCRUB  ",
-        );
+        try modeBadge(app_tui, theme, if (app_tui.hasNerdFonts()) "󱊓 SCRUB" else "◀◀ SCRUB");
+        try app_tui.bufWrite("  ");
 
         var ev_out: [4]timeline_mod.TimelineEvent = undefined;
         const ev_n = state.timeline.getEventsNearSnapshot(state.scrub_offset, &ev_out);
@@ -54,20 +59,20 @@ pub fn renderFooter(app_tui: *Tui, theme: config.Theme, width: u16, height: u16,
             }
         } else {
             try app_tui.printStyled(.{ .fg = theme.muted }, "←/→ scrub  [/] fast  ", .{});
-            try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "b", .{});
+            try key(app_tui, theme, "b");
             try app_tui.printStyled(.{ .fg = theme.muted }, " mark  ", .{});
             if (state.timeline.bookmark_count > 0) {
-                try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "B", .{});
+                try key(app_tui, theme, "B");
                 try app_tui.printStyled(.{ .fg = theme.muted }, " del  ", .{});
-                try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "{{}}", .{});
+                try key(app_tui, theme, "{}");
                 try app_tui.printStyled(.{ .fg = theme.muted }, " jump  ", .{});
             }
         }
-        try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "d", .{});
+        try key(app_tui, theme, "d");
         try app_tui.printStyled(.{ .fg = theme.muted }, " diff  ", .{});
-        try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "T", .{});
+        try key(app_tui, theme, "T");
         try app_tui.printStyled(.{ .fg = theme.muted }, "/", .{});
-        try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "Esc", .{});
+        try key(app_tui, theme, "Esc");
         try app_tui.printStyled(.{ .fg = theme.muted }, " resume", .{});
     } else if (state.is_cmd_mode) {
         try app_tui.printStyled(.{ .fg = theme.command_prompt, .bold = true }, ":", .{});
@@ -81,36 +86,35 @@ pub fn renderFooter(app_tui: *Tui, theme: config.Theme, width: u16, height: u16,
         try app_tui.printStyled(.{ .fg = theme.muted }, "Process columns: ", .{});
         var picker_range_buf: [16]u8 = undefined;
         const picker_range = std.fmt.bufPrint(&picker_range_buf, "1-{d}", .{config.process_column_order.len}) catch "1-n";
-        try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "{s}", .{picker_range});
+        try key(app_tui, theme, picker_range);
         try app_tui.printStyled(.{ .fg = theme.muted }, " toggle, ", .{});
-        try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "Enter/Esc", .{});
+        try key(app_tui, theme, "Enter/Esc");
         try app_tui.printStyled(.{ .fg = theme.muted }, " close", .{});
     } else if (state.filter.len > 0) {
         try app_tui.printStyled(.{ .fg = theme.filter_prompt, .bold = true }, "Filter active: ", .{});
         try app_tui.printStyled(.{ .fg = theme.text }, "{s}", .{state.filter});
-        try app_tui.printStyled(.{ .fg = theme.muted }, " (Press / to edit, Esc to clear) | ", .{});
-        try app_tui.printStyled(.{ .fg = theme.muted }, "Press ", .{});
-        try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "'?'", .{});
+        try app_tui.printStyled(.{ .fg = theme.muted }, " (Press / to edit, Esc to clear) | Press ", .{});
+        try key(app_tui, theme, "?");
         try app_tui.printStyled(.{ .fg = theme.muted }, " for help", .{});
     } else if (state.thread_view) {
         try app_tui.printStyled(.{ .fg = theme.muted }, "Viewing threads of ", .{});
         try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "{s}", .{state.thread_view_name});
         try app_tui.printStyled(.{ .fg = theme.muted }, " | Press ", .{});
-        try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "Esc", .{});
+        try key(app_tui, theme, "Esc");
         try app_tui.printStyled(.{ .fg = theme.muted }, " to go back", .{});
     } else if (state.status.len > 0) {
         try app_tui.printStyled(.{ .fg = theme.muted }, "{s}", .{state.status});
     } else if (state.dropped_column_count > 0) {
         try app_tui.printStyled(.{ .fg = theme.muted }, "{d} column(s) hidden by width | Press ", .{state.dropped_column_count});
-        try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "'C'", .{});
+        try key(app_tui, theme, "C");
         try app_tui.printStyled(.{ .fg = theme.muted }, " to adjust", .{});
     } else {
         try app_tui.printStyled(.{ .fg = theme.muted }, "Press ", .{});
-        try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "'?'", .{});
+        try key(app_tui, theme, "?");
         try app_tui.printStyled(.{ .fg = theme.muted }, " for help, ", .{});
-        try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "'C'", .{});
+        try key(app_tui, theme, "C");
         try app_tui.printStyled(.{ .fg = theme.muted }, " for columns, ", .{});
-        try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "'q'", .{});
+        try key(app_tui, theme, "q");
         try app_tui.printStyled(.{ .fg = theme.muted }, " to quit", .{});
     }
 }
