@@ -60,6 +60,25 @@ pub fn activeProcessColumns(current_tab: u8, process_columns: *config.ProcessCol
     return process_columns;
 }
 
+const TabDef = struct {
+    tab: u8,
+    label: []const u8,
+    icon: []const u8,
+};
+
+const tab_defs = [_]TabDef{
+    .{ .tab = 1, .label = "MAIN", .icon = "\u{f4bc} " },
+    .{ .tab = 2, .label = "I/O", .icon = "\u{f0655} " },
+    .{ .tab = 3, .label = "SENSORS", .icon = "\u{f2c9} " },
+    .{ .tab = 4, .label = "NETWORK", .icon = "\u{f0200} " },
+    .{ .tab = 5, .label = "DIAGNOSTICS", .icon = "\u{f0b1} " },
+};
+
+fn tabLabel(app_tui: *Tui, def: TabDef, buf: []u8) []const u8 {
+    if (!app_tui.hasNerdFonts()) return def.label;
+    return std.fmt.bufPrint(buf, "{s}{s}", .{ def.icon, def.label }) catch def.label;
+}
+
 pub fn renderHeader(
     app_tui: *Tui,
     theme: config.Theme,
@@ -75,66 +94,42 @@ pub fn renderHeader(
     try app_tui.printStyled(.{ .fg = theme.brand, .bold = true }, " ztop ", .{});
     try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "- {s} {s} {s} - {s}", .{ sysname, release, machine, nodename });
 
-    const tab1_label = if (app_tui.hasNerdFonts()) "[1]  Main" else "[1] Main";
-    const tab2_label = if (app_tui.hasNerdFonts()) "[2] 󰕒 I/O" else "[2] I/O";
-    const tab3_label = if (app_tui.hasNerdFonts()) "[3]  Sensors" else "[3] Sensors";
-    const tab4_label = if (app_tui.hasNerdFonts()) "[4] 󰈀 Network" else "[4] Network";
-    const tab5_label = if (app_tui.hasNerdFonts()) "[5] \u{f0b1} Diagnostics" else "[5] Diagnostics";
-    const tab1_w = displayWidth(tab1_label);
-    const tab2_w = displayWidth(tab2_label);
-    const tab3_w = displayWidth(tab3_label);
-    const tab4_w = displayWidth(tab4_label);
-    const tab5_w = displayWidth(tab5_label);
-    const gap: u16 = 2;
-    const tabs_width = tab1_w + tab2_w + tab3_w + tab4_w + tab5_w + @as(usize, gap) * 4;
+    const gap: u16 = 1;
+    var label_bufs: [tab_defs.len][32]u8 = undefined;
+    var labels: [tab_defs.len][]const u8 = undefined;
+    var chip_widths: [tab_defs.len]u16 = undefined;
+    var tabs_width: usize = 0;
+
+    for (tab_defs, 0..) |def, i| {
+        labels[i] = tabLabel(app_tui, def, &label_bufs[i]);
+        // Active tabs render as rounded pills
+        const is_active = current_tab == def.tab;
+        const extra: u16 = if (is_active and app_tui.hasNerdFonts()) 4 else 2;
+        chip_widths[i] = @intCast(displayWidth(labels[i]) + extra);
+        tabs_width += chip_widths[i];
+        if (i > 0) tabs_width += gap;
+    }
 
     if (width <= tabs_width + 30) return;
 
-    const tabs_x = width - @as(u16, @intCast(tabs_width)) - 2;
-    const tab2_x = tabs_x + @as(u16, @intCast(tab1_w)) + gap;
-    const tab3_x = tab2_x + @as(u16, @intCast(tab2_w)) + gap;
-    const tab4_x = tab3_x + @as(u16, @intCast(tab3_w)) + gap;
-    const tab5_x = tab4_x + @as(u16, @intCast(tab4_w)) + gap;
+    var tab_x = width - @as(u16, @intCast(tabs_width)) - 2;
+    try app_tui.moveCursor(tab_x, 1);
 
-    mouse_regions.addTab(1, .{ .x = tabs_x, .y = 1, .width = @as(u16, @intCast(tab1_w)), .height = 1 });
-    mouse_regions.addTab(2, .{ .x = tab2_x, .y = 1, .width = @as(u16, @intCast(tab2_w)), .height = 1 });
-    mouse_regions.addTab(3, .{ .x = tab3_x, .y = 1, .width = @as(u16, @intCast(tab3_w)), .height = 1 });
-    mouse_regions.addTab(4, .{ .x = tab4_x, .y = 1, .width = @as(u16, @intCast(tab4_w)), .height = 1 });
-    mouse_regions.addTab(5, .{ .x = tab5_x, .y = 1, .width = @as(u16, @intCast(tab5_w)), .height = 1 });
+    for (tab_defs, 0..) |def, i| {
+        if (i > 0) {
+            for (0..gap) |_| try app_tui.bufWrite(" ");
+            tab_x += gap;
+        }
 
-    try app_tui.moveCursor(tabs_x, 1);
-    if (current_tab == 1) {
-        try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab1_label});
-    } else {
-        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab1_label});
-    }
+        const is_active = current_tab == def.tab;
+        const style: Tui.Style = if (is_active)
+            .{ .bg = theme.tab_active, .fg = theme.selection_fg, .bold = true }
+        else
+            .{ .fg = theme.muted };
+        _ = try render.writePill(app_tui, style, labels[i]);
 
-    try app_tui.bufWrite("  ");
-    if (current_tab == 2) {
-        try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab2_label});
-    } else {
-        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab2_label});
-    }
-
-    try app_tui.bufWrite("  ");
-    if (current_tab == 3) {
-        try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab3_label});
-    } else {
-        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab3_label});
-    }
-
-    try app_tui.bufWrite("  ");
-    if (current_tab == 4) {
-        try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab4_label});
-    } else {
-        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab4_label});
-    }
-
-    try app_tui.bufWrite("  ");
-    if (current_tab == 5) {
-        try app_tui.printStyled(.{ .fg = theme.tab_active, .bold = true }, "{s}", .{tab5_label});
-    } else {
-        try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{tab5_label});
+        mouse_regions.addTab(def.tab, .{ .x = tab_x, .y = 1, .width = chip_widths[i], .height = 1 });
+        tab_x += chip_widths[i];
     }
 }
 

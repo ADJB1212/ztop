@@ -31,6 +31,7 @@ pub const TextAlign = util.TextAlign;
 pub const clipUtf8 = util.clipUtf8;
 pub const writeAlignedCell = util.writeAlignedCell;
 pub const writeChip = util.writeChip;
+pub const writePill = util.writePill;
 pub const renderMeter = util.renderMeter;
 
 // Re-exports from graphs.zig

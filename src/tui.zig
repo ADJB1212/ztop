@@ -548,39 +548,26 @@ pub const Tui = struct {
         try self.bufWrite("╯");
         try self.resetStyle();
 
-        // Draw title
         if (title.len > 0) {
             try self.moveCursor(x + 2, y);
-            if (self.nerd_fonts) {
-                if (std.mem.startsWith(u8, title, "CPU")) {
-                    try self.printStyled(title_style, "┤  {s} ├", .{title});
-                } else if (std.mem.startsWith(u8, title, "Memory")) {
-                    try self.printStyled(title_style, "┤  {s} ├", .{title});
-                } else if (std.mem.startsWith(u8, title, "Disk")) {
-                    try self.printStyled(title_style, "┤ 󰋊 {s} ├", .{title});
-                } else if (std.mem.startsWith(u8, title, "Network") or std.mem.startsWith(u8, title, "Connections")) {
-                    try self.printStyled(title_style, "┤ 󰈀 {s} ├", .{title});
-                } else if (std.mem.startsWith(u8, title, "GPU")) {
-                    try self.printStyled(title_style, "┤ 󰢮 {s} ├", .{title});
-                } else if (std.mem.startsWith(u8, title, "Sensors") or std.mem.startsWith(u8, title, "Thermal")) {
-                    try self.printStyled(title_style, "┤  {s} ├", .{title});
-                } else if (std.mem.startsWith(u8, title, "Battery")) {
-                    try self.printStyled(title_style, "┤ 󰁹 {s} ├", .{title});
-                } else if (std.mem.startsWith(u8, title, "Processes") or std.mem.startsWith(u8, title, "Threads")) {
-                    try self.printStyled(title_style, "┤ 󰒋 {s} ├", .{title});
-                } else if (std.mem.startsWith(u8, title, "Causality") or std.mem.startsWith(u8, title, "Process Columns") or std.mem.startsWith(u8, title, "I/O Columns")) {
-                    try self.printStyled(title_style, "┤ 󰒋 {s} ├", .{title});
-                } else if (std.mem.startsWith(u8, title, "Why ") or std.mem.startsWith(u8, title, "Pressure") or std.mem.startsWith(u8, title, "Before/After Diff")) {
-                    try self.printStyled(title_style, "┤ 󰋖 {s} ├", .{title});
-                } else if (std.mem.startsWith(u8, title, "Help")) {
-                    try self.printStyled(title_style, "┤ 󰋖 {s} ├", .{title});
-                } else {
-                    try self.printStyled(title_style, "┤ {s} ├", .{title});
-                }
-            } else {
-                try self.printStyled(title_style, "┤ {s} ├", .{title});
-            }
+            const icon = if (self.nerd_fonts) titleIcon(title) else "";
+            try self.printStyled(title_style, "┤ {s}{s} ├", .{ icon, title });
         }
+    }
+
+    fn titleIcon(title: []const u8) []const u8 {
+        if (std.mem.startsWith(u8, title, "CPU")) return " ";
+        if (std.mem.startsWith(u8, title, "Memory")) return " ";
+        if (std.mem.startsWith(u8, title, "Disk")) return "󰋊 ";
+        if (std.mem.startsWith(u8, title, "Network") or std.mem.startsWith(u8, title, "Connections")) return "󰈀 ";
+        if (std.mem.startsWith(u8, title, "GPU")) return "󰢮 ";
+        if (std.mem.startsWith(u8, title, "Sensors") or std.mem.startsWith(u8, title, "Thermal")) return " ";
+        if (std.mem.startsWith(u8, title, "Battery")) return "󰁹 ";
+        if (std.mem.startsWith(u8, title, "Processes") or std.mem.startsWith(u8, title, "Threads")) return "󰒋 ";
+        if (std.mem.startsWith(u8, title, "Causality") or std.mem.startsWith(u8, title, "Process Columns") or std.mem.startsWith(u8, title, "I/O Columns")) return "󰒋 ";
+        if (std.mem.startsWith(u8, title, "Why ") or std.mem.startsWith(u8, title, "Pressure") or std.mem.startsWith(u8, title, "Before/After Diff")) return "󰋖 ";
+        if (std.mem.startsWith(u8, title, "Help")) return "󰋖 ";
+        return "";
     }
 
     pub fn getWinSize(self: *Tui) !struct { width: u16, height: u16 } {
