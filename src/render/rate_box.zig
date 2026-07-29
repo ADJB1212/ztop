@@ -192,10 +192,16 @@ pub fn renderDualRateBox(
     if (box_height < 3 or box_width < 8) return;
 
     const inner_x = box_x + 2;
-    const inner_y = box_y + 1;
+    var inner_y = box_y + 1;
     const inner_width = box_width -| 4;
-    const inner_height = box_height -| 2;
+    var inner_height = box_height -| 2;
     if (inner_width == 0 or inner_height == 0) return;
+
+    const spacious = inner_height >= 14 and inner_width >= 30;
+    if (spacious) {
+        inner_y += 1;
+        inner_height -|= 1;
+    }
 
     const peak_rate = @max(
         @max(primary.history.maxSample(), secondary.history.maxSample()),
