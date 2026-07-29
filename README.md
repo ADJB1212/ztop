@@ -28,7 +28,7 @@ Built for people who want a focused dashboard in the terminal: quick enough to k
 - **Process lifeline view** (`L`) — high-fidelity timeline for a selected process showing state transitions, CPU bursts, memory growth, thread count changes, and socket opens/closes over time
 - **Build/test pipeline lens** (`P`) — groups compiler, linker, and test-runner processes under their root build orchestrator with aggregated and per-process CPU, memory, and disk I/O metrics
 - Built-in process actions: `SIGTERM`, `SIGKILL`, `:killall`, `:show zombie`, `:search`
-- Process follow mode (`l`): lock the view to a selected process as it moves through the list
+- Process follow mode (`f`): lock the view to a selected process as it moves through the list
 - Responsive layout for narrow terminals
 - Configurable refresh interval, default sort, theme, and per-color overrides
 - Themes: `default`, `default_dark`, `default_light`, `gruvbox`, `nord`, `solarized`, `catppuccin`, `palenight`, `colorblind`
