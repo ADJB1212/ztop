@@ -5,12 +5,66 @@ const config = @import("../config.zig");
 const util = @import("util.zig");
 const Tui = tui.Tui;
 
-fn writeProtoPill(app_tui: *Tui, style: Tui.Style, label: []const u8) !void {
-    const written = try util.writePill(app_tui, style, label);
-    const total: usize = 6;
-    if (written < total) {
-        for (0..total - written) |_| try app_tui.bufWrite(" ");
-    }
+const proto_label_width: usize = 3;
+
+const ProtoDisplay = struct {
+    label: []const u8,
+    color: Tui.Color,
+};
+
+fn protoDisplay(theme: config.Theme, protocol: sysinfo.common.NetProtocol) ProtoDisplay {
+    return switch (protocol) {
+        .tcp, .tcp6 => .{ .label = "TCP", .color = theme.usage_good },
+        .udp, .udp6 => .{ .label = "UDP", .color = theme.io_rate },
+        .unknown => .{ .label = "N/A", .color = theme.muted },
+    };
+}
+
+fn writeProtoPill(app_tui: *Tui, theme: config.Theme, protocol: sysinfo.common.NetProtocol) !void {
+    const display = protoDisplay(theme, protocol);
+    var buf: [proto_label_width]u8 = [_]u8{' '} ** proto_label_width;
+    const n = @min(display.label.len, proto_label_width);
+    const left_pad = (proto_label_width - n) / 2;
+    @memcpy(buf[left_pad..][0..n], display.label[0..n]);
+    const style: Tui.Style = .{ .bg = display.color, .fg = theme.selection_fg, .bold = true };
+    _ = try util.writePill(app_tui, style, &buf);
+    try app_tui.bufWrite(" ");
+}
+
+const state_label_width: usize = 11;
+
+const StateDisplay = struct {
+    label: []const u8,
+    color: Tui.Color,
+};
+
+fn stateDisplay(theme: config.Theme, state: sysinfo.common.NetConnState) StateDisplay {
+    return .{
+        .label = @tagName(state),
+        .color = switch (state) {
+            .established => theme.usage_good,
+            .listen => theme.io_rate,
+            .time_wait, .close_wait => theme.usage_warn,
+            else => theme.muted,
+        },
+    };
+}
+
+fn statePillWidth(app_tui: *Tui) u16 {
+    const extra: u16 = if (app_tui.hasNerdFonts()) 4 else 2;
+    return @as(u16, @intCast(state_label_width)) + extra;
+}
+
+fn writeStatePill(app_tui: *Tui, theme: config.Theme, row_y: u16, right_edge_x: u16, state: sysinfo.common.NetConnState) !void {
+    const display = stateDisplay(theme, state);
+    var buf: [state_label_width]u8 = [_]u8{' '} ** state_label_width;
+    const n = @min(display.label.len, state_label_width);
+    @memcpy(buf[0..n], display.label[0..n]);
+
+    const pill_width = statePillWidth(app_tui);
+    const col_x = right_edge_x -| pill_width;
+    try app_tui.moveCursor(col_x, row_y);
+    _ = try util.writePill(app_tui, .{ .bg = display.color, .fg = theme.selection_fg }, &buf);
 }
 
 /// Render the Resource Causality Graph view for a selected process.
@@ -85,10 +139,11 @@ pub fn renderCausalityGraph(
         }
     } else {
         var child_row: u16 = 0;
+        const child_effective_rows: u16 = if (children_count > child_max_rows) child_max_rows -| 1 else child_max_rows;
         const name_col_width = if (left_width > 22) left_width - 18 else 6;
         for (cached_procs) |proc| {
             if (proc.ppid != pid or proc.pid == pid) continue;
-            if (child_row >= child_max_rows) break;
+            if (child_row >= child_effective_rows) break;
 
             try app_tui.moveCursor(inner_x, y + 2 + child_row);
 
@@ -143,18 +198,14 @@ pub fn renderCausalityGraph(
         }
     } else {
         var conn_row: u16 = 0;
+        const conn_effective_rows: u16 = if (conn_count > conn_max_rows) conn_max_rows -| 1 else conn_max_rows;
         for (causality_connections) |conn| {
-            if (conn_row >= conn_max_rows) break;
+            if (conn_row >= conn_effective_rows) break;
 
             try app_tui.moveCursor(right_x, y + 2 + conn_row);
 
             // Protocol chip
-            const proto_color: Tui.Color = switch (conn.protocol) {
-                .tcp, .tcp6 => theme.usage_good,
-                .udp, .udp6 => theme.io_rate,
-                else => theme.muted,
-            };
-            try writeProtoPill(app_tui, .{ .bg = proto_color, .fg = theme.selection_fg, .bold = true }, @tagName(conn.protocol));
+            try writeProtoPill(app_tui, theme, conn.protocol);
 
             // Local address:port
             const local_str = std.mem.sliceTo(&conn.local_addr, 0);
@@ -172,15 +223,7 @@ pub fn renderCausalityGraph(
             // State for TCP
             if (right_width > 30) {
                 if (conn.protocol == .tcp or conn.protocol == .tcp6) {
-                    const state_str = @tagName(conn.state);
-                    const state_color: Tui.Color = switch (conn.state) {
-                        .established => theme.usage_good,
-                        .listen => theme.io_rate,
-                        .time_wait, .close_wait => theme.usage_warn,
-                        else => theme.muted,
-                    };
-                    try app_tui.bufWrite(" ");
-                    _ = try util.writePill(app_tui, .{ .bg = state_color, .fg = theme.selection_fg }, state_str);
+                    try writeStatePill(app_tui, theme, y + 2 + conn_row, right_x + right_width, conn.state);
                 }
             }
 
