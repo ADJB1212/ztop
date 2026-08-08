@@ -148,6 +148,7 @@ pub const ProcessColumn = enum(u8) {
     disk_read,
     disk_write,
     wakeups,
+    energy,
 
     pub fn label(self: ProcessColumn) []const u8 {
         return switch (self) {
@@ -161,6 +162,7 @@ pub const ProcessColumn = enum(u8) {
             .disk_read => "Disk Read",
             .disk_write => "Disk Write",
             .wakeups => "Wakeups",
+            .energy => "Energy",
         };
     }
 };
@@ -176,7 +178,21 @@ pub const process_column_order = [_]ProcessColumn{
     .disk_read,
     .disk_write,
     .wakeups,
+    .energy,
 };
+
+pub fn columnPickerKey(idx: usize) u8 {
+    if (idx < 9) return '1' + @as(u8, @intCast(idx));
+    if (idx == 9) return '0';
+    return 'a' + @as(u8, @intCast(idx - 10));
+}
+
+pub fn columnPickerIndexForKey(ch: u8) ?usize {
+    if (ch >= '1' and ch <= '9') return ch - '1';
+    if (ch == '0') return 9;
+    if (ch >= 'a' and ch <= 'z') return 10 + @as(usize, ch - 'a');
+    return null;
+}
 
 pub const ProcessColumns = struct {
     pid: bool = false,
@@ -189,6 +205,7 @@ pub const ProcessColumns = struct {
     disk_read: bool = false,
     disk_write: bool = false,
     wakeups: bool = false,
+    energy: bool = false,
 
     pub fn defaultsMain() ProcessColumns {
         return .{
@@ -219,6 +236,7 @@ pub const ProcessColumns = struct {
             .disk_read = true,
             .disk_write = true,
             .wakeups = true,
+            .energy = true,
         };
     }
 
@@ -238,6 +256,7 @@ pub const ProcessColumns = struct {
             .disk_read => self.disk_read,
             .disk_write => self.disk_write,
             .wakeups => self.wakeups,
+            .energy => self.energy,
         };
     }
 
@@ -253,6 +272,7 @@ pub const ProcessColumns = struct {
             .disk_read => self.disk_read = visible,
             .disk_write => self.disk_write = visible,
             .wakeups => self.wakeups = visible,
+            .energy => self.energy = visible,
         }
     }
 

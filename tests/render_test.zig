@@ -52,7 +52,7 @@ test "planProcessTableLayout drops trailing columns to preserve name width" {
 
     try std.testing.expectEqual(@as(usize, 2), layout.count);
     try std.testing.expectEqual(@as(usize, 28), layout.name_width);
-    try std.testing.expectEqual(@as(usize, 8), layout.dropped_count);
+    try std.testing.expectEqual(@as(usize, 9), layout.dropped_count);
     try std.testing.expect(layout.name_width >= render.min_process_name_width);
     try std.testing.expectEqual(config.ProcessColumn.pid, layout.columns[0]);
     try std.testing.expectEqual(config.ProcessColumn.ppid, layout.columns[1]);

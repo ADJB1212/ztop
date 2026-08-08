@@ -205,12 +205,7 @@ fn handleColumnPickerToken(ctx: *Context, token: Tui.InputToken) bool {
                 return true;
             }
 
-            const column_idx: usize = if (ch >= '1' and ch <= '9')
-                @as(usize, ch - '1')
-            else if (ch == '0' and config.process_column_order.len >= 10)
-                9
-            else
-                return false;
+            const column_idx = config.columnPickerIndexForKey(ch) orelse return false;
             if (column_idx >= config.process_column_order.len) return false;
 
             const column = config.process_column_order[column_idx];

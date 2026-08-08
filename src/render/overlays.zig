@@ -219,7 +219,7 @@ pub fn renderColumnPickerOverlay(
     current_tab: u8,
     picker_columns: config.ProcessColumns,
 ) !void {
-    const picker_width = 45;
+    const picker_width = 50;
     const picker_height: u16 = @intCast(@max(@as(usize, 15), config.process_column_order.len + 6));
     const picker_x = if (width > picker_width) (width - picker_width) / 2 else 1;
     const picker_y = if (height > picker_height) (height - picker_height) / 2 else 1;
@@ -236,7 +236,7 @@ pub fn renderColumnPickerOverlay(
 
     for (config.process_column_order, 0..) |column, idx| {
         try app_tui.moveCursor(picker_x + 2, picker_y + 4 + @as(u16, @intCast(idx)));
-        try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "{d}. ", .{idx + 1});
+        try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "{c}. ", .{config.columnPickerKey(idx)});
         try app_tui.printStyled(
             .{ .fg = if (picker_columns.isVisible(column)) theme.usage_good else theme.muted, .bold = picker_columns.isVisible(column) },
             "[{c}]",
@@ -246,10 +246,13 @@ pub fn renderColumnPickerOverlay(
     }
 
     try app_tui.moveCursor(picker_x + 2, picker_y + picker_height - 2);
-    var picker_help_buf: [80]u8 = undefined;
+    var picker_help_buf: [96]u8 = undefined;
+    const last_idx = config.process_column_order.len - 1;
     const picker_help = if (config.process_column_order.len <= 9)
         std.fmt.bufPrint(&picker_help_buf, "Press 1-{d} to toggle, Enter/Esc to close", .{config.process_column_order.len}) catch "Press number to toggle, Enter/Esc to close"
+    else if (config.process_column_order.len <= 10)
+        "Press 1-9,0 to toggle, Enter/Esc to close"
     else
-        "Press 1-9,0 to toggle, Enter/Esc to close";
+        std.fmt.bufPrint(&picker_help_buf, "Press 1-9,0,a-{c} to toggle, Enter/Esc to close", .{config.columnPickerKey(last_idx)}) catch "Press number/letter to toggle, Enter/Esc to close";
     try app_tui.printStyled(.{ .fg = theme.muted }, "{s}", .{picker_help});
 }

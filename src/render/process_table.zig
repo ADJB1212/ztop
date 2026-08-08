@@ -30,7 +30,26 @@ pub fn processColumnWidth(column: ProcessColumn) usize {
         .disk_read => 11,
         .disk_write => 11,
         .wakeups => 14,
+        .energy => 9,
     };
+}
+
+/// Very rough estimate of a process's share of the system's total power draw.
+fn estimateProcessPowerW(proc: sysinfo.ProcStats, cpu_cores: u32, system_power_w: f32) f32 {
+    const cores: f32 = @floatFromInt(@max(cpu_cores, 1));
+    const cpu_capacity = cores * 100.0;
+    const cpu_frac = @min(proc.cpu_percent, cpu_capacity) / cpu_capacity;
+    const mem_frac = @min(proc.mem_percent, 100.0) / 100.0;
+
+    const wake_activity: f32 = @as(f32, @floatFromInt(proc.wakeups_ps)) +
+        @as(f32, @floatFromInt(proc.context_switches_ps)) / 4.0;
+    const wake_frac = wake_activity / (wake_activity + 500.0);
+
+    const disk_bytes_ps: f32 = @floatFromInt(proc.disk_read_ps + proc.disk_write_ps);
+    const disk_frac = disk_bytes_ps / (disk_bytes_ps + 20.0 * 1024.0 * 1024.0);
+
+    const share = cpu_frac * 0.85 + mem_frac * 0.05 + wake_frac * 0.05 + disk_frac * 0.05;
+    return @min(share, 1.0) * system_power_w;
 }
 
 pub fn planProcessTableLayout(columns: ProcessColumns, available_width: usize) ProcessTableLayout {
@@ -114,6 +133,8 @@ pub fn renderProcessRow(
     is_selected: bool,
     prefix: []const u8,
     prefix_width: usize,
+    cpu_cores: u32,
+    system_power_w: ?f32,
 ) !void {
     var buf: [48]u8 = undefined;
     const pid_style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.muted };
@@ -123,7 +144,7 @@ pub fn renderProcessRow(
     var rendered_name = false;
     for (layout.columns[0..layout.count]) |column| {
         if (!rendered_name and switch (column) {
-            .launch_path, .state, .cpu, .mem, .threads, .disk_read, .disk_write, .wakeups => true,
+            .launch_path, .state, .cpu, .mem, .threads, .disk_read, .disk_write, .wakeups, .energy => true,
             .pid, .ppid => false,
         }) {
             try renderProcessNameCell(app_tui, name_style, layout.name_width, prefix, prefix_width, proc.name());
@@ -193,6 +214,19 @@ pub fn renderProcessRow(
                 else
                     .{ .fg = util.usageColor(theme, activity) };
                 try util.writeAlignedCell(app_tui, style, processColumnWidth(.wakeups), .right, text);
+            },
+            .energy => {
+                const style: Tui.Style = if (is_selected)
+                    .{ .bg = theme.selection_bg, .fg = theme.battery_title }
+                else
+                    .{ .fg = theme.battery_title };
+                if (system_power_w) |watts| {
+                    const est_w = estimateProcessPowerW(proc, cpu_cores, watts);
+                    const text = std.fmt.bufPrint(&buf, "{d:.2}W", .{est_w}) catch "";
+                    try util.writeAlignedCell(app_tui, style, processColumnWidth(.energy), .right, text);
+                } else {
+                    try util.writeAlignedCell(app_tui, style, processColumnWidth(.energy), .right, "--");
+                }
             },
         }
     }

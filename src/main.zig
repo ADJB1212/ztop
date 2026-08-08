@@ -858,6 +858,8 @@ pub fn main(main_init: std.process.Init) !void {
                                 is_selected,
                                 prefix_buf[0..prefix_len],
                                 prefix_width,
+                                display_cpu.cores,
+                                display_battery.power_draw_w,
                             );
 
                             if (is_selected) {

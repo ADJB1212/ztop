@@ -85,7 +85,13 @@ pub fn renderFooter(app_tui: *Tui, theme: config.Theme, width: u16, height: u16,
     } else if (state.show_column_picker) {
         try app_tui.printStyled(.{ .fg = theme.muted }, "Process columns: ", .{});
         var picker_range_buf: [16]u8 = undefined;
-        const picker_range = std.fmt.bufPrint(&picker_range_buf, "1-{d}", .{config.process_column_order.len}) catch "1-n";
+        const last_idx = config.process_column_order.len - 1;
+        const picker_range = if (config.process_column_order.len <= 9)
+            std.fmt.bufPrint(&picker_range_buf, "1-{d}", .{config.process_column_order.len}) catch "1-n"
+        else if (config.process_column_order.len <= 10)
+            "1-9,0"
+        else
+            std.fmt.bufPrint(&picker_range_buf, "1-9,0,a-{c}", .{config.columnPickerKey(last_idx)}) catch "1-9,0,a-z";
         try key(app_tui, theme, picker_range);
         try app_tui.printStyled(.{ .fg = theme.muted }, " toggle, ", .{});
         try key(app_tui, theme, "Enter/Esc");
