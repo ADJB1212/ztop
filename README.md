@@ -18,7 +18,7 @@ Built for people who want a focused dashboard in the terminal: quick enough to k
 - Live process table with sorting, filtering, tree view, and per-thread drill-down
 - CPU topology map grouping logical threads by physical core, cache domain, and heterogeneous cluster
 - GPU monitoring on Apple Silicon via IORegistry accelerator performance statistics
-- Dynamic process-table columns with an in-app picker (PID, PPID, state, CPU, memory, threads, disk rates, wakeups/churn, launch path)
+- Dynamic process-table columns with an in-app picker (PID, PPID, state, CPU, memory, threads, disk rates, wakeups/churn, launch path, energy)
 - Mouse support for tab switching, list navigation, and scrolling
 - Timeline scrubbing with incident bookmarks and before/after diff: pause live view, scrub through recent history, drop markers to jump back to interesting moments, and compare two captured snapshots side-by-side
 - **Why is this busy?** — ranked explanation view showing which processes are driving the current CPU, memory, disk, network, or wakeup-churn spike, with delta indicators against a 5-tick baseline
@@ -204,18 +204,18 @@ enable_ai = true
 
 ### Configuration Reference
 
-| Key                    | Values                                                                                                                                                     |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `theme`                | `default`, `default_dark`, `default_light`, `gruvbox`, `nord`, `solarized`, `catppuccin`, `palenight`, `colorblind`                                        |
-| `default_sort`         | `cpu`, `mem`, `pid`, `name`, `wakeups`                                                                                                                     |
-| `default_tab`          | `main`, `io`, `sensors`, `network`, `diagnostics` (or `1`–`5`)                                                                                             |
-| `default_tree_view`    | `true` / `false` (also `yes`/`no`, `1`/`0`)                                                                                                                |
-| `show_help_on_startup` | `true` / `false`                                                                                                                                           |
-| `update_interval_ms`   | Refresh interval in milliseconds                                                                                                                           |
-| `enable_ai`            | `true` / `false` — Enable on-device Apple Intelligence diagnosis (macOS 15.0+)                                                                             |
-| `process_columns`      | Comma-separated list of `pid`, `ppid`, `state`, `cpu`, `mem`, `threads`, `disk_read`, `disk_write`, `wakeups`, `launch_path` — or `none`, `default`, `all` |
-| `io_process_columns`   | Same column names, applied to the I/O tab process table                                                                                                    |
-| `color.<key>`          | Named ANSI color (e.g. `bright_cyan`) or xterm-256 index (e.g. `141`)                                                                                      |
+| Key                    | Values                                                                                                                                                               |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `theme`                | `default`, `default_dark`, `default_light`, `gruvbox`, `nord`, `solarized`, `catppuccin`, `palenight`, `colorblind`                                                  |
+| `default_sort`         | `cpu`, `mem`, `pid`, `name`, `wakeups`                                                                                                                               |
+| `default_tab`          | `main`, `io`, `sensors`, `network`, `diagnostics` (or `1`–`5`)                                                                                                       |
+| `default_tree_view`    | `true` / `false` (also `yes`/`no`, `1`/`0`)                                                                                                                          |
+| `show_help_on_startup` | `true` / `false`                                                                                                                                                     |
+| `update_interval_ms`   | Refresh interval in milliseconds                                                                                                                                     |
+| `enable_ai`            | `true` / `false` — Enable on-device Apple Intelligence diagnosis (macOS 15.0+)                                                                                       |
+| `process_columns`      | Comma-separated list of `pid`, `ppid`, `state`, `cpu`, `mem`, `threads`, `disk_read`, `disk_write`, `wakeups`, `launch_path`, `energy` — or `none`, `default`, `all` |
+| `io_process_columns`   | Same column names, applied to the I/O tab process table                                                                                                              |
+| `color.<key>`          | Named ANSI color (e.g. `bright_cyan`) or xterm-256 index (e.g. `141`)                                                                                                |
 
 The process name column is always visible. Press `C` inside `ztop` to toggle columns interactively.
 
