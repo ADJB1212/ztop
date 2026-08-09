@@ -37,19 +37,22 @@ pub fn processColumnWidth(column: ProcessColumn) usize {
 /// Very rough estimate of a process's share of the system's total power draw.
 fn estimateProcessPowerW(proc: sysinfo.ProcStats, cpu_cores: u32, system_power_w: f32) f32 {
     const cores: f32 = @floatFromInt(@max(cpu_cores, 1));
-    const cpu_capacity = cores * 100.0;
-    const cpu_frac = @min(proc.cpu_percent, cpu_capacity) / cpu_capacity;
-    const mem_frac = @min(proc.mem_percent, 100.0) / 100.0;
+    const cpu_budget = system_power_w * 0.70;
+    const per_core_w = cpu_budget / cores;
+    const cores_used = @min(proc.cpu_percent, cores * 100.0) / 100.0;
+    const cpu_power = std.math.pow(f32, cores_used, 1.15) * per_core_w;
 
-    const wake_activity: f32 = @as(f32, @floatFromInt(proc.wakeups_ps)) +
-        @as(f32, @floatFromInt(proc.context_switches_ps)) / 4.0;
-    const wake_frac = wake_activity / (wake_activity + 500.0);
+    const mem_power = (@min(proc.mem_percent, 100.0) / 100.0) * system_power_w * 0.10;
+
+    const wake_activity: f32 = @as(f32, @floatFromInt(proc.wakeups_ps)) + @as(f32, @floatFromInt(proc.context_switches_ps)) / 4.0;
+    const wake_frac = wake_activity / (wake_activity + 100.0);
+    const wake_power = wake_frac * system_power_w * 0.10;
 
     const disk_bytes_ps: f32 = @floatFromInt(proc.disk_read_ps + proc.disk_write_ps);
-    const disk_frac = disk_bytes_ps / (disk_bytes_ps + 20.0 * 1024.0 * 1024.0);
+    const disk_frac = disk_bytes_ps / (disk_bytes_ps + 5.0 * 1024.0 * 1024.0);
+    const disk_power = disk_frac * system_power_w * 0.10;
 
-    const share = cpu_frac * 0.85 + mem_frac * 0.05 + wake_frac * 0.05 + disk_frac * 0.05;
-    return @min(share, 1.0) * system_power_w;
+    return @min(cpu_power + mem_power + wake_power + disk_power, system_power_w);
 }
 
 pub fn planProcessTableLayout(columns: ProcessColumns, available_width: usize) ProcessTableLayout {
