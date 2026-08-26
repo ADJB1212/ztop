@@ -16,6 +16,7 @@ pub const Bookmark = struct {
 };
 
 pub const MAX_DIFF_PROCS: usize = 16;
+const DIFF_CACHE_CAPACITY: usize = 4;
 
 pub const ProcDiffKind = enum {
     appeared,
@@ -67,6 +68,13 @@ pub const SnapshotDiff = struct {
     // Process changes sorted by magnitude
     proc_diffs: [MAX_DIFF_PROCS]ProcDiffEntry = undefined,
     proc_diff_count: usize = 0,
+};
+
+const DiffCacheEntry = struct {
+    older_offset: usize = 0,
+    newer_offset: usize = 0,
+    value: SnapshotDiff = undefined,
+    valid: bool = false,
 };
 
 pub const EventKind = enum(u8) {
@@ -163,6 +171,9 @@ pub const Timeline = struct {
     bookmarks: [MAX_BOOKMARKS]Bookmark,
     bookmark_count: usize,
 
+    diff_cache: [DIFF_CACHE_CAPACITY]DiffCacheEntry,
+    diff_cache_next: usize,
+
     pub fn init() Timeline {
         return .{
             .snapshots = undefined,
@@ -181,7 +192,14 @@ pub const Timeline = struct {
             .net_spike_cooldown = 0,
             .bookmarks = undefined,
             .bookmark_count = 0,
+            .diff_cache = [_]DiffCacheEntry{.{}} ** DIFF_CACHE_CAPACITY,
+            .diff_cache_next = 0,
         };
+    }
+
+    fn invalidateDiffCache(self: *Timeline) void {
+        for (&self.diff_cache) |*entry| entry.valid = false;
+        self.diff_cache_next = 0;
     }
 
     pub fn snapshotCount(self: *const Timeline) usize {
@@ -203,6 +221,8 @@ pub const Timeline = struct {
 
     /// Append a snapshot. Stores the first MAX_SNAPSHOT_PROCS processes from procs.
     pub fn recordSnapshot(self: *Timeline, snap: SystemSnapshot, procs: []const common.ProcStats) void {
+        self.invalidateDiffCache();
+
         var s = snap;
         const proc_count = @min(procs.len, MAX_SNAPSHOT_PROCS);
         s.proc_count = @intCast(proc_count);
@@ -500,9 +520,20 @@ pub const Timeline = struct {
     /// Compute a diff between two snapshots identified by scrub offsets.
     /// anchor_offset is the "before" point, cursor_offset is the "after" point.
     /// If anchor is more recent (lower offset), they are swapped so before < after in time.
-    pub fn computeDiff(self: *const Timeline, anchor_offset: usize, cursor_offset: usize) ?SnapshotDiff {
-        const before_snap = self.getSnapshot(@max(anchor_offset, cursor_offset)) orelse return null;
-        const after_snap = self.getSnapshot(@min(anchor_offset, cursor_offset)) orelse return null;
+    /// The returned pointer remains valid until its cache entry is replaced or a
+    /// new snapshot is recorded.
+    pub fn computeDiff(self: *Timeline, anchor_offset: usize, cursor_offset: usize) ?*const SnapshotDiff {
+        const older_offset = @max(anchor_offset, cursor_offset);
+        const newer_offset = @min(anchor_offset, cursor_offset);
+
+        for (&self.diff_cache) |*entry| {
+            if (entry.valid and entry.older_offset == older_offset and entry.newer_offset == newer_offset) {
+                return &entry.value;
+            }
+        }
+
+        const before_snap = self.getSnapshot(older_offset) orelse return null;
+        const after_snap = self.getSnapshot(newer_offset) orelse return null;
 
         var diff: SnapshotDiff = .{};
         diff.time_delta_ms = after_snap.timestamp_ms - before_snap.timestamp_ms;
@@ -601,7 +632,15 @@ pub const Timeline = struct {
             }
         }.lessThan);
 
-        return diff;
+        const entry = &self.diff_cache[self.diff_cache_next];
+        self.diff_cache_next = (self.diff_cache_next + 1) % self.diff_cache.len;
+        entry.* = .{
+            .older_offset = older_offset,
+            .newer_offset = newer_offset,
+            .value = diff,
+            .valid = true,
+        };
+        return &entry.value;
     }
 
     // ─── Persistence API (methods on Timeline) ────────────────────────────────

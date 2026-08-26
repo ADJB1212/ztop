@@ -56,6 +56,39 @@ pub const Tui = struct {
         underline: bool = false,
     };
 
+    const STYLE_CACHE_CAPACITY = 32;
+
+    /// Fixed-size memoization cache
+    pub const StyleSequenceCache = struct {
+        const Entry = struct {
+            style: Style = .{},
+            sequence: [48]u8 = undefined,
+            sequence_len: u8 = 0,
+            valid: bool = false,
+        };
+
+        entries: [STYLE_CACHE_CAPACITY]Entry = [_]Entry{.{}} ** STYLE_CACHE_CAPACITY,
+        next_replace: usize = 0,
+
+        pub fn get(self: *StyleSequenceCache, style: Style) ![]const u8 {
+            for (&self.entries) |*entry| {
+                if (entry.valid and std.meta.eql(entry.style, style)) {
+                    return entry.sequence[0..entry.sequence_len];
+                }
+            }
+
+            const entry = &self.entries[self.next_replace];
+            self.next_replace = (self.next_replace + 1) % self.entries.len;
+            entry.valid = false;
+
+            const sequence = try Tui.styleSequence(&entry.sequence, style);
+            entry.style = style;
+            entry.sequence_len = @intCast(sequence.len);
+            entry.valid = true;
+            return entry.sequence[0..entry.sequence_len];
+        }
+    };
+
     pub const CursorStyle = enum(u8) {
         blinking_block = 1,
         steady_block = 2,
@@ -145,6 +178,7 @@ pub const Tui = struct {
     cursor_buf: [32]u8,
     style_buf: [48]u8,
     print_buf: [1024]u8,
+    style_cache: StyleSequenceCache = .{},
 
     pub fn shouldEnableSynchronizedOutput(term_program: ?[]const u8) bool {
         if (term_program) |name| {
@@ -464,7 +498,7 @@ pub const Tui = struct {
     }
 
     pub fn setStyle(self: *Tui, style: Style) !void {
-        const seq = try styleSequence(&self.style_buf, style);
+        const seq = try self.style_cache.get(style);
         try self.bufWrite(seq);
         self.current_style = style;
     }

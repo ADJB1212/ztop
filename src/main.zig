@@ -410,7 +410,7 @@ pub fn main(main_init: std.process.Init) !void {
                 if (diff_active) {
                     if (timeline.computeDiff(diff_anchor.?, scrub_offset)) |snap_diff| {
                         const diff_box_height = size.height -| 2 -| 1 -| @as(u16, if (timeline_bar_active) 1 else 0);
-                        try render.renderDiffView(&app_tui, theme, 1, 2, size.width, diff_box_height, snap_diff, app_config.temperature_unit);
+                        try render.renderDiffView(&app_tui, theme, 1, 2, size.width, diff_box_height, snap_diff.*, app_config.temperature_unit);
                     }
                 }
 

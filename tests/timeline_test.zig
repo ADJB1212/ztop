@@ -90,6 +90,27 @@ test "snapshot stores process data" {
     try std.testing.expectEqual(@as(u32, 200), snap.procs[1].pid);
 }
 
+test "computeDiff memoizes recent comparisons and invalidates on append" {
+    var tl = Timeline.init();
+    tl.recordSnapshot(makeSnap(1000, 10.0), &.{});
+    tl.recordSnapshot(makeSnap(2000, 20.0), &.{});
+    tl.recordSnapshot(makeSnap(3000, 30.0), &.{});
+
+    const first = tl.computeDiff(2, 0).?;
+    const adjacent = tl.computeDiff(1, 0).?;
+    const repeated = tl.computeDiff(2, 0).?;
+
+    try std.testing.expect(first != adjacent);
+    try std.testing.expectEqual(first, repeated);
+    try std.testing.expectEqual(@as(i64, 2000), repeated.time_delta_ms);
+
+    tl.recordSnapshot(makeSnap(4000, 40.0), &.{});
+    const refreshed = tl.computeDiff(2, 0).?;
+    try std.testing.expectEqual(@as(i64, 2000), refreshed.time_delta_ms);
+    try std.testing.expectEqual(@as(f32, 20.0), refreshed.cpu_before);
+    try std.testing.expectEqual(@as(f32, 40.0), refreshed.cpu_after);
+}
+
 test "detectAndRecordEvents detects CPU spike" {
     var tl = Timeline.init();
 

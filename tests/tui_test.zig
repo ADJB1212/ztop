@@ -33,6 +33,21 @@ test "style sequence supports indexed 256 colors" {
     try std.testing.expectEqualStrings("\x1b[0;1;38;5;141;48;5;235m", seq);
 }
 
+test "style sequence cache reuses encoded styles" {
+    var cache: tui.Tui.StyleSequenceCache = .{};
+    const style: tui.Tui.Style = .{
+        .fg = .bright_cyan,
+        .bg = .black,
+        .bold = true,
+    };
+
+    const first = try cache.get(style);
+    const second = try cache.get(style);
+
+    try std.testing.expectEqual(first.ptr, second.ptr);
+    try std.testing.expectEqualStrings("\x1b[0;1;96;40m", second);
+}
+
 test "synchronized output is disabled for Apple Terminal" {
     try std.testing.expect(!tui.Tui.shouldEnableSynchronizedOutput("Apple_Terminal"));
     try std.testing.expect(tui.Tui.shouldEnableSynchronizedOutput("iTerm.app"));
