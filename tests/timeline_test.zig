@@ -212,6 +212,37 @@ test "birth/death detection finds new and exited processes" {
     try std.testing.expect(found_birth);
 }
 
+test "birth/death PID sets handle hash collisions" {
+    var tl = Timeline.init();
+    var baseline = [_]common.ProcStats{
+        std.mem.zeroes(common.ProcStats),
+        std.mem.zeroes(common.ProcStats),
+    };
+    baseline[0].pid = 1;
+    baseline[1].pid = 4097;
+    var first = makeSnap(1000, 10.0);
+    tl.detectAndRecordEvents(&first, &baseline, .celsius);
+
+    var current = [_]common.ProcStats{
+        std.mem.zeroes(common.ProcStats),
+        std.mem.zeroes(common.ProcStats),
+    };
+    current[0].pid = 4097;
+    current[1].pid = 8193;
+    var second = makeSnap(2000, 10.0);
+    tl.detectAndRecordEvents(&second, &current, .celsius);
+
+    var found_death = false;
+    var found_birth = false;
+    for (0..tl.ev_count) |i| {
+        const event = tl.getEvent(i).?;
+        if (event.kind == .proc_death and event.pid == 1) found_death = true;
+        if (event.kind == .proc_birth and event.pid == 8193) found_birth = true;
+    }
+    try std.testing.expect(found_death);
+    try std.testing.expect(found_birth);
+}
+
 test "birth/death capped at MAX_BIRTH_DEATH_PER_TICK" {
     var tl = Timeline.init();
 

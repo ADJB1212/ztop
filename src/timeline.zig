@@ -9,6 +9,34 @@ pub const MAX_SNAPSHOT_PROCS: usize = 32;
 pub const MAX_BIRTH_DEATH_PER_TICK: usize = 8;
 pub const MAX_BOOKMARKS: usize = 10;
 
+const PID_SET_CAPACITY = common.MAX_PROCS * 2;
+
+const PidSet = struct {
+    slots: [PID_SET_CAPACITY]u32 = [_]u32{0} ** PID_SET_CAPACITY,
+
+    fn startSlot(pid: u32) usize {
+        return (@as(usize, pid) *% 0x9e37_79b1) & (PID_SET_CAPACITY - 1);
+    }
+
+    fn insert(self: *PidSet, pid: u32) void {
+        if (pid == 0) return;
+        var slot = startSlot(pid);
+        while (self.slots[slot] != 0 and self.slots[slot] != pid) {
+            slot = (slot + 1) & (PID_SET_CAPACITY - 1);
+        }
+        self.slots[slot] = pid;
+    }
+
+    fn contains(self: *const PidSet, pid: u32) bool {
+        if (pid == 0) return false;
+        var slot = startSlot(pid);
+        while (self.slots[slot] != 0) : (slot = (slot + 1) & (PID_SET_CAPACITY - 1)) {
+            if (self.slots[slot] == pid) return true;
+        }
+        return false;
+    }
+};
+
 pub const Bookmark = struct {
     timestamp_ms: i64 = 0,
     /// Snapshot absolute index (from oldest = 0) at time of creation.
@@ -320,23 +348,24 @@ pub const Timeline = struct {
         // Process births/deaths (skip on first tick when no baseline)
         // Capped to MAX_BIRTH_DEATH_PER_TICK to prevent event flooding on large churn.
         if (self.prev_pid_count > 0 and procs.len > 0) {
+            var current_pids: PidSet = .{};
+            for (procs) |*proc| current_pids.insert(proc.pid);
+            var previous_pids: PidSet = .{};
+            for (self.prev_pids[0..self.prev_pid_count]) |pid| previous_pids.insert(pid);
+
             var bd_count: usize = 0;
             // Deaths: PIDs in prev not in current
-            outer_death: for (self.prev_pids[0..self.prev_pid_count]) |prev_pid| {
+            for (self.prev_pids[0..self.prev_pid_count]) |prev_pid| {
                 if (bd_count >= MAX_BIRTH_DEATH_PER_TICK) break;
-                for (procs) |p| {
-                    if (p.pid == prev_pid) continue :outer_death;
-                }
+                if (current_pids.contains(prev_pid)) continue;
                 self.appendEvent(makeEvent(.proc_death, ts, prev_pid, "PID {d} exited", .{prev_pid}));
                 bd_count += 1;
             }
             // Births: PIDs in current not in prev
-            outer_birth: for (procs) |p| {
+            for (procs) |*proc| {
                 if (bd_count >= MAX_BIRTH_DEATH_PER_TICK) break;
-                for (self.prev_pids[0..self.prev_pid_count]) |prev_pid| {
-                    if (p.pid == prev_pid) continue :outer_birth;
-                }
-                self.appendEvent(makeEvent(.proc_birth, ts, p.pid, "{s} ({d})", .{ p.name(), p.pid }));
+                if (previous_pids.contains(proc.pid)) continue;
+                self.appendEvent(makeEvent(.proc_birth, ts, proc.pid, "{s} ({d})", .{ proc.name(), proc.pid }));
                 bd_count += 1;
             }
         }
@@ -344,8 +373,8 @@ pub const Timeline = struct {
         // Update PID baseline
         const new_count = @min(procs.len, common.MAX_PROCS);
         self.prev_pid_count = new_count;
-        for (procs[0..new_count], 0..) |p, i| {
-            self.prev_pids[i] = p.pid;
+        for (procs[0..new_count], 0..) |*proc, i| {
+            self.prev_pids[i] = proc.pid;
         }
     }
 

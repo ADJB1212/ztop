@@ -36,6 +36,19 @@ test "MetricHistory downsamples columns using the peak value in each bucket" {
     try std.testing.expectEqual(@as(?f32, 50), metric_history.valueForColumn(2, 3));
 }
 
+test "MetricHistory fills a reusable graph column cache" {
+    var metric_history = history.MetricHistory{};
+    const samples = [_]f32{ 10, 40, 20, 70, 30, 50 };
+    for (samples) |sample| metric_history.append(sample);
+
+    var columns: [3]?f32 = undefined;
+    metric_history.valuesForColumns(&columns);
+
+    try std.testing.expectEqual(@as(?f32, 40), columns[0]);
+    try std.testing.expectEqual(@as(?f32, 70), columns[1]);
+    try std.testing.expectEqual(@as(?f32, 50), columns[2]);
+}
+
 test "RateHistory preserves insertion order after wrap" {
     var rate_history = history.RateHistory{};
 
@@ -57,4 +70,18 @@ test "RateHistory downsamples columns using peak values" {
     try std.testing.expectEqual(@as(?u64, 90), rate_history.valueForColumn(1, 3));
     try std.testing.expectEqual(@as(?u64, 50), rate_history.valueForColumn(2, 3));
     try std.testing.expectEqual(@as(u64, 90), rate_history.maxSample());
+}
+
+test "column cache preserves right alignment" {
+    var rate_history = history.RateHistory{};
+    rate_history.append(10);
+    rate_history.append(20);
+
+    var columns: [4]?u64 = undefined;
+    rate_history.valuesForColumns(&columns);
+
+    try std.testing.expectEqual(@as(?u64, null), columns[0]);
+    try std.testing.expectEqual(@as(?u64, null), columns[1]);
+    try std.testing.expectEqual(@as(?u64, 10), columns[2]);
+    try std.testing.expectEqual(@as(?u64, 20), columns[3]);
 }

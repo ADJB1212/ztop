@@ -665,7 +665,6 @@ pub fn main(main_init: std.process.Init) !void {
                             procs_box_y,
                             procs_box_width,
                             procs_box_height,
-                            allocator,
                             cached_procs,
                             selected_idx,
                             &scroll_offset,
@@ -728,39 +727,18 @@ pub fn main(main_init: std.process.Init) !void {
 
                             if (tree_view and filter_len == 0 and !show_zombie_parents) {
                                 filtered_count = process_commands.buildTreeView(
-                                    allocator,
                                     cached_procs,
                                     &filtered_indices,
                                     &filtered_depths,
                                     &filtered_is_lasts,
                                 );
                             } else {
-                                var pid_buf2: [32]u8 = undefined;
-                                var l_name: [64]u8 = undefined;
-                                var l_filter: [32]u8 = undefined;
-                                // Pre-compute lowercased filter string once outside the loop
-                                if (filter_len > 0) {
-                                    @memcpy(l_filter[0..filter_len], filter_str);
-                                    for (l_filter[0..filter_len]) |*ch| ch.* = std.ascii.toLower(ch.*);
-                                }
-                                const f_str = l_filter[0..filter_len];
-
-                                for (cached_procs, 0..) |proc, i| {
+                                for (cached_procs, 0..) |*proc, i| {
                                     if (show_zombie_parents and !process_commands.containsParentPid(zombie_parents[0..zombie_summary.parent_count], proc.pid)) {
                                         continue;
                                     }
 
-                                    if (filter_len > 0) {
-                                        const pid_str = std.fmt.bufPrint(&pid_buf2, "{d}", .{proc.pid}) catch "";
-                                        const name_len = proc.name().len;
-                                        @memcpy(l_name[0..name_len], proc.name());
-                                        const n_str = l_name[0..name_len];
-                                        for (n_str) |*ch| ch.* = std.ascii.toLower(ch.*);
-
-                                        const name_matches = std.mem.indexOf(u8, n_str, f_str) != null;
-                                        const pid_matches = std.mem.indexOf(u8, pid_str, filter_str) != null;
-                                        if (!name_matches and !pid_matches) continue;
-                                    }
+                                    if (!process_commands.matchesProcessFilter(proc, filter_str)) continue;
                                     filtered_indices[filtered_count] = i;
                                     filtered_depths[filtered_count] = 0;
                                     filtered_is_lasts[filtered_count] = 0;

@@ -5,17 +5,10 @@ const c = bindings.c;
 var static_argmax_buf: [64 * 1024]u8 = undefined;
 
 pub fn readLaunchCommand(pid: c_int, dest: []u8) ![]const u8 {
-    var argmax: usize = 0;
-    var argmax_len: usize = @sizeOf(usize);
-    if (bindings.sysctlbyname("kern.argmax", &argmax, &argmax_len, null, 0) == 0 and argmax > @sizeOf(c_int) and argmax <= static_argmax_buf.len) {
-        const buf = try std.heap.page_allocator.alloc(u8, argmax);
-        defer std.heap.page_allocator.free(buf);
-
-        var mib = [_]c_int{ c.CTL_KERN, c.KERN_PROCARGS2, pid };
-        var len = argmax;
-        if (c.sysctl(&mib, mib.len, &static_argmax_buf, &len, null, 0) == 0) {
-            if (parseKernProcArgs(static_argmax_buf[0..len], dest)) |cmd| return cmd;
-        }
+    var mib = [_]c_int{ c.CTL_KERN, c.KERN_PROCARGS2, pid };
+    var len = static_argmax_buf.len;
+    if (c.sysctl(&mib, mib.len, &static_argmax_buf, &len, null, 0) == 0) {
+        if (parseKernProcArgs(static_argmax_buf[0..len], dest)) |cmd| return cmd;
     }
 
     var path_buf: [std.fs.max_path_bytes]u8 = std.mem.zeroes([std.fs.max_path_bytes]u8);

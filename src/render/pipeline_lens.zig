@@ -22,7 +22,6 @@ pub fn renderPipelineLensView(
     y: u16,
     width: u16,
     height: u16,
-    allocator: std.mem.Allocator,
     cached_procs: []const sysinfo.ProcStats,
     selected_idx: usize,
     scroll_offset: *usize,
@@ -45,7 +44,7 @@ pub fn renderPipelineLensView(
     if (inner_width < 10 or inner_height < 2) return 0;
 
     var groups_buf: [process_commands.MAX_PIPELINE_GROUPS]process_commands.PipelineGroup = undefined;
-    const group_count = process_commands.buildPipelineGroups(allocator, cached_procs, &groups_buf);
+    const group_count = process_commands.buildPipelineGroups(cached_procs, &groups_buf);
     const groups = groups_buf[0..group_count];
 
     if (group_count == 0) {
@@ -110,22 +109,9 @@ pub fn renderPipelineLensView(
             try renderStats(app_tui, theme, g.total_cpu, g.total_mem, g.total_disk_read_ps + g.total_disk_write_ps, cpu_w, mem_w, disk_w);
         } else {
             const ci = flat.child_idx;
-            const child_pid = g.child_pids[ci];
+            const child = &cached_procs[g.child_proc_indices[ci]];
             const stage = g.child_stages[ci];
-
-            var child_cpu: f32 = 0;
-            var child_mem: f32 = 0;
-            var child_disk: u64 = 0;
-            var child_name: []const u8 = "?";
-            for (cached_procs) |p| {
-                if (p.pid == child_pid) {
-                    child_cpu = p.cpu_percent;
-                    child_mem = p.mem_percent;
-                    child_disk = p.disk_read_ps + p.disk_write_ps;
-                    child_name = p.name();
-                    break;
-                }
-            }
+            const child_disk = child.disk_read_ps + child.disk_write_ps;
 
             const is_last_child = ci + 1 == g.child_count;
             const branch = if (is_last_child) "└─ " else "├─ ";
@@ -140,13 +126,13 @@ pub fn renderPipelineLensView(
                 _ = try util.writePill(app_tui, .{ .bg = stage_color, .fg = theme.selection_fg, .bold = true }, pill_label);
                 try app_tui.bufWrite(" ");
                 const name_avail = name_w -| (branch_width + pill_width + 1);
-                try util.writeAlignedCell(app_tui, child_style, name_avail, .left, child_name);
+                try util.writeAlignedCell(app_tui, child_style, name_avail, .left, child.name());
             } else {
                 var label_buf: [96]u8 = undefined;
-                const row_label = std.fmt.bufPrint(&label_buf, "{s}[{s}] {s}", .{ branch, pill_label, child_name }) catch child_name;
+                const row_label = std.fmt.bufPrint(&label_buf, "{s}[{s}] {s}", .{ branch, pill_label, child.name() }) catch child.name();
                 try util.writeAlignedCell(app_tui, child_style, name_w, .left, row_label);
             }
-            try renderStats(app_tui, theme, child_cpu, child_mem, child_disk, cpu_w, mem_w, disk_w);
+            try renderStats(app_tui, theme, child.cpu_percent, child.mem_percent, child_disk, cpu_w, mem_w, disk_w);
         }
 
         if (is_sel) try app_tui.resetStyle();

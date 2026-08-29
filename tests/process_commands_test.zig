@@ -43,6 +43,17 @@ test "containsParentPid matches collected parent processes" {
     try std.testing.expect(!process_commands.containsParentPid(&entries, 99));
 }
 
+test "matchesProcessFilter compares names without temporary lowercase copies" {
+    var candidate = proc(1234, 1, .running);
+    @memcpy(candidate.name_buf[0..11], "Chrome Help");
+    candidate.name_len = 11;
+
+    try std.testing.expect(process_commands.matchesProcessFilter(&candidate, "chrome"));
+    try std.testing.expect(process_commands.matchesProcessFilter(&candidate, "HELP"));
+    try std.testing.expect(process_commands.matchesProcessFilter(&candidate, "234"));
+    try std.testing.expect(!process_commands.matchesProcessFilter(&candidate, "firefox"));
+}
+
 test "buildTreeView correctly orders hierarchy" {
     const procs = [_]common.ProcStats{
         proc(1, 0, .running), // Root
@@ -57,7 +68,6 @@ test "buildTreeView correctly orders hierarchy" {
     var is_lasts: [5]u16 = undefined;
 
     const count = process_commands.buildTreeView(
-        std.testing.allocator,
         &procs,
         &indices,
         &depths,
@@ -87,4 +97,36 @@ test "buildTreeView correctly orders hierarchy" {
 
     try std.testing.expectEqual(@as(usize, 4), indices[4]); // pid 2
     try std.testing.expectEqual(@as(u8, 0), depths[4]);
+}
+
+test "buildPipelineGroups follows nested process ancestry without allocation" {
+    var procs = [_]common.ProcStats{
+        proc(100, 1, .running),
+        proc(101, 100, .running),
+        proc(102, 101, .running),
+        proc(200, 1, .running),
+    };
+    @memcpy(procs[0].name_buf[0..5], "cargo");
+    procs[0].name_len = 5;
+    procs[0].cpu_percent = 10;
+    @memcpy(procs[1].name_buf[0..5], "rustc");
+    procs[1].name_len = 5;
+    procs[1].cpu_percent = 20;
+    @memcpy(procs[2].name_buf[0..2], "ld");
+    procs[2].name_len = 2;
+    procs[2].cpu_percent = 5;
+    @memcpy(procs[3].name_buf[0..3], "zsh");
+    procs[3].name_len = 3;
+
+    var groups: [process_commands.MAX_PIPELINE_GROUPS]process_commands.PipelineGroup = undefined;
+    const count = process_commands.buildPipelineGroups(&procs, &groups);
+
+    try std.testing.expectEqual(@as(usize, 1), count);
+    try std.testing.expectEqual(@as(u32, 100), groups[0].root_pid);
+    try std.testing.expectEqual(@as(u8, 2), groups[0].child_count);
+    try std.testing.expectEqual(@as(u16, 1), groups[0].child_proc_indices[0]);
+    try std.testing.expectEqual(@as(u16, 2), groups[0].child_proc_indices[1]);
+    try std.testing.expectEqual(@as(f32, 35), groups[0].total_cpu);
+    try std.testing.expectEqual(process_commands.BuildStage.compile, groups[0].child_stages[0]);
+    try std.testing.expectEqual(process_commands.BuildStage.link, groups[0].child_stages[1]);
 }

@@ -55,13 +55,29 @@ pub fn renderHistoryGraph(
 
     const graph_width: usize = width;
     const graph_height: usize = height;
+    var column_values: [history_mod.MAX_HISTORY_SAMPLES]?f32 = undefined;
+    var column_levels: [history_mod.MAX_HISTORY_SAMPLES]usize = undefined;
+    const cache_columns = graph_width <= column_values.len;
+    if (cache_columns) {
+        history.valuesForColumns(column_values[0..graph_width]);
+        for (column_values[0..graph_width], 0..) |maybe_value, column| {
+            column_levels[column] = if (maybe_value) |value| historyGraphLevel(value, graph_height) else 0;
+        }
+    }
 
     for (0..graph_height) |row| {
         try app_tui.moveCursor(x, y + @as(u16, @intCast(row)));
 
         for (0..graph_width) |column| {
-            if (history.valueForColumn(column, graph_width)) |value| {
-                const total_level = historyGraphLevel(value, graph_height);
+            const maybe_value = if (cache_columns)
+                column_values[column]
+            else
+                history.valueForColumn(column, graph_width);
+            if (maybe_value) |value| {
+                const total_level = if (cache_columns)
+                    column_levels[column]
+                else
+                    historyGraphLevel(value, graph_height);
                 const rows_below = graph_height - row - 1;
                 const row_base = rows_below * 8;
                 const cell_level = if (total_level > row_base)
@@ -100,13 +116,29 @@ pub fn renderRateHistoryGraph(
 
     const graph_width: usize = width;
     const graph_height: usize = height;
+    var column_values: [history_mod.MAX_HISTORY_SAMPLES]?u64 = undefined;
+    var column_levels: [history_mod.MAX_HISTORY_SAMPLES]usize = undefined;
+    const cache_columns = graph_width <= column_values.len;
+    if (cache_columns) {
+        history.valuesForColumns(column_values[0..graph_width]);
+        for (column_values[0..graph_width], 0..) |maybe_value, column| {
+            column_levels[column] = if (maybe_value) |value| rateGraphLevel(value, max_value, graph_height) else 0;
+        }
+    }
 
     for (0..graph_height) |row| {
         try app_tui.moveCursor(x, y + @as(u16, @intCast(row)));
 
         for (0..graph_width) |column| {
-            if (history.valueForColumn(column, graph_width)) |value| {
-                const total_level = rateGraphLevel(value, max_value, graph_height);
+            const maybe_value = if (cache_columns)
+                column_values[column]
+            else
+                history.valueForColumn(column, graph_width);
+            if (maybe_value) |value| {
+                const total_level = if (cache_columns)
+                    column_levels[column]
+                else
+                    rateGraphLevel(value, max_value, graph_height);
                 const rows_below = graph_height - row - 1;
                 const row_base = rows_below * 8;
                 const cell_level = if (total_level > row_base)

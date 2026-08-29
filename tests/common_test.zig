@@ -167,6 +167,22 @@ test "sortProcStats by wakeups" {
     try std.testing.expectEqual(@as(u32, 3), procs[2].pid);
 }
 
+test "sortProcStats preserves input order for equal metrics" {
+    var procs = [_]common.ProcStats{
+        .{ .pid = 30, .cpu_percent = 5.0 },
+        .{ .pid = 10, .cpu_percent = 5.0 },
+        .{ .pid = 40, .cpu_percent = 20.0 },
+        .{ .pid = 20, .cpu_percent = 5.0 },
+    };
+
+    common.sortProcStats(&procs, .cpu);
+
+    try std.testing.expectEqual(@as(u32, 40), procs[0].pid);
+    try std.testing.expectEqual(@as(u32, 30), procs[1].pid);
+    try std.testing.expectEqual(@as(u32, 10), procs[2].pid);
+    try std.testing.expectEqual(@as(u32, 20), procs[3].pid);
+}
+
 test "filterProcStatsByLaunchCommandSubstring removes matches in place" {
     var procs = [_]common.ProcStats{
         .{ .pid = 1, .launch_cmd_len = 22 },

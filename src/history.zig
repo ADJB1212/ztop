@@ -68,6 +68,12 @@ pub fn History(comptime T: type, comptime clamp_max: ?T) type {
 
             return max_value;
         }
+
+        pub fn valuesForColumns(self: *const Self, values: []?T) void {
+            for (values, 0..) |*value, column| {
+                value.* = self.valueForColumn(column, values.len);
+            }
+        }
     };
 }
 

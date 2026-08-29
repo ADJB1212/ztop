@@ -268,7 +268,7 @@ pub const SortBy = enum {
     wakeups,
 };
 
-fn wakeupScore(proc: ProcStats) f64 {
+fn wakeupScore(proc: *const ProcStats) f64 {
     return @floatFromInt(proc.wakeups_ps + (proc.context_switches_ps / 2));
 }
 
@@ -276,29 +276,68 @@ pub inline fn kbToBytes(x: usize) usize {
     return x << 10;
 }
 
+fn procLessThan(sort_by: SortBy, a: *const ProcStats, b: *const ProcStats) bool {
+    return switch (sort_by) {
+        .cpu => a.cpu_percent > b.cpu_percent,
+        .mem => a.mem_percent > b.mem_percent,
+        .pid => a.pid < b.pid,
+        .name => std.mem.order(u8, a.name(), b.name()) == .lt,
+        .wakeups => wakeupScore(a) > wakeupScore(b),
+    };
+}
+
 pub fn sortProcStats(slice: []ProcStats, sort_by: SortBy) void {
-    const Context = struct {
-        sort_by: SortBy,
-        pub fn lessThan(self: @This(), a: ProcStats, b: ProcStats) bool {
-            switch (self.sort_by) {
-                .cpu => return a.cpu_percent > b.cpu_percent,
-                .mem => return a.mem_percent > b.mem_percent,
-                .pid => return a.pid < b.pid,
-                .name => return std.mem.order(u8, a.name(), b.name()) == .lt,
-                .wakeups => return wakeupScore(a) > wakeupScore(b),
+    if (slice.len < 2) return;
+
+    if (slice.len <= MAX_PROCS) {
+        var indices: [MAX_PROCS]u16 = undefined;
+        for (indices[0..slice.len], 0..) |*index, i| index.* = @intCast(i);
+
+        const IndirectContext = struct {
+            procs: []const ProcStats,
+            sort_by: SortBy,
+
+            pub fn lessThan(self: @This(), a_index: u16, b_index: u16) bool {
+                const a = &self.procs[@intCast(a_index)];
+                const b = &self.procs[@intCast(b_index)];
+                if (procLessThan(self.sort_by, a, b)) return true;
+                if (procLessThan(self.sort_by, b, a)) return false;
+                return a_index < b_index;
             }
+        };
+
+        std.mem.sortUnstable(
+            u16,
+            indices[0..slice.len],
+            IndirectContext{ .procs = slice, .sort_by = sort_by },
+            IndirectContext.lessThan,
+        );
+
+        var sorted: [MAX_PROCS]ProcStats = undefined;
+        for (indices[0..slice.len], 0..) |source_index, dest_index| {
+            sorted[dest_index] = slice[@intCast(source_index)];
+        }
+        @memcpy(slice, sorted[0..slice.len]);
+        return;
+    }
+
+    const DirectContext = struct {
+        sort_by: SortBy,
+
+        pub fn lessThan(self: @This(), a: ProcStats, b: ProcStats) bool {
+            return procLessThan(self.sort_by, &a, &b);
         }
     };
-    std.mem.sort(ProcStats, slice, Context{ .sort_by = sort_by }, Context.lessThan);
+    std.mem.sort(ProcStats, slice, DirectContext{ .sort_by = sort_by }, DirectContext.lessThan);
 }
 
 pub fn filterProcStatsByLaunchCommandSubstring(slice: []ProcStats, needle_list: []const u8) []ProcStats {
     if (needleListEmpty(needle_list)) return slice;
 
     var write_idx: usize = 0;
-    for (slice) |proc| {
+    for (slice) |*proc| {
         if (matchesAnyLaunchCommandSubstring(proc.launchCommand(), needle_list)) continue;
-        slice[write_idx] = proc;
+        slice[write_idx] = proc.*;
         write_idx += 1;
     }
 
