@@ -94,17 +94,13 @@ pub fn writeAlignedCell(app_tui: *Tui, style: Tui.Style, width: usize, text_alig
     const padding = width - clipped.len;
 
     if (text_align == .right) {
-        for (0..padding) |_| {
-            try app_tui.writeStyled(style, " ");
-        }
+        try app_tui.writeStyledSpaces(style, padding);
     }
 
     try app_tui.writeStyled(style, clipped);
 
     if (text_align == .left) {
-        for (0..padding) |_| {
-            try app_tui.writeStyled(style, " ");
-        }
+        try app_tui.writeStyledSpaces(style, padding);
     }
 }
 

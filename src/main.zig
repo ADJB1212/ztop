@@ -718,8 +718,6 @@ pub fn main(main_init: std.process.Init) !void {
                             // In scrub mode: show snapshot procs directly, no filtering
                             for (0..scrub_proc_count) |i| {
                                 filtered_indices[i] = i;
-                                filtered_depths[i] = 0;
-                                filtered_is_lasts[i] = 0;
                             }
                             filtered_count = scrub_proc_count;
                         } else {
@@ -740,8 +738,6 @@ pub fn main(main_init: std.process.Init) !void {
 
                                     if (!process_commands.matchesProcessFilter(proc, filter_str)) continue;
                                     filtered_indices[filtered_count] = i;
-                                    filtered_depths[filtered_count] = 0;
-                                    filtered_is_lasts[filtered_count] = 0;
                                     filtered_count += 1;
                                     if (filtered_count >= filtered_indices.len) break;
                                 }
@@ -795,7 +791,7 @@ pub fn main(main_init: std.process.Init) !void {
                             const idx = scroll_offset + row;
                             if (idx >= filtered_count) break;
                             const proc_idx = filtered_indices[idx];
-                            const proc = if (is_scrubbing) scrub_proc_buf[proc_idx] else cached_procs[proc_idx];
+                            const proc = if (is_scrubbing) &scrub_proc_buf[proc_idx] else &cached_procs[proc_idx];
 
                             const is_selected = (idx == selected_idx) and !show_help;
 
@@ -803,13 +799,13 @@ pub fn main(main_init: std.process.Init) !void {
 
                             if (is_selected) {
                                 try app_tui.setStyle(.{ .bg = theme.selection_bg });
-                                for (0..procs_box_width - 4) |_| try app_tui.bufWrite(" ");
+                                try app_tui.writeSpaces(procs_box_width - 4);
                                 try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1 + @as(u16, @intCast(row)));
                             }
 
                             var prefix_len: usize = 0;
                             var prefix_width: usize = 0;
-                            if (tree_view and filter_len == 0 and !show_zombie_parents) {
+                            if (!is_scrubbing and tree_view and filter_len == 0 and !show_zombie_parents) {
                                 const depth = filtered_depths[idx];
                                 const is_last_mask = filtered_is_lasts[idx];
                                 for (0..depth) |d| {
@@ -830,8 +826,8 @@ pub fn main(main_init: std.process.Init) !void {
 
                             try render.renderProcessRow(
                                 &app_tui,
-                                theme,
-                                process_layout,
+                                &theme,
+                                &process_layout,
                                 proc,
                                 is_selected,
                                 prefix_buf[0..prefix_len],

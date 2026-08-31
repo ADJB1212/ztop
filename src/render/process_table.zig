@@ -9,8 +9,10 @@ const Tui = tui.Tui;
 
 pub const ProcessTableLayout = struct {
     columns: [config.process_column_order.len]ProcessColumn = undefined,
+    column_widths: [config.process_column_order.len]usize = undefined,
     count: usize = 0,
     name_width: usize = 0,
+    name_column_index: usize = 0,
     dropped_count: usize = 0,
     launch_path_extra: usize = 0,
 };
@@ -35,7 +37,7 @@ pub fn processColumnWidth(column: ProcessColumn) usize {
 }
 
 /// Very rough estimate of a process's share of the system's total power draw.
-fn estimateProcessPowerW(proc: sysinfo.ProcStats, cpu_cores: u32, system_power_w: f32) f32 {
+fn estimateProcessPowerW(proc: *const sysinfo.ProcStats, cpu_cores: u32, system_power_w: f32) f32 {
     const cores: f32 = @floatFromInt(@max(cpu_cores, 1));
     const cpu_budget = system_power_w * 0.70;
     const per_core_w = cpu_budget / cores;
@@ -76,12 +78,26 @@ pub fn planProcessTableLayout(columns: ProcessColumns, available_width: usize) P
         @memcpy(layout.columns[0..layout.count], visible[0..layout.count]);
     }
 
+    layout.name_column_index = layout.count;
+    for (layout.columns[0..layout.count], 0..) |column, index| {
+        layout.column_widths[index] = processColumnWidth(column);
+        if (layout.name_column_index == layout.count and column != .pid and column != .ppid) {
+            layout.name_column_index = index;
+        }
+    }
+
     const remaining = available_width -| fixed_width;
     const has_launch_path = std.mem.indexOfScalar(ProcessColumn, layout.columns[0..layout.count], .launch_path) != null;
 
     if (has_launch_path and remaining > default_process_name_width) {
         layout.name_width = default_process_name_width;
         layout.launch_path_extra = remaining - default_process_name_width;
+        for (layout.columns[0..layout.count], 0..) |column, index| {
+            if (column == .launch_path) {
+                layout.column_widths[index] += layout.launch_path_extra;
+                break;
+            }
+        }
     } else {
         layout.name_width = remaining;
     }
@@ -103,10 +119,10 @@ fn renderProcessNameCell(
         const clipped_len = if (width > 2 and name.len > width - 2) width - 2 else @min(name.len, width);
         try app_tui.writeStyled(style, name[0..clipped_len]);
         if (width > 2 and name.len > clipped_len) {
-            try app_tui.writeStyled(style, "..");
+            try app_tui.bufWrite("..");
         }
         const used = clipped_len + if (width > 2 and name.len > clipped_len) @as(usize, 2) else 0;
-        for (used..width) |_| try app_tui.writeStyled(style, " ");
+        try app_tui.writeStyledSpaces(style, width - used);
         return;
     }
 
@@ -117,22 +133,22 @@ fn renderProcessNameCell(
         @min(name.len, available_name_width);
 
     try app_tui.writeStyled(style, prefix);
-    try app_tui.writeStyled(style, name[0..clipped_name_len]);
+    try app_tui.bufWrite(name[0..clipped_name_len]);
     var used = prefix_width + clipped_name_len;
 
     if (name.len > clipped_name_len and available_name_width > 2) {
-        try app_tui.writeStyled(style, "..");
+        try app_tui.bufWrite("..");
         used += 2;
     }
 
-    for (used..width) |_| try app_tui.writeStyled(style, " ");
+    try app_tui.writeStyledSpaces(style, width - used);
 }
 
 pub fn renderProcessRow(
     app_tui: *Tui,
-    theme: config.Theme,
-    layout: ProcessTableLayout,
-    proc: sysinfo.ProcStats,
+    theme: *const config.Theme,
+    layout: *const ProcessTableLayout,
+    proc: *const sysinfo.ProcStats,
     is_selected: bool,
     prefix: []const u8,
     prefix_width: usize,
@@ -144,79 +160,75 @@ pub fn renderProcessRow(
     const ppid_style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.muted };
     const name_style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text };
 
-    var rendered_name = false;
-    for (layout.columns[0..layout.count]) |column| {
-        if (!rendered_name and switch (column) {
-            .launch_path, .state, .cpu, .mem, .threads, .disk_read, .disk_write, .wakeups, .energy => true,
-            .pid, .ppid => false,
-        }) {
+    for (layout.columns[0..layout.count], 0..) |column, column_index| {
+        if (column_index == layout.name_column_index) {
             try renderProcessNameCell(app_tui, name_style, layout.name_width, prefix, prefix_width, proc.name());
-            rendered_name = true;
         }
+        const column_width = layout.column_widths[column_index];
 
         switch (column) {
             .pid => {
                 const text = std.fmt.bufPrint(&buf, "{d}", .{proc.pid}) catch "";
-                try util.writeAlignedCell(app_tui, pid_style, processColumnWidth(.pid), .left, text);
+                try util.writeAlignedCell(app_tui, pid_style, column_width, .left, text);
             },
             .ppid => {
                 const text = std.fmt.bufPrint(&buf, "{d}", .{proc.ppid}) catch "";
-                try util.writeAlignedCell(app_tui, ppid_style, processColumnWidth(.ppid), .right, text);
+                try util.writeAlignedCell(app_tui, ppid_style, column_width, .right, text);
             },
             .launch_path => {
                 const style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.muted } else .{ .fg = theme.muted };
                 const launch = proc.launchCommand();
                 const text = if (launch.len > 0) launch else "-";
-                try util.writeAlignedCell(app_tui, style, processColumnWidth(.launch_path) + layout.launch_path_extra, .left, text);
+                try util.writeAlignedCell(app_tui, style, column_width, .left, text);
             },
             .state => {
                 const style: Tui.Style = if (is_selected)
-                    .{ .bg = theme.selection_bg, .fg = util.procStateColor(theme, proc.state) }
+                    .{ .bg = theme.selection_bg, .fg = util.procStateColor(theme.*, proc.state) }
                 else
-                    .{ .fg = util.procStateColor(theme, proc.state) };
-                try util.writeAlignedCell(app_tui, style, processColumnWidth(.state), .left, util.procStateLabel(proc.state));
+                    .{ .fg = util.procStateColor(theme.*, proc.state) };
+                try util.writeAlignedCell(app_tui, style, column_width, .left, util.procStateLabel(proc.state));
             },
             .cpu => {
                 const text = std.fmt.bufPrint(&buf, "{d:4.1}% CPU", .{proc.cpu_percent}) catch "";
                 const style: Tui.Style = if (is_selected)
-                    .{ .bg = theme.selection_bg, .fg = util.usageColor(theme, proc.cpu_percent), .bold = proc.cpu_percent >= 70 }
+                    .{ .bg = theme.selection_bg, .fg = util.usageColor(theme.*, proc.cpu_percent), .bold = proc.cpu_percent >= 70 }
                 else
-                    .{ .fg = util.usageColor(theme, proc.cpu_percent), .bold = proc.cpu_percent >= 70 };
-                try util.writeAlignedCell(app_tui, style, processColumnWidth(.cpu), .right, text);
+                    .{ .fg = util.usageColor(theme.*, proc.cpu_percent), .bold = proc.cpu_percent >= 70 };
+                try util.writeAlignedCell(app_tui, style, column_width, .right, text);
             },
             .mem => {
                 const text = std.fmt.bufPrint(&buf, "{d:4.1}% MEM", .{proc.mem_percent}) catch "";
                 const style: Tui.Style = if (is_selected)
-                    .{ .bg = theme.selection_bg, .fg = util.memoryColor(theme, proc.mem_percent), .bold = proc.mem_percent >= 10 }
+                    .{ .bg = theme.selection_bg, .fg = util.memoryColor(theme.*, proc.mem_percent), .bold = proc.mem_percent >= 10 }
                 else
-                    .{ .fg = util.memoryColor(theme, proc.mem_percent), .bold = proc.mem_percent >= 10 };
-                try util.writeAlignedCell(app_tui, style, processColumnWidth(.mem), .right, text);
+                    .{ .fg = util.memoryColor(theme.*, proc.mem_percent), .bold = proc.mem_percent >= 10 };
+                try util.writeAlignedCell(app_tui, style, column_width, .right, text);
             },
             .threads => {
                 const text = std.fmt.bufPrint(&buf, "{d} THR", .{proc.threads}) catch "";
                 const style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.brand } else .{ .fg = theme.brand };
-                try util.writeAlignedCell(app_tui, style, processColumnWidth(.threads), .right, text);
+                try util.writeAlignedCell(app_tui, style, column_width, .right, text);
             },
             .disk_read => {
                 const rate = util.formatUnit(proc.disk_read_ps);
                 const text = std.fmt.bufPrint(&buf, "R {d:4.1}{s}/s", .{ rate.value, rate.unit }) catch "";
                 const style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.disk_title } else .{ .fg = theme.disk_title };
-                try util.writeAlignedCell(app_tui, style, processColumnWidth(.disk_read), .right, text);
+                try util.writeAlignedCell(app_tui, style, column_width, .right, text);
             },
             .disk_write => {
                 const rate = util.formatUnit(proc.disk_write_ps);
                 const text = std.fmt.bufPrint(&buf, "W {d:4.1}{s}/s", .{ rate.value, rate.unit }) catch "";
                 const style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.io_rate } else .{ .fg = theme.io_rate };
-                try util.writeAlignedCell(app_tui, style, processColumnWidth(.disk_write), .right, text);
+                try util.writeAlignedCell(app_tui, style, column_width, .right, text);
             },
             .wakeups => {
                 const text = std.fmt.bufPrint(&buf, "W{d:5} C{d:5}", .{ proc.wakeups_ps, proc.context_switches_ps }) catch "";
                 const activity = @as(f32, @floatFromInt(proc.wakeups_ps / 20 + proc.context_switches_ps / 40));
                 const style: Tui.Style = if (is_selected)
-                    .{ .bg = theme.selection_bg, .fg = util.usageColor(theme, activity) }
+                    .{ .bg = theme.selection_bg, .fg = util.usageColor(theme.*, activity) }
                 else
-                    .{ .fg = util.usageColor(theme, activity) };
-                try util.writeAlignedCell(app_tui, style, processColumnWidth(.wakeups), .right, text);
+                    .{ .fg = util.usageColor(theme.*, activity) };
+                try util.writeAlignedCell(app_tui, style, column_width, .right, text);
             },
             .energy => {
                 const style: Tui.Style = if (is_selected)
@@ -226,15 +238,15 @@ pub fn renderProcessRow(
                 if (system_power_w) |watts| {
                     const est_w = estimateProcessPowerW(proc, cpu_cores, watts);
                     const text = std.fmt.bufPrint(&buf, "{d:.2}W", .{est_w}) catch "";
-                    try util.writeAlignedCell(app_tui, style, processColumnWidth(.energy), .right, text);
+                    try util.writeAlignedCell(app_tui, style, column_width, .right, text);
                 } else {
-                    try util.writeAlignedCell(app_tui, style, processColumnWidth(.energy), .right, "--");
+                    try util.writeAlignedCell(app_tui, style, column_width, .right, "--");
                 }
             },
         }
     }
 
-    if (!rendered_name) {
+    if (layout.name_column_index == layout.count) {
         try renderProcessNameCell(app_tui, name_style, layout.name_width, prefix, prefix_width, proc.name());
     }
 }

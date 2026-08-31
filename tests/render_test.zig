@@ -40,11 +40,13 @@ test "planProcessTableLayout keeps enabled columns when width allows" {
     try std.testing.expectEqual(@as(usize, 5), layout.count);
     try std.testing.expectEqual(@as(usize, 8), layout.name_width);
     try std.testing.expectEqual(@as(usize, 0), layout.dropped_count);
+    try std.testing.expectEqual(@as(usize, 2), layout.name_column_index);
     try std.testing.expectEqual(config.ProcessColumn.pid, layout.columns[0]);
     try std.testing.expectEqual(config.ProcessColumn.ppid, layout.columns[1]);
     try std.testing.expectEqual(config.ProcessColumn.cpu, layout.columns[2]);
     try std.testing.expectEqual(config.ProcessColumn.mem, layout.columns[3]);
     try std.testing.expectEqual(config.ProcessColumn.threads, layout.columns[4]);
+    try std.testing.expectEqual(render.processColumnWidth(.cpu), layout.column_widths[2]);
 }
 
 test "planProcessTableLayout drops trailing columns to preserve name width" {
@@ -70,6 +72,7 @@ test "planProcessTableLayout gives launch_path extra width from leftover space" 
     // remaining > default_process_name_width(20), so name gets 20 and launch_path gets the rest.
     try std.testing.expectEqual(@as(usize, 20), layout.name_width);
     try std.testing.expectEqual(@as(usize, 20), layout.launch_path_extra);
+    try std.testing.expectEqual(@as(usize, 44), layout.column_widths[1]);
 }
 
 test "diskUsagePercent reports used out of total capacity" {

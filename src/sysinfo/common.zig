@@ -276,13 +276,17 @@ pub inline fn kbToBytes(x: usize) usize {
     return x << 10;
 }
 
-fn procLessThan(sort_by: SortBy, a: *const ProcStats, b: *const ProcStats) bool {
+fn procOrder(sort_by: SortBy, a: *const ProcStats, b: *const ProcStats) std.math.Order {
     return switch (sort_by) {
-        .cpu => a.cpu_percent > b.cpu_percent,
-        .mem => a.mem_percent > b.mem_percent,
-        .pid => a.pid < b.pid,
-        .name => std.mem.order(u8, a.name(), b.name()) == .lt,
-        .wakeups => wakeupScore(a) > wakeupScore(b),
+        .cpu => if (a.cpu_percent > b.cpu_percent) .lt else if (a.cpu_percent < b.cpu_percent) .gt else .eq,
+        .mem => if (a.mem_percent > b.mem_percent) .lt else if (a.mem_percent < b.mem_percent) .gt else .eq,
+        .pid => std.math.order(a.pid, b.pid),
+        .name => std.mem.order(u8, a.name(), b.name()),
+        .wakeups => blk: {
+            const a_score = wakeupScore(a);
+            const b_score = wakeupScore(b);
+            break :blk if (a_score > b_score) .lt else if (a_score < b_score) .gt else .eq;
+        },
     };
 }
 
@@ -300,9 +304,11 @@ pub fn sortProcStats(slice: []ProcStats, sort_by: SortBy) void {
             pub fn lessThan(self: @This(), a_index: u16, b_index: u16) bool {
                 const a = &self.procs[@intCast(a_index)];
                 const b = &self.procs[@intCast(b_index)];
-                if (procLessThan(self.sort_by, a, b)) return true;
-                if (procLessThan(self.sort_by, b, a)) return false;
-                return a_index < b_index;
+                return switch (procOrder(self.sort_by, a, b)) {
+                    .lt => true,
+                    .gt => false,
+                    .eq => a_index < b_index,
+                };
             }
         };
 
@@ -313,11 +319,22 @@ pub fn sortProcStats(slice: []ProcStats, sort_by: SortBy) void {
             IndirectContext.lessThan,
         );
 
-        var sorted: [MAX_PROCS]ProcStats = undefined;
-        for (indices[0..slice.len], 0..) |source_index, dest_index| {
-            sorted[dest_index] = slice[@intCast(source_index)];
+        for (0..slice.len) |cycle_start| {
+            if (indices[cycle_start] == cycle_start) continue;
+
+            const displaced = slice[cycle_start];
+            var destination = cycle_start;
+            while (true) {
+                const source_index = indices[destination];
+                indices[destination] = @intCast(destination);
+                if (source_index == cycle_start) {
+                    slice[destination] = displaced;
+                    break;
+                }
+                slice[destination] = slice[@intCast(source_index)];
+                destination = @intCast(source_index);
+            }
         }
-        @memcpy(slice, sorted[0..slice.len]);
         return;
     }
 
@@ -325,7 +342,7 @@ pub fn sortProcStats(slice: []ProcStats, sort_by: SortBy) void {
         sort_by: SortBy,
 
         pub fn lessThan(self: @This(), a: ProcStats, b: ProcStats) bool {
-            return procLessThan(self.sort_by, &a, &b);
+            return procOrder(self.sort_by, &a, &b) == .lt;
         }
     };
     std.mem.sort(ProcStats, slice, DirectContext{ .sort_by = sort_by }, DirectContext.lessThan);

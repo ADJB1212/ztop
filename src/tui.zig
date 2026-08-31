@@ -460,6 +460,16 @@ pub const Tui = struct {
         self.frame_len += data.len;
     }
 
+    pub fn writeSpaces(self: *Tui, count: usize) !void {
+        const spaces = [_]u8{' '} ** 128;
+        var remaining = count;
+        while (remaining > 0) {
+            const chunk_len = @min(remaining, spaces.len);
+            try self.bufWrite(spaces[0..chunk_len]);
+            remaining -= chunk_len;
+        }
+    }
+
     fn flushBuffer(self: *Tui) !void {
         if (self.frame_len == 0) return;
         try self.out.writeStreamingAll(self.io, self.frame_buf[0..self.frame_len]);
@@ -518,6 +528,11 @@ pub const Tui = struct {
     pub fn writeStyled(self: *Tui, style: Style, text: []const u8) !void {
         try self.setStyleIfChanged(style);
         try self.bufWrite(text);
+    }
+
+    pub fn writeStyledSpaces(self: *Tui, style: Style, count: usize) !void {
+        try self.setStyleIfChanged(style);
+        try self.writeSpaces(count);
     }
 
     pub fn printStyled(self: *Tui, style: Style, comptime fmt: []const u8, args: anytype) !void {
