@@ -72,6 +72,33 @@ test "RateHistory downsamples columns using peak values" {
     try std.testing.expectEqual(@as(u64, 90), rate_history.maxSample());
 }
 
+test "history SIMD peak reduction handles scalar tails" {
+    var metric_history = history.MetricHistory{};
+    const metric_samples = [_]f32{ 3, 18, 7, 12, 91, 4, 33 };
+    for (metric_samples) |sample| metric_history.append(sample);
+
+    var rate_history = history.RateHistory{};
+    const rate_samples = [_]u64{ 3, 18, 7, 12, 91 };
+    for (rate_samples) |sample| rate_history.append(sample);
+
+    try std.testing.expectEqual(@as(f32, 91), metric_history.maxSample());
+    try std.testing.expectEqual(@as(u64, 91), rate_history.maxSample());
+}
+
+test "history SIMD peak reduction handles wrapped storage" {
+    var metric_history = history.MetricHistory{};
+    for (0..history.MAX_HISTORY_SAMPLES + 5) |idx| {
+        metric_history.append(@floatFromInt(idx % 101));
+    }
+    metric_history.append(100);
+
+    var columns: [7]?f32 = undefined;
+    metric_history.valuesForColumns(&columns);
+
+    try std.testing.expectEqual(@as(f32, 100), metric_history.maxSample());
+    try std.testing.expectEqual(@as(?f32, 100), columns[columns.len - 1]);
+}
+
 test "column cache preserves right alignment" {
     var rate_history = history.RateHistory{};
     rate_history.append(10);

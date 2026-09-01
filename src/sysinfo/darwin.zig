@@ -256,16 +256,20 @@ pub const SysInfo = struct {
     }
 
     fn usageFromTicks(prev_ticks: *[4]u64, user: u64, system: u64, idle: u64, nice: u64) f32 {
-        const total = user + system + idle + nice;
-        const active = user + system + nice;
+        const TickVector = @Vector(4, u64);
+        const active_mask: TickVector = .{ 1, 1, 0, 1 };
+        const current: TickVector = .{ user, system, idle, nice };
+        const previous: TickVector = prev_ticks.*;
 
-        const prev_total = prev_ticks[CPU_STATE_USER] + prev_ticks[CPU_STATE_SYSTEM] + prev_ticks[CPU_STATE_IDLE] + prev_ticks[CPU_STATE_NICE];
-        const prev_active = prev_ticks[CPU_STATE_USER] + prev_ticks[CPU_STATE_SYSTEM] + prev_ticks[CPU_STATE_NICE];
+        const total = @reduce(.Add, current);
+        const active = @reduce(.Add, current * active_mask);
+        const prev_total = @reduce(.Add, previous);
+        const prev_active = @reduce(.Add, previous * active_mask);
 
         const delta_total = total -| prev_total;
         const delta_active = active -| prev_active;
 
-        prev_ticks.* = .{ user, system, idle, nice };
+        prev_ticks.* = @bitCast(current);
 
         if (prev_total == 0 or delta_total == 0) return 0;
 
