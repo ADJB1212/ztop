@@ -876,54 +876,101 @@ pub const SysInfo = struct {
     }
 
     pub fn getNetConnections(self: *SysInfo, allocator: std.mem.Allocator) ![]common.NetConnection {
-        _ = self;
         var result: std.ArrayList(common.NetConnection) = .empty;
-        defer result.deinit(allocator);
+        errdefer result.deinit(allocator);
 
-        var pids: [MAX_PROCS]c_int = undefined;
-        const num_pids_bytes = bindings.proc_listallpids(&pids, @intCast(pids.len * @sizeOf(c_int)));
-        if (num_pids_bytes <= 0) return result.toOwnedSlice(allocator);
-        const num_pids = @as(usize, @intCast(num_pids_bytes)) / @sizeOf(c_int);
+        try self.refreshNetConnections(allocator, &result);
+        return result.toOwnedSlice(allocator);
+    }
+
+    pub fn refreshNetConnections(
+        self: *SysInfo,
+        allocator: std.mem.Allocator,
+        result: *std.ArrayList(common.NetConnection),
+    ) !void {
+        result.clearRetainingCapacity();
+        errdefer result.clearRetainingCapacity();
 
         var fd_buf: [4096]c.struct_proc_fdinfo = undefined;
 
+        if (self.prev_proc_count > 0) {
+            for (self.prev_procs[0..self.prev_proc_count]) |proc| {
+                try collectProcessConnections(
+                    allocator,
+                    result,
+                    &fd_buf,
+                    @intCast(proc.pid),
+                    proc.name_buf[0..proc.name_len],
+                );
+            }
+            return;
+        }
+
+        var pids: [MAX_PROCS]c_int = undefined;
+        const num_pids_raw = bindings.proc_listallpids(&pids, @intCast(pids.len * @sizeOf(c_int)));
+        if (num_pids_raw <= 0) return;
+        const num_pids = @min(@as(usize, @intCast(num_pids_raw)), pids.len);
         for (pids[0..num_pids]) |pid| {
             if (pid <= 0) continue;
-
-            const fds_bytes = bindings.proc_pidinfo(
-                pid,
-                c.PROC_PIDLISTFDS,
-                0,
-                &fd_buf,
-                @intCast(fd_buf.len * @sizeOf(c.struct_proc_fdinfo)),
-            );
-            if (fds_bytes <= 0) continue;
-            const num_fds = @as(usize, @intCast(fds_bytes)) / @sizeOf(c.struct_proc_fdinfo);
-
-            var process_name: [64]u8 = std.mem.zeroes([64]u8);
-            const name_len_c = bindings.proc_name(pid, &process_name, 64);
-            const name_len: u8 = if (name_len_c > 0) @intCast(@min(name_len_c, 64)) else 0;
-
-            for (fd_buf[0..num_fds]) |fdinfo| {
-                if (fdinfo.proc_fdtype != c.PROX_FDTYPE_SOCKET) continue;
-
-                var socket_info: c.struct_socket_fdinfo = std.mem.zeroes(c.struct_socket_fdinfo);
-                const sret = bindings.proc_pidfdinfo(
-                    pid,
-                    fdinfo.proc_fd,
-                    c.PROC_PIDFDSOCKETINFO,
-                    &socket_info,
-                    @sizeOf(c.struct_socket_fdinfo),
-                );
-                if (sret != @sizeOf(c.struct_socket_fdinfo)) continue;
-
-                const conn = net_mod.parseSocketFdInfo(@intCast(pid), process_name, name_len, &socket_info) orelse continue;
-                try result.append(allocator, conn);
-            }
+            try collectProcessConnections(allocator, result, &fd_buf, pid, null);
         }
-        return result.toOwnedSlice(allocator);
     }
 };
+
+fn collectProcessConnections(
+    allocator: std.mem.Allocator,
+    result: *std.ArrayList(common.NetConnection),
+    fd_buf: *[4096]c.struct_proc_fdinfo,
+    pid: c_int,
+    cached_name: ?[]const u8,
+) !void {
+    const fds_bytes = bindings.proc_pidinfo(
+        pid,
+        c.PROC_PIDLISTFDS,
+        0,
+        fd_buf,
+        @intCast(fd_buf.len * @sizeOf(c.struct_proc_fdinfo)),
+    );
+    if (fds_bytes <= 0) return;
+    const num_fds = @min(
+        @as(usize, @intCast(fds_bytes)) / @sizeOf(c.struct_proc_fdinfo),
+        fd_buf.len,
+    );
+
+    var process_name: [64]u8 = std.mem.zeroes([64]u8);
+    var name_len: u8 = 0;
+    var name_fetched = false;
+    if (cached_name) |name| {
+        name_len = @intCast(@min(name.len, process_name.len - 1));
+        @memcpy(process_name[0..name_len], name[0..name_len]);
+        name_fetched = true;
+    }
+
+    for (fd_buf[0..num_fds]) |fdinfo| {
+        if (fdinfo.proc_fdtype != c.PROX_FDTYPE_SOCKET) continue;
+
+        var socket_info: c.struct_socket_fdinfo = std.mem.zeroes(c.struct_socket_fdinfo);
+        const sret = bindings.proc_pidfdinfo(
+            pid,
+            fdinfo.proc_fd,
+            c.PROC_PIDFDSOCKETINFO,
+            &socket_info,
+            @sizeOf(c.struct_socket_fdinfo),
+        );
+        if (sret != @sizeOf(c.struct_socket_fdinfo)) continue;
+
+        const socket_kind = socket_info.psi.soi_kind;
+        if (socket_kind != c.SOCKINFO_IN and socket_kind != c.SOCKINFO_TCP) continue;
+        if (!name_fetched) {
+            const name_len_c = bindings.proc_name(pid, &process_name, process_name.len);
+            name_len = if (name_len_c > 0) @intCast(@min(@as(usize, @intCast(name_len_c)), process_name.len - 1)) else 0;
+            name_fetched = true;
+        }
+
+        const conn = net_mod.parseSocketFdInfo(@intCast(pid), process_name, name_len, &socket_info) orelse continue;
+        try result.append(allocator, conn);
+    }
+}
 
 fn readCpuTopology(self: *SysInfo) !void {
     const total_logical = @min(@as(usize, @intCast(readSysctlNumber(u32, "hw.logicalcpu") orelse return error.UnexpectedCpuTopology)), MAX_CORES);

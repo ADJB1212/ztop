@@ -83,7 +83,7 @@ pub const Context = struct {
     app_tui: *Tui,
     cached_procs: []sysinfo.ProcStats,
     cached_threads: *[]sysinfo.ThreadStats,
-    cached_connections: *[]sysinfo.common.NetConnection,
+    cached_connections: *std.ArrayList(sysinfo.common.NetConnection),
     sort_by: *sysinfo.SortBy,
     selected_idx: *usize,
     scroll_offset: *usize,
@@ -265,7 +265,7 @@ fn handleFilterModeToken(ctx: *Context, token: Tui.InputToken) bool {
 
 fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) !bool {
     const list_count = if (ctx.current_tab.* == 4)
-        ctx.cached_connections.*.len
+        ctx.cached_connections.items.len
     else if (ctx.thread_view.*)
         ctx.cached_threads.*.len
     else if (ctx.pipeline_view.*)
@@ -934,7 +934,7 @@ fn signalSelectedProcess(ctx: *Context, signal: posix.SIG) void {
 fn setCurrentTab(
     allocator: std.mem.Allocator,
     sys_info: *SysInfo,
-    cached_connections: *[]sysinfo.common.NetConnection,
+    cached_connections: *std.ArrayList(sysinfo.common.NetConnection),
     current_tab: *u8,
     selected_idx: *usize,
     scroll_offset: *usize,

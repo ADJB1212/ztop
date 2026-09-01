@@ -128,8 +128,8 @@ pub fn main(main_init: std.process.Init) !void {
 
     defer if (causality_connections.len > 0) allocator.free(causality_connections);
 
-    var cached_connections: []ztop.sysinfo.common.NetConnection = &.{};
-    defer if (cached_connections.len > 0) allocator.free(cached_connections);
+    var cached_connections: std.ArrayList(ztop.sysinfo.common.NetConnection) = .empty;
+    defer cached_connections.deinit(allocator);
 
     var cached_gpus: []ztop.sysinfo.GpuStats = &.{};
     defer if (cached_gpus.len > 0) allocator.free(cached_gpus);
@@ -177,12 +177,14 @@ pub fn main(main_init: std.process.Init) !void {
     // ─────────────────────────────────────────────────────────────────────────
 
     var cpu = sys_info.getCpuStats();
-    var cpu_topology = sys_info.getCpuTopology();
+    const cpu_topology = sys_info.getCpuTopology();
     var mem = sys_info.getMemStats();
     var disk = sys_info.getDiskStats();
     var net = sys_info.getNetStats();
     var thermal = sys_info.getThermalStats();
-    cached_gpus = try sys_info.getGpuStats(allocator);
+    if (app_config.default_tab == 3) {
+        cached_gpus = try sys_info.getGpuStats(allocator);
+    }
     var battery = sys_info.getBatteryStats();
     cached_procs = try sys_info.getProcStats(proc_buf, sort_by);
     cached_procs = ztop.sysinfo.common.filterProcStatsByLaunchCommandSubstring(cached_procs, app_config.ignoredLaunchCommandSubstr());
@@ -225,15 +227,16 @@ pub fn main(main_init: std.process.Init) !void {
 
         if (elapsed >= fetch_interval_ms) {
             cpu = sys_info.getCpuStats();
-            cpu_topology = sys_info.getCpuTopology();
             mem = sys_info.getMemStats();
             disk = sys_info.getDiskStats();
             net = sys_info.getNetStats();
             thermal = sys_info.getThermalStats();
-            if (cached_gpus.len > 0) {
-                allocator.free(cached_gpus);
+            if (current_tab == 3) {
+                if (cached_gpus.len > 0) {
+                    allocator.free(cached_gpus);
+                }
+                cached_gpus = try sys_info.getGpuStats(allocator);
             }
-            cached_gpus = try sys_info.getGpuStats(allocator);
             battery = sys_info.getBatteryStats();
             if (!is_scrubbing) {
                 cpu_history.append(cpu.usage_percent);
@@ -529,7 +532,7 @@ pub fn main(main_init: std.process.Init) !void {
                         display_net.rx_bytes_ps + display_net.tx_bytes_ps,
                         display_thermal,
                         cached_procs,
-                        cached_connections,
+                        cached_connections.items,
                         timeline,
                         app_config.temperature_unit,
                     );
@@ -553,7 +556,7 @@ pub fn main(main_init: std.process.Init) !void {
                         procs_box_y,
                         procs_box_width,
                         procs_box_height,
-                        cached_connections,
+                        cached_connections.items,
                         show_help,
                         &selected_idx,
                         &scroll_offset,

@@ -111,13 +111,9 @@ pub fn setStatus(status_buf: *[160]u8, status_len: *usize, comptime fmt: []const
 pub fn refreshConnections(
     allocator: std.mem.Allocator,
     sys_info: *SysInfo,
-    cached_connections: *[]sysinfo.common.NetConnection,
+    cached_connections: *std.ArrayList(sysinfo.common.NetConnection),
 ) !void {
-    const next = try sys_info.getNetConnections(allocator);
-    if (cached_connections.*.len > 0) {
-        allocator.free(cached_connections.*);
-    }
-    cached_connections.* = next;
+    try sys_info.refreshNetConnections(allocator, cached_connections);
 }
 
 pub fn footerCursorColumn(prompt_len: usize, input_len: usize, width: u16) u16 {

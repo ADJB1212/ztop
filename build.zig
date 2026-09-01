@@ -59,6 +59,9 @@ pub fn build(b: *std.Build) void {
     const swiftc = b.addSystemCommand(&.{
         "swiftc",
         "-O",
+        "-gnone",
+        "-j",
+        "6",
         "-emit-library",
         "-static",
         "-framework",
