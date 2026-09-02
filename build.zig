@@ -23,11 +23,9 @@ pub fn build(b: *std.Build) void {
         .version = version,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
-
             .target = target,
             .optimize = optimize,
             .strip = strip,
-
             .imports = &.{
                 .{ .name = "ztop", .module = mod },
             },
@@ -56,17 +54,7 @@ pub fn build(b: *std.Build) void {
         std.debug.panic("ztop is only supported on ARM (Apple Silicon) Macs", .{});
     }
 
-    const swiftc = b.addSystemCommand(&.{
-        "swiftc",
-        "-O",
-        "-gnone",
-        "-j",
-        "6",
-        "-emit-library",
-        "-static",
-        "-framework",
-        "FoundationModels",
-    });
+    const swiftc = b.addSystemCommand(&.{ "swiftc", "-O", "-gnone", "-j", "6", "-emit-library", "-static", "-framework", "FoundationModels" });
     if (sdk_root) |root| {
         swiftc.addArgs(&.{ "-sdk", root });
     }
@@ -76,17 +64,13 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addObjectFile(fm_lib);
     tests.root_module.addObjectFile(fm_lib);
 
-    exe.root_module.addCSourceFile(.{
-        .file = b.path("src/sysinfo/darwin/wifi.m"),
+    exe.root_module.addCSourceFiles(.{
+        .files = &.{ "src/sysinfo/darwin/wifi.m", "src/sysinfo/darwin/power.m" },
+        .flags = &.{"-O3"},
     });
-    tests.root_module.addCSourceFile(.{
-        .file = b.path("src/sysinfo/darwin/wifi.m"),
-    });
-    exe.root_module.addCSourceFile(.{
-        .file = b.path("src/sysinfo/darwin/power.m"),
-    });
-    tests.root_module.addCSourceFile(.{
-        .file = b.path("src/sysinfo/darwin/power.m"),
+
+    tests.root_module.addCSourceFiles(.{
+        .files = &.{ "src/sysinfo/darwin/wifi.m", "src/sysinfo/darwin/power.m" },
     });
 
     var sdk_path_buf: [1024]u8 = undefined;
@@ -134,17 +118,16 @@ pub fn build(b: *std.Build) void {
         tests.root_module.linkSystemLibrary(lib, .{});
     }
 
-    exe.root_module.linkFramework("IOKit", .{});
-    exe.root_module.linkFramework("CoreFoundation", .{});
-    exe.root_module.linkFramework("Foundation", .{});
-    exe.root_module.linkFramework("CoreWLAN", .{});
-    exe.root_module.linkFramework("FoundationModels", .{ .weak = true });
+    const frameworks: []const []const u8 = &.{
+        "IOKit", "CoreFoundation", "Foundation", "CoreWLAN", "FoundationModels",
+    };
+
+    for (frameworks) |framework| {
+        exe.root_module.linkFramework(framework, .{});
+        tests.root_module.linkFramework(framework, .{});
+    }
+
     exe.root_module.linkSystemLibrary("IOReport", .{});
-    tests.root_module.linkFramework("IOKit", .{});
-    tests.root_module.linkFramework("CoreFoundation", .{});
-    tests.root_module.linkFramework("Foundation", .{});
-    tests.root_module.linkFramework("CoreWLAN", .{});
-    tests.root_module.linkFramework("FoundationModels", .{ .weak = true });
     tests.root_module.linkSystemLibrary("IOReport", .{});
 
     b.installArtifact(exe);
