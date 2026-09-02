@@ -91,6 +91,7 @@ pub const c = struct {
 
     pub extern fn CFStringCreateWithCString(alloc: ?CFAllocatorRef, cStr: [*:0]const u8, encoding: CFStringEncoding) ?CFStringRef;
     pub extern fn CFRelease(cf: CFTypeRef) void;
+    pub extern fn CFRetain(cf: CFTypeRef) CFTypeRef;
     pub extern fn CFGetTypeID(cf: CFTypeRef) CFTypeID;
     pub extern fn CFDictionaryGetTypeID() CFTypeID;
     pub extern fn CFStringGetTypeID() CFTypeID;

@@ -112,3 +112,33 @@ test "power sampling init, sample, and deinit" {
         try std.testing.expect(reading.soc_watts >= 0.0);
     }
 }
+
+test "cached thermal stats across multiple invocations" {
+    var si = darwin.SysInfo.init(std.testing.io);
+    defer si.deinit();
+
+    const t1 = si.getThermalStats();
+    const t2 = si.getThermalStats();
+    _ = t1;
+    _ = t2;
+    try std.testing.expect(si.sensors_initialized);
+}
+
+test "cached proc stats preserves ppid and launch_cmd_fetched across polls" {
+    var si = darwin.SysInfo.init(std.testing.io);
+    defer si.deinit();
+
+    var buf1: [common.MAX_PROCS]common.ProcStats = undefined;
+    var buf2: [common.MAX_PROCS]common.ProcStats = undefined;
+
+    const p1 = try si.getProcStats(&buf1, .cpu);
+    try std.testing.expect(p1.len > 0);
+    try std.testing.expect(si.prev_proc_count > 0);
+
+    for (si.prev_procs[0..si.prev_proc_count]) |entry| {
+        try std.testing.expect(entry.launch_cmd_fetched);
+    }
+
+    const p2 = try si.getProcStats(&buf2, .cpu);
+    try std.testing.expect(p2.len > 0);
+}

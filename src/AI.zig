@@ -8,8 +8,14 @@ extern "c" fn fm_generate_diagnosis(prompt: ?[*:0]const u8) ?[*:0]u8;
 extern "c" fn fm_stream_text(prompt: ?[*:0]const u8, callback: ?StreamCallback, context: ?*anyopaque) c_int;
 extern "c" fn fm_free_string(ptr: ?[*:0]u8) void;
 
+var cached_available: std.atomic.Value(u8) = std.atomic.Value(u8).init(0);
+
 pub fn isAvailable() bool {
-    return fm_is_available() != 0;
+    const cached = cached_available.load(.monotonic);
+    if (cached != 0) return cached == 2;
+    const avail = fm_is_available() != 0;
+    cached_available.store(if (avail) 2 else 1, .monotonic);
+    return avail;
 }
 
 pub fn generateText(allocator: std.mem.Allocator, prompt: [:0]const u8) ![:0]u8 {

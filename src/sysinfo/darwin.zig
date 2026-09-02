@@ -117,6 +117,41 @@ fn createThermalHidClient() ?c.IOHIDEventSystemClientRef {
     return client;
 }
 
+const ThermalSensorType = enum { cpu, gpu };
+const MAX_CACHED_THERMAL_SENSORS = 128;
+
+const CachedThermalSensor = struct {
+    service: c.IOHIDServiceClientRef,
+    sensor_type: ThermalSensorType,
+};
+
+var s_battery_cap_key: ?c.CFStringRef = null;
+var s_battery_max_cap_key: ?c.CFStringRef = null;
+var s_battery_state_key: ?c.CFStringRef = null;
+var s_battery_charging_key: ?c.CFStringRef = null;
+
+const BatteryKeys = struct {
+    cap: c.CFStringRef,
+    max_cap: c.CFStringRef,
+    state: c.CFStringRef,
+    charging: c.CFStringRef,
+};
+
+fn getBatteryKeys() ?BatteryKeys {
+    if (s_battery_cap_key == null) {
+        s_battery_cap_key = c.CFStringCreateWithCString(null, c.kIOPSCurrentCapacityKey, c.kCFStringEncodingUTF8) orelse return null;
+        s_battery_max_cap_key = c.CFStringCreateWithCString(null, c.kIOPSMaxCapacityKey, c.kCFStringEncodingUTF8) orelse return null;
+        s_battery_state_key = c.CFStringCreateWithCString(null, c.kIOPSPowerSourceStateKey, c.kCFStringEncodingUTF8) orelse return null;
+        s_battery_charging_key = c.CFStringCreateWithCString(null, c.kIOPSIsChargingKey, c.kCFStringEncodingUTF8) orelse return null;
+    }
+    return .{
+        .cap = s_battery_cap_key.?,
+        .max_cap = s_battery_max_cap_key.?,
+        .state = s_battery_state_key.?,
+        .charging = s_battery_charging_key.?,
+    };
+}
+
 pub const SysInfo = struct {
     io: std.Io,
     prev_ticks: [4]u64 = .{ 0, 0, 0, 0 },
@@ -130,6 +165,7 @@ pub const SysInfo = struct {
     topology_numa_count: u16 = 0,
     topology_has_cache_groups: bool = false,
     topology_has_efficiency_classes: bool = false,
+    topology_loaded: bool = false,
     total_mem: u64,
     page_size: usize,
     host_port: mach_port_t,
@@ -148,6 +184,9 @@ pub const SysInfo = struct {
     wifi_details: common.WifiDetails = .{},
     wifi_fetched: bool = false,
     hid_client: ?c.IOHIDEventSystemClientRef = null,
+    cached_sensors: [MAX_CACHED_THERMAL_SENSORS]CachedThermalSensor = undefined,
+    cached_sensor_count: usize = 0,
+    sensors_initialized: bool = false,
     power_handle: ?*anyopaque = null,
     prev_power_ms: i64 = 0,
     last_power_reading: ?bindings.PowerReadingRaw = null,
@@ -187,6 +226,7 @@ pub const SysInfo = struct {
             .prev_power_ms = now,
         };
         self.loadTopology();
+        self.initThermalSensors();
         return self;
     }
 
@@ -195,10 +235,19 @@ pub const SysInfo = struct {
     }
 
     fn loadTopology(self: *SysInfo) void {
+        if (self.topology_loaded) return;
         readCpuTopology(self) catch self.synthesizeTopology(@intCast(self.ncpu));
+        self.topology_loaded = true;
     }
 
     pub fn deinit(self: *SysInfo) void {
+        if (self.sensors_initialized) {
+            for (self.cached_sensors[0..self.cached_sensor_count]) |sensor| {
+                c.CFRelease(sensor.service);
+            }
+            self.cached_sensor_count = 0;
+            self.sensors_initialized = false;
+        }
         if (self.power_handle) |handle| {
             bindings.ztop_power_deinit(handle);
             self.power_handle = null;
@@ -291,7 +340,7 @@ pub const SysInfo = struct {
         const nice: u64 = cpu_load.ticks[3];
 
         const usage = usageFromTicks(&self.prev_ticks, user, system, idle, nice);
-        if (self.topology_count == 0 or self.topology_count != self.ncpu) {
+        if (!self.topology_loaded) {
             self.loadTopology();
         }
 
@@ -448,30 +497,23 @@ pub const SysInfo = struct {
         };
     }
 
-    pub fn getThermalStats(self: *SysInfo) ThermalStats {
-        var stats = ThermalStats{};
-        const client = self.hid_client orelse return stats;
+    fn initThermalSensors(self: *SysInfo) void {
+        if (self.sensors_initialized) return;
+        self.sensors_initialized = true;
+        const client = self.hid_client orelse return;
 
-        const services = c.IOHIDEventSystemClientCopyServices(client) orelse return stats;
+        const services = c.IOHIDEventSystemClientCopyServices(client) orelse return;
         defer c.CFRelease(services);
 
-        const product_key = c.CFStringCreateWithCString(null, "Product", c.kCFStringEncodingUTF8) orelse return stats;
+        const product_key = c.CFStringCreateWithCString(null, "Product", c.kCFStringEncodingUTF8) orelse return;
         defer c.CFRelease(product_key);
-
-        var max_cpu_temp: f64 = 0;
-        var max_gpu_temp: f64 = 0;
 
         const count = c.CFArrayGetCount(services);
         for (0..@intCast(count)) |i| {
+            if (self.cached_sensor_count >= MAX_CACHED_THERMAL_SENSORS) break;
             const service: c.IOHIDServiceClientRef = @ptrCast(@alignCast(@constCast(c.CFArrayGetValueAtIndex(services, @intCast(i)) orelse continue)));
 
             if (c.IOHIDServiceClientConformsTo(service, 0xff00, 5) == 0) continue;
-
-            const event = c.IOHIDServiceClientCopyEvent(service, kIOHIDEventTypeTemperature, 0, 0) orelse continue;
-            defer c.CFRelease(event);
-
-            const val = c.IOHIDEventGetFloatValue(event, IOHIDEventFieldBase(kIOHIDEventTypeTemperature));
-            if (val <= 5.0 or val >= 140.0) continue;
 
             var name_buf: [64]u8 = undefined;
             var name: []const u8 = "";
@@ -530,8 +572,36 @@ pub const SysInfo = struct {
                 std.mem.indexOf(u8, lower_name, "tc0p") != null;
 
             if (is_gpu) {
-                if (val > max_gpu_temp) max_gpu_temp = val;
+                _ = c.CFRetain(service);
+                self.cached_sensors[self.cached_sensor_count] = .{ .service = service, .sensor_type = .gpu };
+                self.cached_sensor_count += 1;
             } else if (is_cpu) {
+                _ = c.CFRetain(service);
+                self.cached_sensors[self.cached_sensor_count] = .{ .service = service, .sensor_type = .cpu };
+                self.cached_sensor_count += 1;
+            }
+        }
+    }
+
+    pub fn getThermalStats(self: *SysInfo) ThermalStats {
+        var stats = ThermalStats{};
+        if (!self.sensors_initialized) {
+            self.initThermalSensors();
+        }
+
+        var max_cpu_temp: f64 = 0;
+        var max_gpu_temp: f64 = 0;
+
+        for (self.cached_sensors[0..self.cached_sensor_count]) |sensor| {
+            const event = c.IOHIDServiceClientCopyEvent(sensor.service, kIOHIDEventTypeTemperature, 0, 0) orelse continue;
+            defer c.CFRelease(event);
+
+            const val = c.IOHIDEventGetFloatValue(event, IOHIDEventFieldBase(kIOHIDEventTypeTemperature));
+            if (val <= 5.0 or val >= 140.0) continue;
+
+            if (sensor.sensor_type == .gpu) {
+                if (val > max_gpu_temp) max_gpu_temp = val;
+            } else {
                 if (val > max_cpu_temp) max_cpu_temp = val;
             }
         }
@@ -575,8 +645,10 @@ pub const SysInfo = struct {
         const desc = c.IOPSGetPowerSourceDescription(blob, ps) orelse return stats;
         const dict: c.CFDictionaryRef = @ptrCast(desc);
 
-        if (cf_util.getCFDictionaryNumberFromCString(dict, c.kIOPSCurrentCapacityKey)) |cap| {
-            if (cf_util.getCFDictionaryNumberFromCString(dict, c.kIOPSMaxCapacityKey)) |max| {
+        const keys = getBatteryKeys() orelse return stats;
+
+        if (cf_util.getCFDictionaryNumber(dict, keys.cap)) |cap| {
+            if (cf_util.getCFDictionaryNumber(dict, keys.max_cap)) |max| {
                 if (max > 0) {
                     stats.charge_percent = @as(f32, @floatFromInt(cap)) / @as(f32, @floatFromInt(max)) * 100.0;
                 }
@@ -584,12 +656,12 @@ pub const SysInfo = struct {
         }
 
         // Charge status
-        if (cf_util.getCFDictionaryValueFromCString(dict, c.kIOPSPowerSourceStateKey)) |sr| {
+        if (c.CFDictionaryGetValue(dict, keys.state)) |sr| {
             var buf: [32]u8 = undefined;
             if (cf_util.copyCFStringLikeValue(sr, &buf)) |len| {
                 const state = buf[0..len];
                 if (std.mem.eql(u8, state, "AC Power")) {
-                    if (cf_util.getCFDictionaryValueFromCString(dict, c.kIOPSIsChargingKey)) |cr| {
+                    if (c.CFDictionaryGetValue(dict, keys.charging)) |cr| {
                         if (c.CFGetTypeID(cr) == c.CFBooleanGetTypeID()) {
                             stats.status = if (c.CFBooleanGetValue(@ptrCast(@alignCast(cr))) != 0) .charging else .full;
                         }
@@ -706,12 +778,21 @@ pub const SysInfo = struct {
 
             var launch_cmd_buf: [256]u8 = std.mem.zeroes([256]u8);
             var launch_cmd_len: u16 = 0;
+            var launch_cmd_fetched: bool = false;
+            var ppid: u32 = if (bsd_ret > 0) bsd_info.pbsi_ppid else 0;
+            var effective_start_abstime: u64 = proc_start_abstime;
 
             const prev_entry = self.findPrevProcEntry(pid);
 
             if (prev_entry) |prev| {
                 const same_process = prev.proc_start_abstime == 0 or proc_start_abstime == 0 or prev.proc_start_abstime == proc_start_abstime;
                 if (same_process) {
+                    if (prev.proc_start_abstime != 0) {
+                        effective_start_abstime = prev.proc_start_abstime;
+                    }
+                    if (prev.ppid != 0) {
+                        ppid = prev.ppid;
+                    }
                     if (wall_delta_ns > 0) {
                         if (cpu_total >= prev.cpu_total) {
                             const delta_cpu = cpu_total - prev.cpu_total;
@@ -732,6 +813,7 @@ pub const SysInfo = struct {
                     name_len = prev.name_len;
                     @memcpy(launch_cmd_buf[0..prev.launch_cmd_len], prev.launch_cmd_buf[0..prev.launch_cmd_len]);
                     launch_cmd_len = prev.launch_cmd_len;
+                    launch_cmd_fetched = prev.launch_cmd_fetched;
                 }
             }
 
@@ -748,7 +830,8 @@ pub const SysInfo = struct {
             }
             if (name_len == 0) continue;
 
-            if (launch_cmd_len == 0) {
+            if (!launch_cmd_fetched) {
+                launch_cmd_fetched = true;
                 const launch_cmd = process_mod.readLaunchCommand(raw_pid, &launch_cmd_buf) catch &[_]u8{};
                 launch_cmd_len = @intCast(launch_cmd.len);
             }
@@ -756,7 +839,8 @@ pub const SysInfo = struct {
             if (new_proc_count < MAX_PROCS) {
                 new_procs[new_proc_count] = .{
                     .pid = pid,
-                    .proc_start_abstime = proc_start_abstime,
+                    .ppid = ppid,
+                    .proc_start_abstime = effective_start_abstime,
                     .cpu_total = cpu_total,
                     .disk_read = disk_read,
                     .disk_write = disk_write,
@@ -766,6 +850,7 @@ pub const SysInfo = struct {
                     .name_len = name_len,
                     .launch_cmd_buf = launch_cmd_buf,
                     .launch_cmd_len = launch_cmd_len,
+                    .launch_cmd_fetched = launch_cmd_fetched,
                 };
                 new_proc_count += 1;
             }
@@ -779,7 +864,7 @@ pub const SysInfo = struct {
 
             out_buf[proc_count] = ProcStats{
                 .pid = pid,
-                .ppid = bsd_info.pbsi_ppid,
+                .ppid = ppid,
                 .cpu_percent = cpu_percent,
                 .mem_percent = mem_percent,
                 .threads = @intCast(task_info.pti_threadnum),
@@ -977,7 +1062,7 @@ fn collectProcessConnections(
 }
 
 fn readCpuTopology(self: *SysInfo) !void {
-    const total_logical = @min(@as(usize, @intCast(readSysctlNumber(u32, "hw.logicalcpu") orelse return error.UnexpectedCpuTopology)), MAX_CORES);
+    const total_logical = @min(@as(usize, @intCast(self.ncpu)), MAX_CORES);
     const total_physical = @min(@as(usize, @intCast(readSysctlNumber(u32, "hw.physicalcpu") orelse return error.UnexpectedCpuTopology)), total_logical);
     const perflevel_count = readSysctlNumber(u32, "hw.nperflevels") orelse 0;
     if (perflevel_count == 0 or total_logical == 0 or total_physical == 0) {

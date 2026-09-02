@@ -80,36 +80,88 @@ static uint32_t four_char_code(const char *str) {
     return code;
 }
 
+typedef struct {
+    uint32_t key_code;
+    uint32_t data_size;
+    uint32_t data_type;
+    bool checked;
+    bool valid;
+} smc_key_info_cache_t;
+
+#define SMC_KEY_CACHE_MAX 32
+static smc_key_info_cache_t s_smc_cache[SMC_KEY_CACHE_MAX];
+static size_t s_smc_cache_count = 0;
+
+static smc_key_info_cache_t *get_smc_key_cache_entry(uint32_t key_code) {
+    for (size_t i = 0; i < s_smc_cache_count; i++) {
+        if (s_smc_cache[i].key_code == key_code) {
+            return &s_smc_cache[i];
+        }
+    }
+    if (s_smc_cache_count < SMC_KEY_CACHE_MAX) {
+        smc_key_info_cache_t *entry = &s_smc_cache[s_smc_cache_count++];
+        entry->key_code = key_code;
+        entry->checked = false;
+        entry->valid = false;
+        return entry;
+    }
+    return NULL;
+}
+
 static bool smc_read_double(io_connect_t conn, const char *key, double *out_val) {
     if (!conn || !key || !out_val) return false;
+    uint32_t key_code = four_char_code(key);
+    smc_key_info_cache_t *cached = get_smc_key_cache_entry(key_code);
+    if (cached && cached->checked && !cached->valid) {
+        return false;
+    }
+
+    uint32_t data_size = 0;
+    uint32_t data_type = 0;
+
+    if (cached && cached->checked && cached->valid) {
+        data_size = cached->data_size;
+        data_type = cached->data_type;
+    } else {
+        SMCKeyData_t input;
+        SMCKeyData_t output;
+        memset(&input, 0, sizeof(input));
+        memset(&output, 0, sizeof(output));
+
+        input.key = key_code;
+        input.data8 = 9; // cmdReadKeyInfo
+
+        size_t output_size = sizeof(output);
+        kern_return_t res = IOConnectCallStructMethod(conn, 2, &input, sizeof(input), &output, &output_size);
+        if (res != kIOReturnSuccess || output.keyInfo.dataSize == 0) {
+            if (cached) {
+                cached->checked = true;
+                cached->valid = false;
+            }
+            return false;
+        }
+
+        data_size = output.keyInfo.dataSize;
+        data_type = output.keyInfo.dataType;
+        if (cached) {
+            cached->checked = true;
+            cached->valid = true;
+            cached->data_size = data_size;
+            cached->data_type = data_type;
+        }
+    }
+
     SMCKeyData_t input;
     SMCKeyData_t output;
     memset(&input, 0, sizeof(input));
     memset(&output, 0, sizeof(output));
-
-    input.key = four_char_code(key);
-    input.data8 = 9; // cmdReadKeyInfo
-
-    size_t output_size = sizeof(output);
-    kern_return_t res = IOConnectCallStructMethod(conn, 2, &input, sizeof(input), &output, &output_size);
-    if (res != kIOReturnSuccess || output.keyInfo.dataSize == 0) {
-        printf("SMC [%s] readKeyInfo failed: res=0x%x, dataSize=%u\n", key, res, output.keyInfo.dataSize);
-        return false;
-    }
-
-    uint32_t data_size = output.keyInfo.dataSize;
-    uint32_t data_type = output.keyInfo.dataType;
-
-    memset(&input, 0, sizeof(input));
-    memset(&output, 0, sizeof(output));
-    input.key = four_char_code(key);
+    input.key = key_code;
     input.keyInfo.dataSize = data_size;
     input.data8 = 5; // cmdReadBytes
 
-    output_size = sizeof(output);
-    res = IOConnectCallStructMethod(conn, 2, &input, sizeof(input), &output, &output_size);
+    size_t output_size = sizeof(output);
+    kern_return_t res = IOConnectCallStructMethod(conn, 2, &input, sizeof(input), &output, &output_size);
     if (res != kIOReturnSuccess) {
-        printf("SMC [%s] readBytes failed: res=0x%x\n", key, res);
         return false;
     }
 

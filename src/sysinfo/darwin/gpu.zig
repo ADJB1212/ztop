@@ -5,7 +5,53 @@ const cf_util = @import("cf_util.zig");
 const common = @import("../../sysinfo/common.zig");
 const GpuStats = common.GpuStats;
 
+const StaticGpuInfo = struct {
+    name_buf: [64]u8 = std.mem.zeroes([64]u8),
+    name_len: u8 = 0,
+    core_count: ?u32 = null,
+    valid: bool = false,
+};
+
+const MAX_CACHED_GPUS = 8;
+var static_gpus: [MAX_CACHED_GPUS]StaticGpuInfo = [_]StaticGpuInfo{.{}} ** MAX_CACHED_GPUS;
+
+var s_performance_key: ?c.CFStringRef = null;
+var s_utilization_key: ?c.CFStringRef = null;
+var s_in_use_key: ?c.CFStringRef = null;
+var s_alloc_key: ?c.CFStringRef = null;
+var s_model_key: ?c.CFStringRef = null;
+var s_core_count_key: ?c.CFStringRef = null;
+
+const GpuKeys = struct {
+    perf: c.CFStringRef,
+    util: c.CFStringRef,
+    in_use: c.CFStringRef,
+    alloc: c.CFStringRef,
+    model: c.CFStringRef,
+    core_count: c.CFStringRef,
+};
+
+fn getGpuKeys() ?GpuKeys {
+    if (s_performance_key == null) {
+        s_performance_key = c.CFStringCreateWithCString(null, "PerformanceStatistics", c.kCFStringEncodingUTF8) orelse return null;
+        s_utilization_key = c.CFStringCreateWithCString(null, "Device Utilization %", c.kCFStringEncodingUTF8) orelse return null;
+        s_in_use_key = c.CFStringCreateWithCString(null, "In use system memory", c.kCFStringEncodingUTF8) orelse return null;
+        s_alloc_key = c.CFStringCreateWithCString(null, "Alloc system memory", c.kCFStringEncodingUTF8) orelse return null;
+        s_model_key = c.CFStringCreateWithCString(null, "model", c.kCFStringEncodingUTF8) orelse return null;
+        s_core_count_key = c.CFStringCreateWithCString(null, "gpu-core-count", c.kCFStringEncodingUTF8) orelse return null;
+    }
+    return .{
+        .perf = s_performance_key.?,
+        .util = s_utilization_key.?,
+        .in_use = s_in_use_key.?,
+        .alloc = s_alloc_key.?,
+        .model = s_model_key.?,
+        .core_count = s_core_count_key.?,
+    };
+}
+
 pub fn appendAppleGpuStats(allocator: std.mem.Allocator, result: *std.ArrayList(GpuStats)) !void {
+    const keys = getGpuKeys() orelse return;
     const matching = c.IOServiceMatching("IOAccelerator") orelse return;
 
     var iter: c.io_iterator_t = 0;
@@ -14,31 +60,13 @@ pub fn appendAppleGpuStats(allocator: std.mem.Allocator, result: *std.ArrayList(
     }
     defer _ = c.IOObjectRelease(iter);
 
-    const performance_key = c.CFStringCreateWithCString(null, "PerformanceStatistics", c.kCFStringEncodingUTF8) orelse return;
-    defer c.CFRelease(performance_key);
-
-    const utilization_key = c.CFStringCreateWithCString(null, "Device Utilization %", c.kCFStringEncodingUTF8) orelse return;
-    defer c.CFRelease(utilization_key);
-
-    const in_use_key = c.CFStringCreateWithCString(null, "In use system memory", c.kCFStringEncodingUTF8) orelse return;
-    defer c.CFRelease(in_use_key);
-
-    const alloc_key = c.CFStringCreateWithCString(null, "Alloc system memory", c.kCFStringEncodingUTF8) orelse return;
-    defer c.CFRelease(alloc_key);
-
-    const model_key = c.CFStringCreateWithCString(null, "model", c.kCFStringEncodingUTF8) orelse return;
-    defer c.CFRelease(model_key);
-
-    const core_count_key = c.CFStringCreateWithCString(null, "gpu-core-count", c.kCFStringEncodingUTF8) orelse return;
-    defer c.CFRelease(core_count_key);
-
     var device_index: u8 = 0;
     while (true) {
         const service = c.IOIteratorNext(iter);
         if (service == 0) break;
         defer _ = c.IOObjectRelease(service);
 
-        const stats_ref = c.IORegistryEntryCreateCFProperty(service, performance_key, null, 0) orelse continue;
+        const stats_ref = c.IORegistryEntryCreateCFProperty(service, keys.perf, null, 0) orelse continue;
         defer c.CFRelease(stats_ref);
         if (c.CFGetTypeID(stats_ref) != c.CFDictionaryGetTypeID()) continue;
 
@@ -48,26 +76,42 @@ pub fn appendAppleGpuStats(allocator: std.mem.Allocator, result: *std.ArrayList(
             .vendor = .apple,
             .backend = .iokit,
         };
+
+        const idx = device_index;
         device_index +%= 1;
 
-        if (copyServiceStringProperty(service, model_key, gpu.name_buf[0..])) |name_len| {
-            gpu.name_len = @intCast(name_len);
+        if (idx < MAX_CACHED_GPUS and static_gpus[idx].valid) {
+            @memcpy(gpu.name_buf[0..static_gpus[idx].name_len], static_gpus[idx].name_buf[0..static_gpus[idx].name_len]);
+            gpu.name_len = static_gpus[idx].name_len;
+            gpu.core_count = static_gpus[idx].core_count;
         } else {
-            var fallback_buf: [24]u8 = undefined;
-            setGpuName(&gpu, buildIndexedName(&fallback_buf, "Apple GPU", gpu.index));
+            if (copyServiceStringProperty(service, keys.model, gpu.name_buf[0..])) |name_len| {
+                gpu.name_len = @intCast(name_len);
+            } else {
+                var fallback_buf: [24]u8 = undefined;
+                setGpuName(&gpu, buildIndexedName(&fallback_buf, "Apple GPU", gpu.index));
+            }
+
+            if (cf_util.readServiceNumber(service, keys.core_count)) |core_count| {
+                gpu.core_count = @intCast(core_count);
+            }
+
+            if (idx < MAX_CACHED_GPUS) {
+                @memcpy(static_gpus[idx].name_buf[0..gpu.name_len], gpu.name_buf[0..gpu.name_len]);
+                static_gpus[idx].name_len = gpu.name_len;
+                static_gpus[idx].core_count = gpu.core_count;
+                static_gpus[idx].valid = true;
+            }
         }
 
-        if (cf_util.getCFDictionaryNumber(stats_dict, utilization_key)) |utilization| {
+        if (cf_util.getCFDictionaryNumber(stats_dict, keys.util)) |utilization| {
             gpu.utilization_percent = @floatFromInt(utilization);
         }
-        if (cf_util.getCFDictionaryNumber(stats_dict, in_use_key)) |used_bytes| {
+        if (cf_util.getCFDictionaryNumber(stats_dict, keys.in_use)) |used_bytes| {
             gpu.memory_used_bytes = used_bytes;
         }
-        if (cf_util.getCFDictionaryNumber(stats_dict, alloc_key)) |allocated_bytes| {
+        if (cf_util.getCFDictionaryNumber(stats_dict, keys.alloc)) |allocated_bytes| {
             gpu.memory_total_bytes = allocated_bytes;
-        }
-        if (cf_util.readServiceNumber(service, core_count_key)) |core_count| {
-            gpu.core_count = @intCast(core_count);
         }
 
         try result.append(allocator, gpu);

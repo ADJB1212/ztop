@@ -239,6 +239,7 @@ pub const ThreadStats = struct {
 
 pub const ProcCpuEntry = struct {
     pid: u32,
+    ppid: u32 = 0,
     proc_start_abstime: u64 = 0,
     cpu_total: u64,
     disk_read: u64 = 0,
@@ -249,6 +250,7 @@ pub const ProcCpuEntry = struct {
     name_len: u8 = 0,
     launch_cmd_buf: [256]u8 = std.mem.zeroes([256]u8),
     launch_cmd_len: u16 = 0,
+    launch_cmd_fetched: bool = false,
 };
 
 pub const ThreadCpuEntry = struct {

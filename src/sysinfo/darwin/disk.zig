@@ -13,7 +13,31 @@ pub const DiskUsage = struct {
     used_bytes: u64,
 };
 
+var s_stats_key: ?c.CFStringRef = null;
+var s_read_key: ?c.CFStringRef = null;
+var s_write_key: ?c.CFStringRef = null;
+
+const DiskKeys = struct {
+    stats: c.CFStringRef,
+    read: c.CFStringRef,
+    write: c.CFStringRef,
+};
+
+fn getDiskKeys() !DiskKeys {
+    if (s_stats_key == null) {
+        s_stats_key = c.CFStringCreateWithCString(null, c.kIOBlockStorageDriverStatisticsKey, c.kCFStringEncodingUTF8) orelse return error.OutOfMemory;
+        s_read_key = c.CFStringCreateWithCString(null, c.kIOBlockStorageDriverStatisticsBytesReadKey, c.kCFStringEncodingUTF8) orelse return error.OutOfMemory;
+        s_write_key = c.CFStringCreateWithCString(null, c.kIOBlockStorageDriverStatisticsBytesWrittenKey, c.kCFStringEncodingUTF8) orelse return error.OutOfMemory;
+    }
+    return .{
+        .stats = s_stats_key.?,
+        .read = s_read_key.?,
+        .write = s_write_key.?,
+    };
+}
+
 pub fn readDiskTotals() !DiskTotals {
+    const keys = try getDiskKeys();
     const matching = c.IOServiceMatching(c.kIOBlockStorageDriverClass) orelse return error.IOKitMatchingFailed;
 
     var iter: c.io_iterator_t = 0;
@@ -21,21 +45,6 @@ pub fn readDiskTotals() !DiskTotals {
         return error.IOKitQueryFailed;
     }
     defer _ = c.IOObjectRelease(iter);
-
-    const stats_key = c.CFStringCreateWithCString(null, c.kIOBlockStorageDriverStatisticsKey, c.kCFStringEncodingUTF8) orelse {
-        return error.OutOfMemory;
-    };
-    defer c.CFRelease(stats_key);
-
-    const read_key = c.CFStringCreateWithCString(null, c.kIOBlockStorageDriverStatisticsBytesReadKey, c.kCFStringEncodingUTF8) orelse {
-        return error.OutOfMemory;
-    };
-    defer c.CFRelease(read_key);
-
-    const write_key = c.CFStringCreateWithCString(null, c.kIOBlockStorageDriverStatisticsBytesWrittenKey, c.kCFStringEncodingUTF8) orelse {
-        return error.OutOfMemory;
-    };
-    defer c.CFRelease(write_key);
 
     var read_bytes: u64 = 0;
     var write_bytes: u64 = 0;
@@ -45,14 +54,14 @@ pub fn readDiskTotals() !DiskTotals {
         if (service == 0) break;
         defer _ = c.IOObjectRelease(service);
 
-        const stats_ref = c.IORegistryEntryCreateCFProperty(service, stats_key, null, 0) orelse continue;
+        const stats_ref = c.IORegistryEntryCreateCFProperty(service, keys.stats, null, 0) orelse continue;
         defer c.CFRelease(stats_ref);
 
         if (c.CFGetTypeID(stats_ref) != c.CFDictionaryGetTypeID()) continue;
 
         const stats_dict: c.CFDictionaryRef = @ptrCast(stats_ref);
-        read_bytes +|= cf_util.getCFDictionaryU64(stats_dict, read_key);
-        write_bytes +|= cf_util.getCFDictionaryU64(stats_dict, write_key);
+        read_bytes +|= cf_util.getCFDictionaryU64(stats_dict, keys.read);
+        write_bytes +|= cf_util.getCFDictionaryU64(stats_dict, keys.write);
     }
 
     return .{ .read_bytes = read_bytes, .write_bytes = write_bytes };
