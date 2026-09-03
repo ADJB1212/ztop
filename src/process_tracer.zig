@@ -132,20 +132,11 @@ pub const ProcessTracer = struct {
         self.prev_threads = proc.threads;
 
         // Socket opens/closes
-        const conns = sys_info.getNetConnections(self.allocator) catch &.{};
+        const conns = sys_info.getProcNetConnections(self.allocator, self.pid) catch &.{};
         defer self.allocator.free(conns);
 
-        var current_proc_conns: std.ArrayList(common.NetConnection) = .empty;
-        defer current_proc_conns.deinit(self.allocator);
-
-        for (conns) |c| {
-            if (c.pid == self.pid) {
-                current_proc_conns.append(self.allocator, c) catch {};
-            }
-        }
-
         // Diff sockets
-        for (current_proc_conns.items) |curr| {
+        for (conns) |curr| {
             var found = false;
             for (self.prev_sockets.items) |prev| {
                 if (netConnectionsEqual(&curr, &prev)) {
@@ -160,7 +151,7 @@ pub const ProcessTracer = struct {
 
         for (self.prev_sockets.items) |prev| {
             var found = false;
-            for (current_proc_conns.items) |curr| {
+            for (conns) |curr| {
                 if (netConnectionsEqual(&curr, &prev)) {
                     found = true;
                     break;
@@ -172,6 +163,6 @@ pub const ProcessTracer = struct {
         }
 
         self.prev_sockets.clearRetainingCapacity();
-        self.prev_sockets.appendSlice(self.allocator, current_proc_conns.items) catch {};
+        self.prev_sockets.appendSlice(self.allocator, conns) catch {};
     }
 };

@@ -13,7 +13,65 @@ const StaticGpuInfo = struct {
 };
 
 const MAX_CACHED_GPUS = 8;
-var static_gpus: [MAX_CACHED_GPUS]StaticGpuInfo = [_]StaticGpuInfo{.{}} ** MAX_CACHED_GPUS;
+const MAX_GPU_SERVICES = 16;
+const SERVICE_RESCAN_INTERVAL = 20;
+
+pub const GpuCollector = struct {
+    services: [MAX_GPU_SERVICES]c.io_registry_entry_t = [_]c.io_registry_entry_t{0} ** MAX_GPU_SERVICES,
+    service_count: usize = 0,
+    static_gpus: [MAX_CACHED_GPUS]StaticGpuInfo = [_]StaticGpuInfo{.{}} ** MAX_CACHED_GPUS,
+    polls_until_rescan: u8 = 0,
+    initialized: bool = false,
+
+    pub fn deinit(self: *GpuCollector) void {
+        self.releaseServices();
+        self.initialized = false;
+    }
+
+    fn releaseServices(self: *GpuCollector) void {
+        for (self.services[0..self.service_count]) |service| {
+            _ = c.IOObjectRelease(service);
+        }
+        self.service_count = 0;
+    }
+
+    fn reloadServices(self: *GpuCollector) !void {
+        const matching = c.IOServiceMatching("IOAccelerator") orelse return error.IOKitMatchingFailed;
+        var iter: c.io_iterator_t = 0;
+        if (c.IOServiceGetMatchingServices(c.kIOMainPortDefault, matching, &iter) != c.KERN_SUCCESS) {
+            return error.IOKitQueryFailed;
+        }
+        defer _ = c.IOObjectRelease(iter);
+
+        var new_services: [MAX_GPU_SERVICES]c.io_registry_entry_t = [_]c.io_registry_entry_t{0} ** MAX_GPU_SERVICES;
+        var new_count: usize = 0;
+        while (true) {
+            const service = c.IOIteratorNext(iter);
+            if (service == 0) break;
+            if (new_count == new_services.len) {
+                _ = c.IOObjectRelease(service);
+                continue;
+            }
+            new_services[new_count] = service;
+            new_count += 1;
+        }
+
+        self.releaseServices();
+        @memcpy(self.services[0..new_count], new_services[0..new_count]);
+        self.service_count = new_count;
+        self.static_gpus = [_]StaticGpuInfo{.{}} ** MAX_CACHED_GPUS;
+        self.polls_until_rescan = SERVICE_RESCAN_INTERVAL;
+        self.initialized = true;
+    }
+
+    fn prepare(self: *GpuCollector) !void {
+        if (!self.initialized or self.polls_until_rescan == 0) {
+            try self.reloadServices();
+        } else {
+            self.polls_until_rescan -= 1;
+        }
+    }
+};
 
 var s_performance_key: ?c.CFStringRef = null;
 var s_utilization_key: ?c.CFStringRef = null;
@@ -50,40 +108,32 @@ fn getGpuKeys() ?GpuKeys {
     };
 }
 
-pub fn appendAppleGpuStats(allocator: std.mem.Allocator, result: *std.ArrayList(GpuStats)) !void {
+pub fn appendAppleGpuStats(collector: *GpuCollector, allocator: std.mem.Allocator, result: *std.ArrayList(GpuStats)) !void {
     const keys = getGpuKeys() orelse return;
-    const matching = c.IOServiceMatching("IOAccelerator") orelse return;
+    collector.prepare() catch return;
 
-    var iter: c.io_iterator_t = 0;
-    if (c.IOServiceGetMatchingServices(c.kIOMainPortDefault, matching, &iter) != c.KERN_SUCCESS) {
-        return;
-    }
-    defer _ = c.IOObjectRelease(iter);
-
-    var device_index: u8 = 0;
-    while (true) {
-        const service = c.IOIteratorNext(iter);
-        if (service == 0) break;
-        defer _ = c.IOObjectRelease(service);
-
-        const stats_ref = c.IORegistryEntryCreateCFProperty(service, keys.perf, null, 0) orelse continue;
+    var stale_service = false;
+    for (collector.services[0..collector.service_count], 0..) |service, service_index| {
+        const stats_ref = c.IORegistryEntryCreateCFProperty(service, keys.perf, null, 0) orelse {
+            stale_service = true;
+            continue;
+        };
         defer c.CFRelease(stats_ref);
         if (c.CFGetTypeID(stats_ref) != c.CFDictionaryGetTypeID()) continue;
 
         const stats_dict: c.CFDictionaryRef = @ptrCast(stats_ref);
         var gpu = GpuStats{
-            .index = device_index,
+            .index = @intCast(service_index),
             .vendor = .apple,
             .backend = .iokit,
         };
 
-        const idx = device_index;
-        device_index +%= 1;
+        const idx = service_index;
 
-        if (idx < MAX_CACHED_GPUS and static_gpus[idx].valid) {
-            @memcpy(gpu.name_buf[0..static_gpus[idx].name_len], static_gpus[idx].name_buf[0..static_gpus[idx].name_len]);
-            gpu.name_len = static_gpus[idx].name_len;
-            gpu.core_count = static_gpus[idx].core_count;
+        if (idx < MAX_CACHED_GPUS and collector.static_gpus[idx].valid) {
+            @memcpy(gpu.name_buf[0..collector.static_gpus[idx].name_len], collector.static_gpus[idx].name_buf[0..collector.static_gpus[idx].name_len]);
+            gpu.name_len = collector.static_gpus[idx].name_len;
+            gpu.core_count = collector.static_gpus[idx].core_count;
         } else {
             if (copyServiceStringProperty(service, keys.model, gpu.name_buf[0..])) |name_len| {
                 gpu.name_len = @intCast(name_len);
@@ -97,10 +147,10 @@ pub fn appendAppleGpuStats(allocator: std.mem.Allocator, result: *std.ArrayList(
             }
 
             if (idx < MAX_CACHED_GPUS) {
-                @memcpy(static_gpus[idx].name_buf[0..gpu.name_len], gpu.name_buf[0..gpu.name_len]);
-                static_gpus[idx].name_len = gpu.name_len;
-                static_gpus[idx].core_count = gpu.core_count;
-                static_gpus[idx].valid = true;
+                @memcpy(collector.static_gpus[idx].name_buf[0..gpu.name_len], gpu.name_buf[0..gpu.name_len]);
+                collector.static_gpus[idx].name_len = gpu.name_len;
+                collector.static_gpus[idx].core_count = gpu.core_count;
+                collector.static_gpus[idx].valid = true;
             }
         }
 
@@ -116,6 +166,7 @@ pub fn appendAppleGpuStats(allocator: std.mem.Allocator, result: *std.ArrayList(
 
         try result.append(allocator, gpu);
     }
+    if (stale_service) collector.polls_until_rescan = 0;
 }
 
 fn setGpuName(gpu: *GpuStats, name: []const u8) void {

@@ -176,7 +176,7 @@ pub fn main(main_init: std.process.Init) !void {
     }
     // ─────────────────────────────────────────────────────────────────────────
 
-    var cpu = sys_info.getCpuStats();
+    var cpu = if (app_config.default_tab == 1) sys_info.getCpuStats() else sys_info.getCpuStatsAggregate();
     const cpu_topology = sys_info.getCpuTopology();
     var mem = sys_info.getMemStats();
     var disk = sys_info.getDiskStats();
@@ -226,7 +226,7 @@ pub fn main(main_init: std.process.Init) !void {
         const fetch_interval_ms: i64 = @intCast(refresh_interval_ms orelse app_config.effectiveIntervalMs(current_tab));
 
         if (elapsed >= fetch_interval_ms) {
-            cpu = sys_info.getCpuStats();
+            cpu = if (current_tab == 1) sys_info.getCpuStats() else sys_info.getCpuStatsAggregate();
             mem = sys_info.getMemStats();
             disk = sys_info.getDiskStats();
             net = sys_info.getNetStats();

@@ -142,3 +142,43 @@ test "cached proc stats preserves ppid and launch_cmd_fetched across polls" {
     const p2 = try si.getProcStats(&buf2, .cpu);
     try std.testing.expect(p2.len > 0);
 }
+
+test "aggregate CPU stats avoid per-core sampling" {
+    var si = darwin.SysInfo.init(std.testing.io);
+    defer si.deinit();
+
+    const aggregate = si.getCpuStatsAggregate();
+    try std.testing.expectEqual(@as(usize, 0), aggregate.per_core_usage.len);
+    try std.testing.expect(!si.per_core_sampled_last);
+
+    const detailed = si.getCpuStats();
+    try std.testing.expectEqual(@as(usize, detailed.cores), detailed.per_core_usage.len);
+    try std.testing.expect(si.per_core_sampled_last);
+}
+
+test "single-process connection collection only returns the requested PID" {
+    var si = darwin.SysInfo.init(std.testing.io);
+    defer si.deinit();
+
+    const pid: u32 = @intCast(std.c.getpid());
+    const connections = try si.getProcNetConnections(std.testing.allocator, pid);
+    defer std.testing.allocator.free(connections);
+    for (connections) |connection| {
+        try std.testing.expectEqual(pid, connection.pid);
+    }
+}
+
+test "disk and GPU collectors retain discovered services" {
+    var si = darwin.SysInfo.init(std.testing.io);
+    defer si.deinit();
+
+    _ = si.getDiskStats();
+    try std.testing.expect(si.disk_collector.initialized);
+    const disk_service_count = si.disk_collector.service_count;
+    _ = si.getDiskStats();
+    try std.testing.expectEqual(disk_service_count, si.disk_collector.service_count);
+
+    const gpus = try si.getGpuStats(std.testing.allocator);
+    defer std.testing.allocator.free(gpus);
+    try std.testing.expect(si.gpu_collector.initialized);
+}

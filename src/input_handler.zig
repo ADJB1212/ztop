@@ -839,25 +839,7 @@ fn enterCausalityView(ctx: *Context) !void {
 }
 
 pub fn fetchProcConnections(allocator: std.mem.Allocator, sys_info: *SysInfo, pid: u32) ![]sysinfo.common.NetConnection {
-    const all_conns = try sys_info.getNetConnections(allocator);
-    defer allocator.free(all_conns);
-
-    var count: usize = 0;
-    for (all_conns) |conn| {
-        if (conn.pid == pid) count += 1;
-    }
-
-    if (count == 0) return &.{};
-
-    const result = try allocator.alloc(sysinfo.common.NetConnection, count);
-    var i: usize = 0;
-    for (all_conns) |conn| {
-        if (conn.pid == pid) {
-            result[i] = conn;
-            i += 1;
-        }
-    }
-    return result;
+    return sys_info.getProcNetConnections(allocator, pid);
 }
 
 fn enterThreadView(ctx: *Context) !void {

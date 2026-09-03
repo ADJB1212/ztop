@@ -32,7 +32,9 @@ const MAX_PROCS = common.MAX_PROCS;
 
 const DiskTotals = disk_mod.DiskTotals;
 const DiskUsage = disk_mod.DiskUsage;
+const DiskCollector = disk_mod.DiskCollector;
 const NetTotals = net_mod.NetTotals;
+const GpuCollector = gpu_mod.GpuCollector;
 
 const mach_port_t = bindings.mach_port_t;
 const kern_return_t = bindings.kern_return_t;
@@ -42,7 +44,7 @@ const HOST_CPU_LOAD_INFO = bindings.HOST_CPU_LOAD_INFO;
 const HOST_VM_INFO = bindings.HOST_VM_INFO;
 const PROCESSOR_CPU_LOAD_INFO = bindings.PROCESSOR_CPU_LOAD_INFO;
 const KERN_SUCCESS = bindings.KERN_SUCCESS;
-const PROC_PIDTASKINFO = bindings.PROC_PIDTASKINFO;
+const PROC_PIDTASKALLINFO = bindings.PROC_PIDTASKALLINFO;
 const CPU_STATE_USER = bindings.CPU_STATE_USER;
 const CPU_STATE_SYSTEM = bindings.CPU_STATE_SYSTEM;
 const CPU_STATE_IDLE = bindings.CPU_STATE_IDLE;
@@ -52,7 +54,6 @@ const CPU_STATE_MAX = bindings.CPU_STATE_MAX;
 const PROC_PIDTHREADINFO = bindings.PROC_PIDTHREADINFO;
 const PROC_PIDRUSAGE = bindings.PROC_PIDRUSAGE;
 const PROC_PIDLISTTHREADS = bindings.PROC_PIDLISTTHREADS;
-const PROC_PIDT_SHORTBSDINFO = bindings.PROC_PIDT_SHORTBSDINFO;
 
 const SIDL = bindings.SIDL;
 const SRUN = bindings.SRUN;
@@ -60,12 +61,11 @@ const SSLEEP = bindings.SSLEEP;
 const SSTOP = bindings.SSTOP;
 const SZOMB = bindings.SZOMB;
 
-const ProcBsdShortInfo = bindings.ProcBsdShortInfo;
+const ProcTaskAllInfo = c.struct_proc_taskallinfo;
 const rusage_info_v2 = bindings.rusage_info_v2;
 const HostCpuLoadInfo = bindings.HostCpuLoadInfo;
 const VmStatistics = bindings.VmStatistics;
 const xsw_usage = bindings.xsw_usage;
-const ProcTaskInfo = bindings.ProcTaskInfo;
 const ProcThreadInfo = bindings.ProcThreadInfo;
 
 const TH_STATE_RUNNING = bindings.TH_STATE_RUNNING;
@@ -157,6 +157,7 @@ pub const SysInfo = struct {
     prev_ticks: [4]u64 = .{ 0, 0, 0, 0 },
     prev_core_ticks: [MAX_CORES][4]u64 = std.mem.zeroes([MAX_CORES][4]u64),
     core_usage: [MAX_CORES]f32 = [_]f32{0} ** MAX_CORES,
+    per_core_sampled_last: bool = false,
     ncpu: u32,
     topology_cores: [MAX_CORES]CpuLogicalCore = undefined,
     topology_count: usize = 0,
@@ -176,6 +177,8 @@ pub const SysInfo = struct {
     prev_disk_read: u64 = 0,
     prev_disk_write: u64 = 0,
     disk_usage: DiskUsage = .{ .total_bytes = 0, .used_bytes = 0 },
+    disk_collector: DiskCollector = .{},
+    gpu_collector: GpuCollector = .{},
     prev_net_rx: u64 = 0,
     prev_net_tx: u64 = 0,
     prev_ms: i64 = 0,
@@ -252,6 +255,8 @@ pub const SysInfo = struct {
             bindings.ztop_power_deinit(handle);
             self.power_handle = null;
         }
+        self.disk_collector.deinit();
+        self.gpu_collector.deinit();
     }
 
     fn updatePowerSample(self: *SysInfo) void {
@@ -325,7 +330,8 @@ pub const SysInfo = struct {
         return @as(f32, @floatFromInt(delta_active)) / @as(f32, @floatFromInt(delta_total)) * 100.0;
     }
 
-    pub fn getCpuStats(self: *SysInfo) CpuStats {
+    pub fn getCpuStatsAggregate(self: *SysInfo) CpuStats {
+        self.per_core_sampled_last = false;
         var cpu_load: HostCpuLoadInfo = undefined;
         var count: u32 = @sizeOf(HostCpuLoadInfo) / @sizeOf(c_int);
         const ret = bindings.host_statistics(self.host_port, HOST_CPU_LOAD_INFO, @ptrCast(&cpu_load), &count);
@@ -340,9 +346,11 @@ pub const SysInfo = struct {
         const nice: u64 = cpu_load.ticks[3];
 
         const usage = usageFromTicks(&self.prev_ticks, user, system, idle, nice);
-        if (!self.topology_loaded) {
-            self.loadTopology();
-        }
+        return .{ .usage_percent = usage, .cores = self.ncpu };
+    }
+
+    pub fn getCpuStats(self: *SysInfo) CpuStats {
+        if (!self.topology_loaded) self.loadTopology();
 
         var processor_count: u32 = 0;
         var processor_info: [*]c_int = undefined;
@@ -356,11 +364,7 @@ pub const SysInfo = struct {
         );
 
         if (proc_ret != KERN_SUCCESS) {
-            return .{
-                .usage_percent = usage,
-                .cores = self.ncpu,
-                .per_core_usage = self.core_usage[0..0],
-            };
+            return self.getCpuStatsAggregate();
         }
 
         defer _ = bindings.vm_deallocate(
@@ -371,6 +375,11 @@ pub const SysInfo = struct {
 
         const info_core_count = @as(usize, @intCast(processor_info_count)) / CPU_STATE_MAX;
         const core_count = @min(@as(usize, @intCast(processor_count)), @min(@as(usize, @intCast(self.ncpu)), info_core_count));
+        var totals: [4]u64 = .{ 0, 0, 0, 0 };
+
+        if (!self.per_core_sampled_last) {
+            self.prev_core_ticks = std.mem.zeroes([MAX_CORES][4]u64);
+        }
 
         for (0..core_count) |i| {
             const base = i * CPU_STATE_MAX;
@@ -380,7 +389,13 @@ pub const SysInfo = struct {
             const core_nice: u64 = @intCast(@max(processor_info[base + CPU_STATE_NICE], 0));
 
             self.core_usage[i] = usageFromTicks(&self.prev_core_ticks[i], core_user, core_system, core_idle, core_nice);
+            totals[0] +|= core_user;
+            totals[1] +|= core_system;
+            totals[2] +|= core_idle;
+            totals[3] +|= core_nice;
         }
+        self.per_core_sampled_last = true;
+        const usage = usageFromTicks(&self.prev_ticks, totals[0], totals[1], totals[2], totals[3]);
 
         return .{
             .usage_percent = usage,
@@ -438,7 +453,7 @@ pub const SysInfo = struct {
     }
 
     pub fn getDiskStats(self: *SysInfo) DiskStats {
-        const stats = disk_mod.readDiskTotals() catch DiskTotals{ .read_bytes = 0, .write_bytes = 0 };
+        const stats = self.disk_collector.readTotals() catch DiskTotals{ .read_bytes = 0, .write_bytes = 0 };
         const now = nowMs(self.io);
         const elapsed = now - self.prev_disk_ms;
 
@@ -686,7 +701,7 @@ pub const SysInfo = struct {
         var result: std.ArrayList(GpuStats) = .empty;
         errdefer result.deinit(allocator);
 
-        try gpu_mod.appendAppleGpuStats(allocator, &result);
+        try gpu_mod.appendAppleGpuStats(&self.gpu_collector, allocator, &result);
         self.updatePowerSample();
         if (self.last_power_reading) |last| {
             if (last.gpu_watts > 0) {
@@ -699,14 +714,14 @@ pub const SysInfo = struct {
         return result.toOwnedSlice(allocator);
     }
 
-    fn findPrevProcEntry(self: *const SysInfo, pid: u32) ?ProcCpuEntry {
+    fn findPrevProcEntry(self: *const SysInfo, pid: u32) ?*const ProcCpuEntry {
         // Binary search — prev_procs is kept sorted by PID
         const slice = self.prev_procs[0..self.prev_proc_count];
         var lo: usize = 0;
         var hi: usize = slice.len;
         while (lo < hi) {
             const mid = lo + (hi - lo) / 2;
-            if (slice[mid].pid == pid) return slice[mid];
+            if (slice[mid].pid == pid) return &slice[mid];
             if (slice[mid].pid < pid) {
                 lo = mid + 1;
             } else {
@@ -740,23 +755,20 @@ pub const SysInfo = struct {
             if (raw_pid <= 0) continue;
             const pid: u32 = @intCast(raw_pid);
 
-            var task_info: ProcTaskInfo = undefined;
-            const info_ret = bindings.proc_pidinfo(raw_pid, PROC_PIDTASKINFO, 0, @ptrCast(&task_info), @sizeOf(ProcTaskInfo));
+            var all_info: ProcTaskAllInfo = undefined;
+            const info_ret = bindings.proc_pidinfo(raw_pid, PROC_PIDTASKALLINFO, 0, @ptrCast(&all_info), @sizeOf(ProcTaskAllInfo));
             if (info_ret <= 0) continue;
 
-            var bsd_info: ProcBsdShortInfo = undefined;
-            const bsd_ret = bindings.proc_pidinfo(raw_pid, PROC_PIDT_SHORTBSDINFO, 0, @ptrCast(&bsd_info), @sizeOf(ProcBsdShortInfo));
-            var state: common.ProcState = .unknown;
-            if (bsd_ret > 0) {
-                state = switch (bsd_info.pbsi_status) {
-                    SIDL => .idle,
-                    SRUN => .running,
-                    SSLEEP => .sleeping,
-                    SSTOP => .stopped,
-                    SZOMB => .zombie,
-                    else => .unknown,
-                };
-            }
+            const task_info = all_info.ptinfo;
+            const bsd_info = all_info.pbsd;
+            const state: common.ProcState = switch (bsd_info.pbi_status) {
+                SIDL => .idle,
+                SRUN => .running,
+                SSLEEP => .sleeping,
+                SSTOP => .stopped,
+                SZOMB => .zombie,
+                else => .unknown,
+            };
 
             const cpu_total = task_info.pti_total_user +| task_info.pti_total_system;
 
@@ -779,7 +791,7 @@ pub const SysInfo = struct {
             var launch_cmd_buf: [256]u8 = std.mem.zeroes([256]u8);
             var launch_cmd_len: u16 = 0;
             var launch_cmd_fetched: bool = false;
-            var ppid: u32 = if (bsd_ret > 0) bsd_info.pbsi_ppid else 0;
+            var ppid: u32 = bsd_info.pbi_ppid;
             var effective_start_abstime: u64 = proc_start_abstime;
 
             const prev_entry = self.findPrevProcEntry(pid);
@@ -818,14 +830,20 @@ pub const SysInfo = struct {
             }
 
             if (name_len == 0) {
-                const name_ret = bindings.proc_name(raw_pid, &name_buf, 64);
-                name_len = if (name_ret > 0) @intCast(@min(@as(usize, @intCast(name_ret)), 63)) else 0;
+                const name_ret = bindings.proc_name(raw_pid, &name_buf, name_buf.len);
+                name_len = if (name_ret > 0) @intCast(@min(@as(usize, @intCast(name_ret)), name_buf.len - 1)) else 0;
             }
-            if (name_len == 0 and bsd_ret > 0) {
-                const fallback_name_len = std.mem.indexOfScalar(u8, &bsd_info.pbsi_comm, 0) orelse bsd_info.pbsi_comm.len;
-                name_len = @intCast(@min(fallback_name_len, 63));
+            if (name_len == 0) {
+                const registered_name_len = std.mem.indexOfScalar(u8, &bsd_info.pbi_name, 0) orelse bsd_info.pbi_name.len;
+                const source = if (registered_name_len > 0)
+                    bsd_info.pbi_name[0..registered_name_len]
+                else blk: {
+                    const comm_len = std.mem.indexOfScalar(u8, &bsd_info.pbi_comm, 0) orelse bsd_info.pbi_comm.len;
+                    break :blk bsd_info.pbi_comm[0..comm_len];
+                };
+                name_len = @intCast(@min(source.len, 63));
                 if (name_len > 0) {
-                    @memcpy(name_buf[0..name_len], bsd_info.pbsi_comm[0..name_len]);
+                    @memcpy(name_buf[0..name_len], source[0..name_len]);
                 }
             }
             if (name_len == 0) continue;
@@ -969,6 +987,20 @@ pub const SysInfo = struct {
         errdefer result.deinit(allocator);
 
         try self.refreshNetConnections(allocator, &result);
+        return result.toOwnedSlice(allocator);
+    }
+
+    pub fn getProcNetConnections(self: *SysInfo, allocator: std.mem.Allocator, pid: u32) ![]common.NetConnection {
+        var result: std.ArrayList(common.NetConnection) = .empty;
+        errdefer result.deinit(allocator);
+
+        var fd_buf: [4096]c.struct_proc_fdinfo = undefined;
+        const cached_proc = self.findPrevProcEntry(pid);
+        const cached_name: ?[]const u8 = if (cached_proc) |proc|
+            proc.name_buf[0..proc.name_len]
+        else
+            null;
+        try collectProcessConnections(allocator, &result, &fd_buf, @intCast(pid), cached_name);
         return result.toOwnedSlice(allocator);
     }
 

@@ -10,17 +10,29 @@ pub const NetTotals = struct {
 
 var static_net_buf: []u8 = &[_]u8{};
 
+fn ensureNetBufferCapacity(required: usize) !void {
+    if (required <= static_net_buf.len) return;
+    const new_buf = try std.heap.page_allocator.alloc(u8, required);
+    if (static_net_buf.len > 0) std.heap.page_allocator.free(static_net_buf);
+    static_net_buf = new_buf;
+}
+
 pub fn readNetTotals() !NetTotals {
     var mib = [_]c_int{ c.CTL_NET, c.PF_ROUTE, 0, 0, c.NET_RT_IFLIST2, 0 };
-    var len: usize = 0;
-    if (c.sysctl(&mib, mib.len, null, &len, null, 0) != 0) return error.SysctlFailed;
-
-    if (len > static_net_buf.len) {
-        if (static_net_buf.len > 0) std.heap.page_allocator.free(static_net_buf);
-        static_net_buf = try std.heap.page_allocator.alloc(u8, len);
+    if (static_net_buf.len == 0) {
+        var required: usize = 0;
+        if (c.sysctl(&mib, mib.len, null, &required, null, 0) != 0) return error.SysctlFailed;
+        try ensureNetBufferCapacity(required);
     }
 
-    if (c.sysctl(&mib, mib.len, static_net_buf.ptr, &len, null, 0) != 0) return error.SysctlFailed;
+    var len = static_net_buf.len;
+    if (c.sysctl(&mib, mib.len, static_net_buf.ptr, &len, null, 0) != 0) {
+        var required: usize = 0;
+        if (c.sysctl(&mib, mib.len, null, &required, null, 0) != 0) return error.SysctlFailed;
+        try ensureNetBufferCapacity(required);
+        len = static_net_buf.len;
+        if (c.sysctl(&mib, mib.len, static_net_buf.ptr, &len, null, 0) != 0) return error.SysctlFailed;
+    }
 
     var rx: u64 = 0;
     var tx: u64 = 0;

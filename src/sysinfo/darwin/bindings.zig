@@ -17,6 +17,7 @@ pub const c = struct {
     const __CFAllocator = opaque {};
 
     pub const struct_proc_fdinfo = sys_c.struct_proc_fdinfo;
+    pub const struct_proc_taskallinfo = sys_c.struct_proc_taskallinfo;
     pub const struct_socket_fdinfo = sys_c.struct_socket_fdinfo;
     pub const struct_in_sockinfo = sys_c.struct_in_sockinfo;
     pub const struct_if_msghdr2 = sys_c.struct_if_msghdr2;
@@ -174,6 +175,7 @@ pub const HOST_VM_INFO: c_int = 2;
 pub const PROCESSOR_CPU_LOAD_INFO: c_int = 2;
 pub const KERN_SUCCESS: c_int = 0;
 pub const PROC_PIDTASKINFO: c_int = 4;
+pub const PROC_PIDTASKALLINFO: c_int = sys_c.PROC_PIDTASKALLINFO;
 pub const CPU_STATE_USER = 0;
 pub const CPU_STATE_SYSTEM = 1;
 pub const CPU_STATE_IDLE = 2;
