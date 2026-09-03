@@ -75,6 +75,23 @@ test "planProcessTableLayout gives launch_path extra width from leftover space" 
     try std.testing.expectEqual(@as(usize, 44), layout.column_widths[1]);
 }
 
+test "process disk rates use fixed-width aligned units" {
+    var bytes_buf: [32]u8 = undefined;
+    var kib_buf: [32]u8 = undefined;
+    var mib_buf: [32]u8 = undefined;
+
+    const bytes = render.formatProcessRate(&bytes_buf, 'R', 0);
+    const kib = render.formatProcessRate(&kib_buf, 'R', 1024);
+    const mib = render.formatProcessRate(&mib_buf, 'W', 2 * 1024 * 1024);
+
+    try std.testing.expectEqualStrings(" R    0.0 B/s", bytes);
+    try std.testing.expectEqualStrings(" R    1.0KB/s", kib);
+    try std.testing.expectEqualStrings(" W    2.0MB/s", mib);
+    try std.testing.expectEqual(render.processColumnWidth(.disk_read), bytes.len);
+    try std.testing.expectEqual(render.processColumnWidth(.disk_read), kib.len);
+    try std.testing.expectEqual(render.processColumnWidth(.disk_write), mib.len);
+}
+
 test "diskUsagePercent reports used out of total capacity" {
     try std.testing.expectEqual(@as(f32, 0), ztop.sysinfo.common.diskUsagePercent(.{}));
     try std.testing.expectEqual(@as(f32, 25), ztop.sysinfo.common.diskUsagePercent(.{

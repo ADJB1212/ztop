@@ -29,11 +29,17 @@ pub fn processColumnWidth(column: ProcessColumn) usize {
         .cpu => 10,
         .mem => 10,
         .threads => 8,
-        .disk_read => 11,
-        .disk_write => 11,
+        .disk_read => 13,
+        .disk_write => 13,
         .wakeups => 14,
         .energy => 9,
     };
+}
+
+pub fn formatProcessRate(buf: []u8, label: u8, bytes_per_second: u64) []const u8 {
+    const rate = util.formatUnit(bytes_per_second);
+    const unit_padding = if (rate.unit.len < 2) " " else "";
+    return std.fmt.bufPrint(buf, " {c} {d:6.1}{s}{s}/s", .{ label, rate.value, unit_padding, rate.unit }) catch "";
 }
 
 /// Very rough estimate of a process's share of the system's total power draw.
@@ -210,14 +216,12 @@ pub fn renderProcessRow(
                 try util.writeAlignedCell(app_tui, style, column_width, .right, text);
             },
             .disk_read => {
-                const rate = util.formatUnit(proc.disk_read_ps);
-                const text = std.fmt.bufPrint(&buf, "R {d:4.1}{s}/s", .{ rate.value, rate.unit }) catch "";
+                const text = formatProcessRate(&buf, 'R', proc.disk_read_ps);
                 const style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.disk_title } else .{ .fg = theme.disk_title };
                 try util.writeAlignedCell(app_tui, style, column_width, .right, text);
             },
             .disk_write => {
-                const rate = util.formatUnit(proc.disk_write_ps);
-                const text = std.fmt.bufPrint(&buf, "W {d:4.1}{s}/s", .{ rate.value, rate.unit }) catch "";
+                const text = formatProcessRate(&buf, 'W', proc.disk_write_ps);
                 const style: Tui.Style = if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.io_rate } else .{ .fg = theme.io_rate };
                 try util.writeAlignedCell(app_tui, style, column_width, .right, text);
             },

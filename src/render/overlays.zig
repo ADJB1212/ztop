@@ -15,6 +15,7 @@ const help_items = [_]HelpItem{
     .{ .key = "Tab", .description = "Run AI diagnosis (Diagnostics tab)" },
     .{ .key = "j/k, Up/Down", .description = "Navigate processes" },
     .{ .key = "c,m,p,n,u", .description = "Sort by CPU/Mem/PID/Name/Wakeups" },
+    .{ .key = "r,w (I/O)", .description = "Sort by disk Read/Write" },
     .{ .key = "v", .description = "Toggle tree view" },
     .{ .key = "C", .description = "Process column picker" },
     .{ .key = "/", .description = "Filter processes" },

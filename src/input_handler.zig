@@ -77,6 +77,26 @@ pub fn applyInputBytes(dest: []u8, len: *usize, input: []const u8) EditAction {
     return .none;
 }
 
+pub fn sortAvailableOnTab(sort_by: sysinfo.SortBy, tab: u8) bool {
+    return switch (sort_by) {
+        .disk_read, .disk_write => tab == 2,
+        else => true,
+    };
+}
+
+pub fn processSortForKey(ch: u8, tab: u8) ?sysinfo.SortBy {
+    return switch (ch) {
+        'c' => .cpu,
+        'm' => .mem,
+        'p' => .pid,
+        'n' => .name,
+        'r' => if (tab == 2) .disk_read else null,
+        'w' => if (tab == 2) .disk_write else null,
+        'u' => .wakeups,
+        else => null,
+    };
+}
+
 pub const Context = struct {
     allocator: std.mem.Allocator,
     sys_info: *SysInfo,
@@ -183,6 +203,11 @@ pub fn handleAvailableInput(ctx: *Context) !bool {
         }
 
         handled_any = handled_any or handled;
+    }
+
+    if (!sortAvailableOnTab(ctx.sort_by.*, ctx.current_tab.*)) {
+        ctx.sort_by.* = .cpu;
+        sort_dirty = true;
     }
 
     if (sort_dirty) {
@@ -386,37 +411,17 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
                 moveSelection(ctx.selected_idx, list_count, -1);
                 return true;
             },
-            'c' => {
+            'c', 'm', 'p', 'n', 'u' => {
                 if (!ctx.thread_view.* and !ctx.is_scrubbing.*) {
-                    ctx.sort_by.* = .cpu;
+                    ctx.sort_by.* = processSortForKey(ch, ctx.current_tab.*).?;
                     sort_dirty.* = true;
                 }
                 return true;
             },
-            'm' => {
+            'r', 'w' => {
+                const requested_sort = processSortForKey(ch, ctx.current_tab.*) orelse return false;
                 if (!ctx.thread_view.* and !ctx.is_scrubbing.*) {
-                    ctx.sort_by.* = .mem;
-                    sort_dirty.* = true;
-                }
-                return true;
-            },
-            'p' => {
-                if (!ctx.thread_view.* and !ctx.is_scrubbing.*) {
-                    ctx.sort_by.* = .pid;
-                    sort_dirty.* = true;
-                }
-                return true;
-            },
-            'n' => {
-                if (!ctx.thread_view.* and !ctx.is_scrubbing.*) {
-                    ctx.sort_by.* = .name;
-                    sort_dirty.* = true;
-                }
-                return true;
-            },
-            'u' => {
-                if (!ctx.thread_view.* and !ctx.is_scrubbing.*) {
-                    ctx.sort_by.* = .wakeups;
+                    ctx.sort_by.* = requested_sort;
                     sort_dirty.* = true;
                 }
                 return true;

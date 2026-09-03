@@ -86,6 +86,7 @@ ztop [--version]
 | `Enter`                 | Drill into threads of the selected process                                 |
 | `Esc`                   | Return from any view; clear follow, filter, status, or zombie view         |
 | `c`, `m`, `p`, `n`, `u` | Sort by CPU, memory, PID, name, or wakeups/churn                           |
+| `r`, `w`                | Sort by disk read or disk write (I/O tab only)                             |
 | `C`                     | Toggle process-table columns for the current view                          |
 | `v`                     | Toggle tree view (process hierarchy)                                       |
 | `/`                     | Filter processes by name or PID                                            |

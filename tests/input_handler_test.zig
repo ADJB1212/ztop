@@ -38,3 +38,15 @@ test "applyInputBytes stops on submit and cancel" {
     try std.testing.expectEqual(input_handler.EditAction.cancel, cancel_action);
     try std.testing.expectEqualStrings("show", cancel_buf[0..cancel_len]);
 }
+
+test "process sort keys include disk read and write" {
+    const SortBy = @import("ztop").sysinfo.SortBy;
+
+    try std.testing.expectEqual(SortBy.disk_read, input_handler.processSortForKey('r', 2).?);
+    try std.testing.expectEqual(SortBy.disk_write, input_handler.processSortForKey('w', 2).?);
+    try std.testing.expectEqual(@as(?SortBy, null), input_handler.processSortForKey('r', 1));
+    try std.testing.expectEqual(@as(?SortBy, null), input_handler.processSortForKey('w', 5));
+    try std.testing.expect(input_handler.sortAvailableOnTab(.disk_read, 2));
+    try std.testing.expect(!input_handler.sortAvailableOnTab(.disk_read, 1));
+    try std.testing.expect(input_handler.sortAvailableOnTab(.cpu, 1));
+}

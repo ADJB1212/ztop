@@ -45,6 +45,7 @@ pub const ProcessTableLayout = process_table.ProcessTableLayout;
 pub const min_process_name_width = process_table.min_process_name_width;
 pub const processColumnWidth = process_table.processColumnWidth;
 pub const planProcessTableLayout = process_table.planProcessTableLayout;
+pub const formatProcessRate = process_table.formatProcessRate;
 pub const renderProcessRow = process_table.renderProcessRow;
 
 // Re-exports from rate_box.zig

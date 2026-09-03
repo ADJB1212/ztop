@@ -267,6 +267,8 @@ pub const SortBy = enum {
     mem,
     pid,
     name,
+    disk_read,
+    disk_write,
     wakeups,
 };
 
@@ -284,6 +286,8 @@ fn procOrder(sort_by: SortBy, a: *const ProcStats, b: *const ProcStats) std.math
         .mem => if (a.mem_percent > b.mem_percent) .lt else if (a.mem_percent < b.mem_percent) .gt else .eq,
         .pid => std.math.order(a.pid, b.pid),
         .name => std.mem.order(u8, a.name(), b.name()),
+        .disk_read => std.math.order(b.disk_read_ps, a.disk_read_ps),
+        .disk_write => std.math.order(b.disk_write_ps, a.disk_write_ps),
         .wakeups => blk: {
             const a_score = wakeupScore(a);
             const b_score = wakeupScore(b);

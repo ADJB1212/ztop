@@ -75,7 +75,10 @@ pub fn main(main_init: std.process.Init) !void {
     defer allocator.free(proc_buf);
     var cached_procs: []ztop.sysinfo.ProcStats = &.{};
 
-    var sort_by: ztop.sysinfo.SortBy = app_config.default_sort;
+    var sort_by: ztop.sysinfo.SortBy = if (input_handler.sortAvailableOnTab(app_config.default_sort, app_config.default_tab))
+        app_config.default_sort
+    else
+        .cpu;
     var selected_idx: usize = 0;
     var scroll_offset: usize = 0;
     var show_help: bool = app_config.show_help_on_startup;
@@ -679,6 +682,8 @@ pub fn main(main_init: std.process.Init) !void {
                             .mem => "MEM%",
                             .pid => "PID",
                             .name => "NAME",
+                            .disk_read => "Read",
+                            .disk_write => "Write",
                             .wakeups => "Wakeups",
                         };
                         const current_process_columns = activeProcessColumns(current_tab, &process_columns, &io_process_columns);

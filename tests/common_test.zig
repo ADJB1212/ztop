@@ -153,6 +153,34 @@ test "sortProcStats by name" {
     try std.testing.expectEqual(@as(u32, 1), procs[2].pid);
 }
 
+test "sortProcStats by disk read" {
+    var procs = [_]common.ProcStats{
+        .{ .pid = 1, .disk_read_ps = 512 },
+        .{ .pid = 2, .disk_read_ps = 4096 },
+        .{ .pid = 3, .disk_read_ps = 1024 },
+    };
+
+    common.sortProcStats(&procs, .disk_read);
+
+    try std.testing.expectEqual(@as(u32, 2), procs[0].pid);
+    try std.testing.expectEqual(@as(u32, 3), procs[1].pid);
+    try std.testing.expectEqual(@as(u32, 1), procs[2].pid);
+}
+
+test "sortProcStats by disk write" {
+    var procs = [_]common.ProcStats{
+        .{ .pid = 1, .disk_write_ps = 8 * 1024 },
+        .{ .pid = 2, .disk_write_ps = 512 },
+        .{ .pid = 3, .disk_write_ps = 2 * 1024 },
+    };
+
+    common.sortProcStats(&procs, .disk_write);
+
+    try std.testing.expectEqual(@as(u32, 1), procs[0].pid);
+    try std.testing.expectEqual(@as(u32, 3), procs[1].pid);
+    try std.testing.expectEqual(@as(u32, 2), procs[2].pid);
+}
+
 test "sortProcStats by wakeups" {
     var procs = [_]common.ProcStats{
         .{ .pid = 1, .wakeups_ps = 120, .context_switches_ps = 20 },
