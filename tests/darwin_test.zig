@@ -3,6 +3,19 @@ const darwin = @import("ztop").sysinfo.sys_darwin;
 const common = @import("ztop").sysinfo.common;
 const c = darwin.c;
 
+test "process rusage v2 binding matches the macOS ABI" {
+    const Rusage = darwin.bindings.rusage_info_v2;
+
+    try std.testing.expectEqual(@as(usize, 160), @sizeOf(Rusage));
+    try std.testing.expectEqual(@as(usize, 144), @offsetOf(Rusage, "ri_diskio_bytesread"));
+    try std.testing.expectEqual(@as(usize, 152), @offsetOf(Rusage, "ri_diskio_byteswritten"));
+
+    var usage: Rusage = undefined;
+    const result = darwin.bindings.proc_pid_rusage(std.c.getpid(), darwin.bindings.RUSAGE_INFO_V2, @ptrCast(&usage));
+    try std.testing.expectEqual(@as(c_int, 0), result);
+    try std.testing.expect(usage.ri_proc_start_abstime > 0);
+}
+
 test "parseSocketFdInfo extracts IPv4 TCP endpoints" {
     var socket_info: c.struct_socket_fdinfo = std.mem.zeroes(c.struct_socket_fdinfo);
     socket_info.psi.soi_kind = c.SOCKINFO_TCP;

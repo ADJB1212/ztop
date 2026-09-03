@@ -148,6 +148,7 @@ pub extern "c" fn host_page_size(host: mach_port_t, page_size: *usize) kern_retu
 pub extern "c" fn sysctlbyname(name: [*:0]const u8, oldp: ?*anyopaque, oldlenp: ?*usize, newp: ?*const anyopaque, newlen: usize) c_int;
 pub extern "c" fn proc_listallpids(buffer: ?[*]c_int, bufsize: c_int) c_int;
 pub extern "c" fn proc_pidinfo(pid: c_int, flavor: c_int, arg: u64, buffer: ?*anyopaque, bufsize: c_int) c_int;
+pub extern "c" fn proc_pid_rusage(pid: c_int, flavor: c_int, buffer: *anyopaque) c_int;
 pub extern "c" fn proc_pidfdinfo(pid: c_int, fd: c_int, flavor: c_int, buffer: ?*anyopaque, bufsize: c_int) c_int;
 pub extern "c" fn proc_name(pid: c_int, buffer: [*]u8, bufsize: u32) c_int;
 pub extern "c" fn proc_pidpath(pid: c_int, buffer: [*]u8, bufsize: u32) c_int;
@@ -183,7 +184,7 @@ pub const CPU_STATE_NICE = 3;
 pub const CPU_STATE_MAX = 4;
 
 pub const PROC_PIDTHREADINFO: c_int = 5;
-pub const PROC_PIDRUSAGE = 5;
+pub const RUSAGE_INFO_V2: c_int = 2;
 pub const PROC_PIDLISTTHREADS: c_int = 6;
 pub const PROC_PIDT_SHORTBSDINFO: c_int = 13;
 
@@ -224,6 +225,7 @@ pub const rusage_info_v2 = extern struct {
     ri_child_user_time: u64,
     ri_child_system_time: u64,
     ri_child_pkg_idle_wkups: u64,
+    ri_child_interrupt_wkups: u64,
     ri_child_pageins: u64,
     ri_child_elapsed_abstime: u64,
     ri_diskio_bytesread: u64,

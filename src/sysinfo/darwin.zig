@@ -52,7 +52,7 @@ const CPU_STATE_NICE = bindings.CPU_STATE_NICE;
 const CPU_STATE_MAX = bindings.CPU_STATE_MAX;
 
 const PROC_PIDTHREADINFO = bindings.PROC_PIDTHREADINFO;
-const PROC_PIDRUSAGE = bindings.PROC_PIDRUSAGE;
+const RUSAGE_INFO_V2 = bindings.RUSAGE_INFO_V2;
 const PROC_PIDLISTTHREADS = bindings.PROC_PIDLISTTHREADS;
 
 const SIDL = bindings.SIDL;
@@ -773,11 +773,11 @@ pub const SysInfo = struct {
             const cpu_total = task_info.pti_total_user +| task_info.pti_total_system;
 
             var rusage: rusage_info_v2 = undefined;
-            const ru_ret = bindings.proc_pidinfo(raw_pid, PROC_PIDRUSAGE, 0, @ptrCast(&rusage), @sizeOf(rusage_info_v2));
-            const proc_start_abstime: u64 = if (ru_ret > 0) rusage.ri_proc_start_abstime else 0;
-            const disk_read = if (ru_ret > 0) rusage.ri_diskio_bytesread else 0;
-            const disk_write = if (ru_ret > 0) rusage.ri_diskio_byteswritten else 0;
-            const wakeups_total = if (ru_ret > 0) rusage.ri_pkg_idle_wkups +| rusage.ri_interrupt_wkups else 0;
+            const ru_ret = bindings.proc_pid_rusage(raw_pid, RUSAGE_INFO_V2, @ptrCast(&rusage));
+            const proc_start_abstime: u64 = if (ru_ret == 0) rusage.ri_proc_start_abstime else 0;
+            const disk_read = if (ru_ret == 0) rusage.ri_diskio_bytesread else 0;
+            const disk_write = if (ru_ret == 0) rusage.ri_diskio_byteswritten else 0;
+            const wakeups_total = if (ru_ret == 0) rusage.ri_pkg_idle_wkups +| rusage.ri_interrupt_wkups else 0;
             const context_switches_total = if (task_info.pti_csw > 0) @as(u64, @intCast(task_info.pti_csw)) else 0;
 
             var cpu_percent: f32 = 0;
