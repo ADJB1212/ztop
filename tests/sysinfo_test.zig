@@ -4,6 +4,7 @@ const SysInfo = sysinfo.SysInfo;
 
 test "SysInfo initializes and fetches CPU stats" {
     var sys_info = SysInfo.init(std.testing.io);
+    defer sys_info.deinit();
     const cpu = sys_info.getCpuStats();
     const topology = sys_info.getCpuTopology();
     try std.testing.expect(cpu.cores > 0);
@@ -15,6 +16,7 @@ test "SysInfo initializes and fetches CPU stats" {
 
 test "SysInfo fetches Mem stats" {
     var sys_info = SysInfo.init(std.testing.io);
+    defer sys_info.deinit();
     const mem = sys_info.getMemStats();
     try std.testing.expect(mem.total > 0);
     try std.testing.expect(mem.free <= mem.total);
@@ -22,6 +24,7 @@ test "SysInfo fetches Mem stats" {
 
 test "SysInfo fetches Proc stats" {
     var sys_info = SysInfo.init(std.testing.io);
+    defer sys_info.deinit();
     var proc_buf: [sysinfo.common.MAX_PROCS]sysinfo.ProcStats = undefined;
 
     const procs = try sys_info.getProcStats(&proc_buf, .cpu);
@@ -40,6 +43,7 @@ test "SysInfo fetches Proc stats" {
 
 test "SysInfo fetches GPU stats without failing" {
     var sys_info = SysInfo.init(std.testing.io);
+    defer sys_info.deinit();
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -52,6 +56,7 @@ test "SysInfo fetches GPU stats without failing" {
 
 test "SysInfo fetches Net stats without failing" {
     var sys_info = SysInfo.init(std.testing.io);
+    defer sys_info.deinit();
     const net = sys_info.getNetStats();
     try std.testing.expect(net.rx_bytes >= 0);
     try std.testing.expect(net.tx_bytes >= 0);

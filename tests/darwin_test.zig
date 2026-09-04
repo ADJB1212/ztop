@@ -137,6 +137,22 @@ test "cached thermal stats across multiple invocations" {
     try std.testing.expect(si.sensors_initialized);
 }
 
+test "SysInfo deinit releases owned clients and collectors" {
+    var si = darwin.SysInfo.init(std.testing.io);
+    _ = si.getDiskStats();
+    const gpus = try si.getGpuStats(std.testing.allocator);
+    defer std.testing.allocator.free(gpus);
+
+    si.deinit();
+    try std.testing.expectEqual(@as(?c.IOHIDEventSystemClientRef, null), si.hid_client);
+    try std.testing.expectEqual(@as(?*anyopaque, null), si.power_handle);
+    try std.testing.expect(!si.disk_collector.initialized);
+    try std.testing.expect(!si.gpu_collector.initialized);
+
+    // Cleanup is safe to call from multiple error/exit paths.
+    si.deinit();
+}
+
 test "cached proc stats preserves ppid and launch_cmd_fetched across polls" {
     var si = darwin.SysInfo.init(std.testing.io);
     defer si.deinit();

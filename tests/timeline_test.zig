@@ -495,3 +495,112 @@ test "fromBytes returns error on truncated data" {
     var tl: Timeline = undefined;
     try std.testing.expectError(error.UnexpectedEndOfFile, tl.fromBytes(&buf));
 }
+
+test "snapshot process storage is capped at MAX_SNAPSHOT_PROCS" {
+    var tl = Timeline.init();
+    var procs: [timeline_mod.MAX_SNAPSHOT_PROCS + 5]common.ProcStats = undefined;
+    for (&procs, 0..) |*proc, i| {
+        proc.* = std.mem.zeroes(common.ProcStats);
+        proc.pid = @intCast(i + 1);
+    }
+
+    tl.recordSnapshot(makeSnap(1000, 10), &procs);
+
+    const snap = tl.getSnapshot(0).?;
+    try std.testing.expectEqual(@as(u32, timeline_mod.MAX_SNAPSHOT_PROCS), snap.proc_count);
+    try std.testing.expectEqual(@as(u32, timeline_mod.MAX_SNAPSHOT_PROCS), snap.procs[snap.proc_count - 1].pid);
+}
+
+test "computeDiff handles identical and invalid offsets" {
+    var tl = Timeline.init();
+    try std.testing.expectEqual(@as(?*const timeline_mod.SnapshotDiff, null), tl.computeDiff(0, 0));
+
+    tl.recordSnapshot(makeSnap(1000, 10), &.{});
+    const same = tl.computeDiff(0, 0).?;
+    try std.testing.expectEqual(@as(i64, 0), same.time_delta_ms);
+    try std.testing.expectEqual(@as(usize, 0), same.proc_diff_count);
+    try std.testing.expectEqual(@as(?*const timeline_mod.SnapshotDiff, null), tl.computeDiff(1, 0));
+}
+
+test "bookmarks reject invalid duplicates and capacity overflow" {
+    var tl = Timeline.init();
+    try std.testing.expect(!tl.addBookmark(0));
+
+    for (0..timeline_mod.MAX_BOOKMARKS + 1) |i| {
+        tl.recordSnapshot(makeSnap(@intCast(i * 2000), 10), &.{});
+    }
+    try std.testing.expect(!tl.addBookmark(tl.snapshotCount()));
+
+    for (0..timeline_mod.MAX_BOOKMARKS) |offset| {
+        try std.testing.expect(tl.addBookmark(offset));
+    }
+    try std.testing.expectEqual(timeline_mod.MAX_BOOKMARKS, tl.bookmark_count);
+    try std.testing.expect(!tl.addBookmark(timeline_mod.MAX_BOOKMARKS));
+}
+
+test "bookmark duplicate window excludes only timestamps less than one second apart" {
+    var tl = Timeline.init();
+    tl.recordSnapshot(makeSnap(1000, 10), &.{});
+    tl.recordSnapshot(makeSnap(1999, 10), &.{});
+    tl.recordSnapshot(makeSnap(2000, 10), &.{});
+
+    try std.testing.expect(tl.addBookmark(2));
+    try std.testing.expect(!tl.addBookmark(1));
+    try std.testing.expect(tl.addBookmark(0));
+}
+
+test "fromBytes leaves an existing timeline unchanged on parse failure" {
+    var buf: [12]u8 = undefined;
+    @memcpy(buf[0..4], &timeline_mod.SESSION_MAGIC);
+    std.mem.writeInt(u32, buf[4..8], timeline_mod.SESSION_VERSION, .little);
+    std.mem.writeInt(u32, buf[8..12], 1, .little);
+
+    var tl = Timeline.init();
+    tl.recordSnapshot(makeSnap(42_000, 25), &.{});
+    try std.testing.expectError(error.UnexpectedEndOfFile, tl.fromBytes(&buf));
+
+    try std.testing.expectEqual(@as(usize, 1), tl.snapshotCount());
+    try std.testing.expectEqual(@as(i64, 42_000), tl.getSnapshot(0).?.timestamp_ms);
+}
+
+test "fromBytes rejects counts beyond fixed-capacity storage" {
+    var buf: [12]u8 = undefined;
+    @memcpy(buf[0..4], &timeline_mod.SESSION_MAGIC);
+    std.mem.writeInt(u32, buf[4..8], timeline_mod.SESSION_VERSION, .little);
+    std.mem.writeInt(u32, buf[8..12], timeline_mod.MAX_SNAPSHOTS + 1, .little);
+
+    var tl = Timeline.init();
+    try std.testing.expectError(error.InvalidSessionFile, tl.fromBytes(&buf));
+}
+
+test "fromBytes rejects oversized serialized process names" {
+    const allocator = std.testing.allocator;
+    var tl = Timeline.init();
+    var proc: common.ProcStats = std.mem.zeroes(common.ProcStats);
+    proc.pid = 7;
+    proc.name_len = 9;
+    @memcpy(proc.name_buf[0..9], "edge-name");
+    tl.recordSnapshot(makeSnap(1000, 10), &.{proc});
+
+    const bytes = try tl.toBytes(allocator);
+    defer allocator.free(bytes);
+    const name_pos = std.mem.indexOf(u8, bytes, "edge-name") orelse return error.MissingSerializedName;
+    bytes[name_pos - 1] = 65;
+
+    var restored = Timeline.init();
+    try std.testing.expectError(error.InvalidSessionFile, restored.fromBytes(bytes));
+}
+
+test "fromBytes rejects trailing data" {
+    const allocator = std.testing.allocator;
+    const tl = Timeline.init();
+    const bytes = try tl.toBytes(allocator);
+    defer allocator.free(bytes);
+    const extended = try allocator.alloc(u8, bytes.len + 1);
+    defer allocator.free(extended);
+    @memcpy(extended[0..bytes.len], bytes);
+    extended[bytes.len] = 0xff;
+
+    var restored = Timeline.init();
+    try std.testing.expectError(error.InvalidSessionFile, restored.fromBytes(extended));
+}

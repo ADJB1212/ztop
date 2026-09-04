@@ -112,3 +112,38 @@ test "column cache preserves right alignment" {
     try std.testing.expectEqual(@as(?u64, 10), columns[2]);
     try std.testing.expectEqual(@as(?u64, 20), columns[3]);
 }
+
+test "empty history returns no columns and a zero maximum" {
+    const metric_history = history.MetricHistory{};
+
+    try std.testing.expectEqual(@as(usize, 0), metric_history.len());
+    try std.testing.expectEqual(@as(f32, 0), metric_history.maxSample());
+    try std.testing.expectEqual(@as(?f32, null), metric_history.valueForColumn(0, 1));
+    try std.testing.expectEqual(@as(?f32, null), metric_history.valueForColumn(0, 0));
+}
+
+test "MetricHistory clamps samples to percentage bounds" {
+    var metric_history = history.MetricHistory{};
+    metric_history.append(-25);
+    metric_history.append(150);
+
+    try std.testing.expectEqual(@as(f32, 0), metric_history.sampleAt(0));
+    try std.testing.expectEqual(@as(f32, 100), metric_history.sampleAt(1));
+}
+
+test "valueForColumn rejects a column beyond the requested width" {
+    var rate_history = history.RateHistory{};
+    rate_history.append(10);
+
+    try std.testing.expectEqual(@as(?u64, null), rate_history.valueForColumn(1, 1));
+    try std.testing.expectEqual(@as(?u64, null), rate_history.valueForColumn(std.math.maxInt(usize), 1));
+}
+
+test "valuesForColumns accepts an empty destination" {
+    var rate_history = history.RateHistory{};
+    rate_history.append(10);
+    var columns: [0]?u64 = .{};
+
+    rate_history.valuesForColumns(&columns);
+    try std.testing.expectEqual(@as(usize, 1), rate_history.len());
+}

@@ -130,3 +130,122 @@ test "buildPipelineGroups follows nested process ancestry without allocation" {
     try std.testing.expectEqual(process_commands.BuildStage.compile, groups[0].child_stages[0]);
     try std.testing.expectEqual(process_commands.BuildStage.link, groups[0].child_stages[1]);
 }
+
+test "collectZombieParents handles empty input and output" {
+    var out: [0]process_commands.ZombieParentEntry = .{};
+    const empty = process_commands.collectZombieParents(&.{}, &out);
+    try std.testing.expectEqual(@as(usize, 0), empty.parent_count);
+    try std.testing.expectEqual(@as(usize, 0), empty.zombie_count);
+
+    const procs = [_]common.ProcStats{
+        proc(10, 1, .running),
+        proc(11, 10, .zombie),
+    };
+    const truncated = process_commands.collectZombieParents(&procs, &out);
+    try std.testing.expectEqual(@as(usize, 0), truncated.parent_count);
+    try std.testing.expectEqual(@as(usize, 1), truncated.zombie_count);
+}
+
+test "matchesProcessFilter handles empty and exact PID filters" {
+    var candidate = proc(std.math.maxInt(u32), 1, .running);
+    @memcpy(candidate.name_buf[0..4], "init");
+    candidate.name_len = 4;
+
+    try std.testing.expect(process_commands.matchesProcessFilter(&candidate, ""));
+    try std.testing.expect(process_commands.matchesProcessFilter(&candidate, "4294967295"));
+    try std.testing.expect(!process_commands.matchesProcessFilter(&candidate, "4294967296"));
+}
+
+test "buildTreeView accepts empty and zero-capacity outputs" {
+    var no_indices: [0]usize = .{};
+    var no_depths: [0]u8 = .{};
+    var no_lasts: [0]u16 = .{};
+    try std.testing.expectEqual(@as(usize, 0), process_commands.buildTreeView(&.{}, &no_indices, &no_depths, &no_lasts));
+
+    const procs = [_]common.ProcStats{proc(1, 0, .running)};
+    try std.testing.expectEqual(@as(usize, 0), process_commands.buildTreeView(&procs, &no_indices, &no_depths, &no_lasts));
+}
+
+test "buildTreeView honors the shortest output buffer" {
+    const procs = [_]common.ProcStats{
+        proc(1, 0, .running),
+        proc(2, 1, .running),
+        proc(3, 1, .running),
+    };
+    var indices: [3]usize = undefined;
+    var depths: [1]u8 = undefined;
+    var is_lasts: [3]u16 = undefined;
+
+    const count = process_commands.buildTreeView(&procs, &indices, &depths, &is_lasts);
+
+    try std.testing.expectEqual(@as(usize, 1), count);
+    try std.testing.expectEqual(@as(usize, 0), indices[0]);
+}
+
+test "buildTreeView clamps display depth to its 16-level branch mask" {
+    var procs: [24]common.ProcStats = undefined;
+    for (&procs, 0..) |*p, i| {
+        p.* = proc(@intCast(i + 1), if (i == 0) 0 else @intCast(i), .running);
+    }
+    var indices: [procs.len]usize = undefined;
+    var depths: [procs.len]u8 = undefined;
+    var is_lasts: [procs.len]u16 = undefined;
+
+    const count = process_commands.buildTreeView(&procs, &indices, &depths, &is_lasts);
+
+    try std.testing.expectEqual(procs.len, count);
+    try std.testing.expectEqual(@as(u8, 16), depths[depths.len - 1]);
+    for (depths) |depth| try std.testing.expect(depth <= 16);
+}
+
+test "buildTreeView keeps processes visible when parent metadata cycles" {
+    const procs = [_]common.ProcStats{
+        proc(1, 2, .running),
+        proc(2, 1, .running),
+        proc(3, 0, .running),
+    };
+    var indices: [procs.len]usize = undefined;
+    var depths: [procs.len]u8 = undefined;
+    var is_lasts: [procs.len]u16 = undefined;
+
+    const count = process_commands.buildTreeView(&procs, &indices, &depths, &is_lasts);
+
+    try std.testing.expectEqual(procs.len, count);
+    var seen = [_]bool{false} ** procs.len;
+    for (indices) |index| {
+        try std.testing.expect(index < procs.len);
+        try std.testing.expect(!seen[index]);
+        seen[index] = true;
+    }
+}
+
+test "buildTreeView caps input at MAX_PROCS" {
+    const allocator = std.testing.allocator;
+    const procs = try allocator.alloc(common.ProcStats, common.MAX_PROCS + 1);
+    defer allocator.free(procs);
+    for (procs, 0..) |*p, i| {
+        p.* = proc(@intCast(i + 1), 0, .running);
+    }
+    const indices = try allocator.alloc(usize, procs.len);
+    defer allocator.free(indices);
+    const depths = try allocator.alloc(u8, procs.len);
+    defer allocator.free(depths);
+    const is_lasts = try allocator.alloc(u16, procs.len);
+    defer allocator.free(is_lasts);
+
+    const count = process_commands.buildTreeView(procs, indices, depths, is_lasts);
+
+    try std.testing.expectEqual(@as(usize, common.MAX_PROCS), count);
+    try std.testing.expectEqual(@as(usize, common.MAX_PROCS - 1), indices[count - 1]);
+}
+
+test "buildPipelineGroups handles empty input and zero group capacity" {
+    var no_groups: [0]process_commands.PipelineGroup = .{};
+    try std.testing.expectEqual(@as(usize, 0), process_commands.buildPipelineGroups(&.{}, &no_groups));
+
+    var cargo = proc(100, 1, .running);
+    @memcpy(cargo.name_buf[0..5], "cargo");
+    cargo.name_len = 5;
+    const procs = [_]common.ProcStats{cargo};
+    try std.testing.expectEqual(@as(usize, 0), process_commands.buildPipelineGroups(&procs, &no_groups));
+}

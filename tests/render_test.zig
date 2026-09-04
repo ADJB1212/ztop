@@ -100,6 +100,27 @@ test "diskUsagePercent reports used out of total capacity" {
     }));
 }
 
+test "planProcessTableLayout handles zero available width" {
+    const layout = render.planProcessTableLayout(config.ProcessColumns.all(), 0);
+
+    try std.testing.expectEqual(@as(usize, 0), layout.count);
+    try std.testing.expectEqual(@as(usize, 0), layout.name_width);
+    try std.testing.expectEqual(config.process_column_order.len, layout.dropped_count);
+}
+
+test "planProcessTableLayout with no fixed columns gives all width to name" {
+    const layout = render.planProcessTableLayout(config.ProcessColumns.none(), 17);
+
+    try std.testing.expectEqual(@as(usize, 0), layout.count);
+    try std.testing.expectEqual(@as(usize, 17), layout.name_width);
+    try std.testing.expectEqual(@as(usize, 0), layout.dropped_count);
+}
+
+test "formatProcessRate returns empty when destination is too small" {
+    var tiny: [4]u8 = undefined;
+    try std.testing.expectEqualStrings("", render.formatProcessRate(&tiny, 'R', std.math.maxInt(u64)));
+}
+
 test "renderDualRateBox shows disk usage as static row with spacer before live rates" {
     var read_history: ztop.history.RateHistory = .{};
     var write_history: ztop.history.RateHistory = .{};

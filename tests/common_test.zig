@@ -267,3 +267,59 @@ test "NetConnection defaults" {
     try std.testing.expectEqual(@as(u8, 0), conn.process_name_len);
     try std.testing.expectEqualStrings("", conn.name());
 }
+
+test "sortProcStats accepts empty and single-element slices" {
+    var empty: [0]common.ProcStats = .{};
+    common.sortProcStats(&empty, .cpu);
+
+    var one = [_]common.ProcStats{.{ .pid = 42, .cpu_percent = 99 }};
+    common.sortProcStats(&one, .mem);
+    try std.testing.expectEqual(@as(u32, 42), one[0].pid);
+}
+
+test "sortProcStats wakeup score saturates at extreme counters" {
+    var procs = [_]common.ProcStats{
+        .{ .pid = 1, .wakeups_ps = std.math.maxInt(u64), .context_switches_ps = std.math.maxInt(u64) },
+        .{ .pid = 2, .wakeups_ps = std.math.maxInt(u64) - 1 },
+        .{ .pid = 3, .wakeups_ps = 0, .context_switches_ps = 0 },
+    };
+
+    common.sortProcStats(&procs, .wakeups);
+
+    try std.testing.expectEqual(@as(u32, 1), procs[0].pid);
+    try std.testing.expectEqual(@as(u32, 2), procs[1].pid);
+    try std.testing.expectEqual(@as(u32, 3), procs[2].pid);
+}
+
+test "filterProcStats ignores empty comma-separated needles" {
+    var procs = [_]common.ProcStats{
+        .{ .pid = 1, .launch_cmd_len = 4 },
+        .{ .pid = 2, .launch_cmd_len = 0 },
+    };
+    @memcpy(procs[0].launch_cmd_buf[0..4], "test");
+
+    const filtered = common.filterProcStatsByLaunchCommandSubstring(&procs, " , \t, ");
+
+    try std.testing.expectEqual(@as(usize, 2), filtered.len);
+    try std.testing.expectEqual(@as(u32, 1), filtered[0].pid);
+    try std.testing.expectEqual(@as(u32, 2), filtered[1].pid);
+}
+
+test "filterProcStats preserves order around adjacent removals" {
+    var procs = [_]common.ProcStats{
+        .{ .pid = 1, .launch_cmd_len = 3 },
+        .{ .pid = 2, .launch_cmd_len = 3 },
+        .{ .pid = 3, .launch_cmd_len = 4 },
+        .{ .pid = 4, .launch_cmd_len = 4 },
+    };
+    @memcpy(procs[0].launch_cmd_buf[0..3], "bad");
+    @memcpy(procs[1].launch_cmd_buf[0..3], "bad");
+    @memcpy(procs[2].launch_cmd_buf[0..4], "keep");
+    @memcpy(procs[3].launch_cmd_buf[0..4], "also");
+
+    const filtered = common.filterProcStatsByLaunchCommandSubstring(&procs, "bad");
+
+    try std.testing.expectEqual(@as(usize, 2), filtered.len);
+    try std.testing.expectEqual(@as(u32, 3), filtered[0].pid);
+    try std.testing.expectEqual(@as(u32, 4), filtered[1].pid);
+}

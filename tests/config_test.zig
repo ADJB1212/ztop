@@ -263,6 +263,70 @@ test "config parse temperature_unit option and format calculations" {
     try std.testing.expectEqual(@as(f32, 373.15), config.TemperatureUnit.kelvin.format(100.0));
 }
 
+test "config accepts exact refresh interval boundaries" {
+    const minimum = config.parse("update_interval_ms = 100\nmain_interval_ms = 100\n");
+    try std.testing.expectEqual(@as(u32, 100), minimum.update_interval_ms);
+    try std.testing.expectEqual(@as(?u32, 100), minimum.tab_interval_ms[0]);
+
+    const maximum = config.parse("update_interval_ms = 10000\nnetwork_interval_ms = 10000\n");
+    try std.testing.expectEqual(@as(u32, 10_000), maximum.update_interval_ms);
+    try std.testing.expectEqual(@as(?u32, 10_000), maximum.tab_interval_ms[3]);
+}
+
+test "effectiveIntervalMs falls back for unset and diagnostics tabs" {
+    var parsed = config.Config.defaults();
+    parsed.update_interval_ms = 750;
+    parsed.tab_interval_ms[1] = 250;
+
+    try std.testing.expectEqual(@as(u32, 750), parsed.effectiveIntervalMs(0));
+    try std.testing.expectEqual(@as(u32, 750), parsed.effectiveIntervalMs(1));
+    try std.testing.expectEqual(@as(u32, 250), parsed.effectiveIntervalMs(2));
+    try std.testing.expectEqual(@as(u32, 750), parsed.effectiveIntervalMs(5));
+    try std.testing.expectEqual(@as(u32, 750), parsed.effectiveIntervalMs(std.math.maxInt(u8)));
+}
+
+test "config diagnostics preserve line numbers and continue parsing" {
+    var errors: std.ArrayList(config.DiagnosticError) = .empty;
+    defer errors.deinit(std.testing.allocator);
+
+    const input = "# comment\nmissing equals\n = value\ntheme = nord\nenable_ai = perhaps\n";
+    const parsed = config.parseWithErrors(std.testing.allocator, input, &errors);
+
+    try std.testing.expectEqual(config.ThemeName.nord, parsed.theme_name);
+    try std.testing.expectEqual(@as(usize, 3), errors.items.len);
+    try std.testing.expectEqual(@as(usize, 2), errors.items[0].line);
+    try std.testing.expectEqual(error.MissingEquals, errors.items[0].err);
+    try std.testing.expectEqual(@as(usize, 3), errors.items[1].line);
+    try std.testing.expectEqual(error.MissingKeyOrValue, errors.items[1].err);
+    try std.testing.expectEqual(@as(usize, 5), errors.items[2].line);
+    try std.testing.expectEqual(error.InvalidBooleanValue, errors.items[2].err);
+}
+
+test "config rejects oversized keys without blocking later entries" {
+    var errors: std.ArrayList(config.DiagnosticError) = .empty;
+    defer errors.deinit(std.testing.allocator);
+
+    const input = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa = value\ntheme = gruvbox\n";
+    const parsed = config.parseWithErrors(std.testing.allocator, input, &errors);
+
+    try std.testing.expectEqual(config.ThemeName.gruvbox, parsed.theme_name);
+    try std.testing.expectEqual(@as(usize, 1), errors.items.len);
+    try std.testing.expectEqual(error.ConfigValueTooLong, errors.items[0].err);
+}
+
+test "defaultSessionPath handles missing environment and prefers XDG cache" {
+    var environ_map = std.process.Environ.Map.init(std.testing.allocator);
+    defer environ_map.deinit();
+
+    try std.testing.expectEqual(@as(?[]u8, null), try config.defaultSessionPath(std.testing.allocator, &environ_map));
+
+    try environ_map.put("HOME", "/tmp/home-fallback");
+    try environ_map.put("XDG_CACHE_HOME", "/tmp/xdg-cache");
+    const path = (try config.defaultSessionPath(std.testing.allocator, &environ_map)).?;
+    defer std.testing.allocator.free(path);
+    try std.testing.expectEqualStrings("/tmp/xdg-cache/ztop/session.bin", path);
+}
+
 fn absoluteTmpPath(allocator: std.mem.Allocator, tmp: *const std.testing.TmpDir, sub_path: []const u8) ![]u8 {
     const cwd = try std.process.currentPathAlloc(std.testing.io, allocator);
     defer allocator.free(cwd);

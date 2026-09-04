@@ -95,3 +95,60 @@ test "parseInputToken parses mouse press and scroll events" {
         else => return error.UnexpectedParseResult,
     }
 }
+
+test "parseInputToken distinguishes empty partial and standalone escape input" {
+    try std.testing.expectEqual(tui.Tui.InputParseResult.incomplete, tui.Tui.parseInputToken(""));
+    try std.testing.expectEqual(tui.Tui.InputParseResult.incomplete, tui.Tui.parseInputToken("\x1b["));
+
+    switch (tui.Tui.parseInputToken("\x1b")) {
+        .parsed => |parsed| {
+            try std.testing.expectEqual(@as(usize, 1), parsed.used);
+            try std.testing.expectEqual(tui.Tui.InputToken.escape, parsed.token);
+        },
+        else => return error.UnexpectedParseResult,
+    }
+}
+
+test "parseInputToken consumes one byte for plain and newline input" {
+    switch (tui.Tui.parseInputToken("xrest")) {
+        .parsed => |parsed| {
+            try std.testing.expectEqual(@as(usize, 1), parsed.used);
+            try std.testing.expectEqual(tui.Tui.InputToken{ .byte = 'x' }, parsed.token);
+        },
+        else => return error.UnexpectedParseResult,
+    }
+
+    switch (tui.Tui.parseInputToken("\nnext")) {
+        .parsed => |parsed| {
+            try std.testing.expectEqual(@as(usize, 1), parsed.used);
+            try std.testing.expectEqual(tui.Tui.InputToken.enter, parsed.token);
+        },
+        else => return error.UnexpectedParseResult,
+    }
+}
+
+test "parseInputToken leaves a non-CSI byte after escape unconsumed" {
+    switch (tui.Tui.parseInputToken("\x1bx")) {
+        .parsed => |parsed| {
+            try std.testing.expectEqual(@as(usize, 1), parsed.used);
+            try std.testing.expectEqual(tui.Tui.InputToken.escape, parsed.token);
+        },
+        else => return error.UnexpectedParseResult,
+    }
+}
+
+test "parseInputToken rejects malformed and overflowing mouse coordinates" {
+    switch (tui.Tui.parseInputToken("\x1b[<0;;1M")) {
+        .invalid => {},
+        else => return error.ExpectedInvalidParseResult,
+    }
+    switch (tui.Tui.parseInputToken("\x1b[<0;65536;1M")) {
+        .invalid => {},
+        else => return error.ExpectedInvalidParseResult,
+    }
+}
+
+test "parseInputToken reports incomplete mouse sequences" {
+    try std.testing.expectEqual(tui.Tui.InputParseResult.incomplete, tui.Tui.parseInputToken("\x1b[<0;12;"));
+    try std.testing.expectEqual(tui.Tui.InputParseResult.incomplete, tui.Tui.parseInputToken("\x1b[<0;12;7"));
+}
