@@ -273,7 +273,7 @@ pub const SortBy = enum {
 };
 
 fn wakeupScore(proc: *const ProcStats) f64 {
-    return @floatFromInt(proc.wakeups_ps + (proc.context_switches_ps / 2));
+    return @floatFromInt(proc.wakeups_ps +| (proc.context_switches_ps / 2));
 }
 
 pub inline fn kbToBytes(x: usize) usize {

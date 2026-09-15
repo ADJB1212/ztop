@@ -251,6 +251,10 @@ pub const SysInfo = struct {
             self.cached_sensor_count = 0;
             self.sensors_initialized = false;
         }
+        if (self.hid_client) |client| {
+            c.CFRelease(client);
+            self.hid_client = null;
+        }
         if (self.power_handle) |handle| {
             bindings.ztop_power_deinit(handle);
             self.power_handle = null;

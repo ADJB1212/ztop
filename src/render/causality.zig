@@ -149,19 +149,7 @@ pub fn renderCausalityGraph(
 
             // Tree connector
             child_row += 1;
-            const is_last = blk: {
-                var remaining: usize = 0;
-                var past_current = false;
-                for (cached_procs) |p| {
-                    if (p.ppid != pid or p.pid == pid) continue;
-                    if (past_current) {
-                        remaining += 1;
-                        break;
-                    }
-                    if (p.pid == proc.pid) past_current = true;
-                }
-                break :blk remaining == 0;
-            };
+            const is_last = @as(usize, child_row) == children_count;
             try app_tui.writeStyled(.{ .fg = theme.border, .dim = true }, if (is_last) "└─" else "├─");
 
             // Name

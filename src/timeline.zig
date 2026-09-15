@@ -719,32 +719,36 @@ pub const Timeline = struct {
         const version = try r.readU32();
         if (version != SESSION_VERSION) return error.UnsupportedSessionVersion;
 
-        self.* = Timeline.init();
+        var restored = Timeline.init();
 
         const snap_count = try r.readU32();
+        if (snap_count > MAX_SNAPSHOTS) return error.InvalidSessionFile;
         for (0..snap_count) |_| {
             const snap = try deserializeSnapshot(&r);
-            self.recordSnapshot(snap, snap.procs[0..snap.proc_count]);
+            restored.recordSnapshot(snap, snap.procs[0..snap.proc_count]);
         }
 
         const ev_count = try r.readU32();
+        if (ev_count > MAX_EVENTS) return error.InvalidSessionFile;
         for (0..ev_count) |_| {
             const ev = try deserializeEvent(&r);
-            self.appendEvent(ev);
+            restored.appendEvent(ev);
         }
 
         const bm_count = try r.readU32();
+        if (bm_count > MAX_BOOKMARKS) return error.InvalidSessionFile;
         for (0..bm_count) |_| {
             const ts = try r.readI64();
             const abs_idx = try r.readU64();
-            if (self.bookmark_count < MAX_BOOKMARKS) {
-                self.bookmarks[self.bookmark_count] = .{
-                    .timestamp_ms = ts,
-                    .snap_abs_idx = @intCast(@min(abs_idx, std.math.maxInt(usize))),
-                };
-                self.bookmark_count += 1;
-            }
+            restored.bookmarks[restored.bookmark_count] = .{
+                .timestamp_ms = ts,
+                .snap_abs_idx = @intCast(@min(abs_idx, std.math.maxInt(usize))),
+            };
+            restored.bookmark_count += 1;
         }
+
+        if (r.pos != data.len) return error.InvalidSessionFile;
+        self.* = restored;
     }
 
     /// Persist the timeline to a binary file at `path`.
@@ -958,11 +962,13 @@ fn deserializeSnapshot(r: *ByteReader) !SystemSnapshot {
     };
 
     const proc_count = try r.readU32();
-    snap.proc_count = @intCast(@min(proc_count, MAX_SNAPSHOT_PROCS));
+    if (proc_count > MAX_SNAPSHOT_PROCS) return error.InvalidSessionFile;
+    snap.proc_count = @intCast(proc_count);
     for (0..proc_count) |i| {
         const pid = try r.readU32();
         const ppid = try r.readU32();
         const name_len = try r.readByte();
+        if (name_len > 64) return error.InvalidSessionFile;
         const name_data = try r.readSlice(name_len);
         const state_raw = try r.readByte();
         const cpu_percent = try r.readF32();
@@ -972,23 +978,20 @@ fn deserializeSnapshot(r: *ByteReader) !SystemSnapshot {
         const disk_write_ps = try r.readU64();
         const wakeups_ps = try r.readU64();
         const context_switches_ps = try r.readU64();
-        if (i < MAX_SNAPSHOT_PROCS) {
-            var p: common.ProcStats = std.mem.zeroes(common.ProcStats);
-            p.pid = pid;
-            p.ppid = ppid;
-            p.name_len = name_len;
-            const copy_len = @min(name_len, @as(u8, 64));
-            @memcpy(p.name_buf[0..copy_len], name_data[0..copy_len]);
-            p.state = std.enums.fromInt(common.ProcState, state_raw) orelse .unknown;
-            p.cpu_percent = cpu_percent;
-            p.mem_percent = mem_percent;
-            p.threads = threads;
-            p.disk_read_ps = disk_read_ps;
-            p.disk_write_ps = disk_write_ps;
-            p.wakeups_ps = wakeups_ps;
-            p.context_switches_ps = context_switches_ps;
-            snap.procs[i] = p;
-        }
+        var p: common.ProcStats = std.mem.zeroes(common.ProcStats);
+        p.pid = pid;
+        p.ppid = ppid;
+        p.name_len = name_len;
+        @memcpy(p.name_buf[0..name_len], name_data);
+        p.state = std.enums.fromInt(common.ProcState, state_raw) orelse .unknown;
+        p.cpu_percent = cpu_percent;
+        p.mem_percent = mem_percent;
+        p.threads = threads;
+        p.disk_read_ps = disk_read_ps;
+        p.disk_write_ps = disk_write_ps;
+        p.wakeups_ps = wakeups_ps;
+        p.context_switches_ps = context_switches_ps;
+        snap.procs[i] = p;
     }
 
     return snap;
@@ -999,6 +1002,7 @@ fn deserializeEvent(r: *ByteReader) !TimelineEvent {
     const kind_raw = try r.readByte();
     const pid = try r.readU32();
     const detail_len = try r.readByte();
+    if (detail_len > 64) return error.InvalidSessionFile;
     const detail_data = try r.readSlice(detail_len);
 
     var ev: TimelineEvent = .{
@@ -1008,7 +1012,6 @@ fn deserializeEvent(r: *ByteReader) !TimelineEvent {
         .detail_buf = std.mem.zeroes([64]u8),
         .detail_len = detail_len,
     };
-    const copy_len = @min(detail_len, @as(u8, 64));
-    @memcpy(ev.detail_buf[0..copy_len], detail_data[0..copy_len]);
+    @memcpy(ev.detail_buf[0..detail_len], detail_data);
     return ev;
 }

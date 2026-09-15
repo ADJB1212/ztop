@@ -69,6 +69,7 @@ pub fn main(main_init: std.process.Init) !void {
     defer app_tui.deinit();
 
     var sys_info = SysInfo.init(io);
+    defer sys_info.deinit();
 
     // Pre-allocate proc buffer once — reused every tick, no per-tick alloc/free
     const proc_buf = try allocator.alloc(ztop.sysinfo.ProcStats, ztop.sysinfo.common.MAX_PROCS);
