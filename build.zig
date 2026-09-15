@@ -112,6 +112,7 @@ pub fn build(b: *std.Build) void {
         "swiftXPC",            "swift_Builtin_float",    "swift_errno",
         "swift_math",          "swift_signal",           "swift_stdio",
         "swift_time",          "swift_StringProcessing", "swift_Volatile",
+        "swiftCoreImage",      "swiftMetal",             "swiftUniformTypeIdentifiers",
     };
     for (swift_libs) |lib| {
         exe.root_module.linkSystemLibrary(lib, .{});
