@@ -1,11 +1,4 @@
-const sys_c = @cImport({
-    @cInclude("sys/sysctl.h");
-    @cInclude("sys/proc_info.h");
-    @cInclude("sys/socket.h");
-    @cInclude("sys/statvfs.h");
-    @cInclude("net/if.h");
-    @cInclude("net/route.h");
-});
+const sys_c = @import("darwin_c");
 
 pub const c = struct {
     const __CFString = opaque {};

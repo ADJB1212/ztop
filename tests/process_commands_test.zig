@@ -211,7 +211,7 @@ test "buildTreeView keeps processes visible when parent metadata cycles" {
     const count = process_commands.buildTreeView(&procs, &indices, &depths, &is_lasts);
 
     try std.testing.expectEqual(procs.len, count);
-    var seen = [_]bool{false} ** procs.len;
+    var seen: [procs.len]bool = @splat(false);
     for (indices) |index| {
         try std.testing.expect(index < procs.len);
         try std.testing.expect(!seen[index]);

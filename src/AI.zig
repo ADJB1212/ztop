@@ -23,14 +23,14 @@ pub fn generateText(allocator: std.mem.Allocator, prompt: [:0]const u8) ![:0]u8 
     defer fm_free_string(raw);
     const slice = std.mem.span(raw);
     if (std.mem.startsWith(u8, slice, "ERROR:")) return error.GenerationFailed;
-    return allocator.dupeZ(u8, slice);
+    return allocator.dupeSentinel(u8, slice, 0);
 }
 
 pub fn generateDiagnosis(allocator: std.mem.Allocator, prompt: [:0]const u8) ![:0]u8 {
     const raw = fm_generate_diagnosis(prompt.ptr) orelse return error.GenerationFailed;
     defer fm_free_string(raw);
     const slice = std.mem.span(raw);
-    return allocator.dupeZ(u8, slice);
+    return allocator.dupeSentinel(u8, slice, 0);
 }
 
 pub fn streamText(prompt: [:0]const u8, callback: StreamCallback, context: ?*anyopaque) !void {
@@ -72,7 +72,7 @@ pub const AsyncQuery = struct {
         self.last_sig = sig;
         self.releaseLock();
 
-        const prompt_copy = std.heap.c_allocator.dupeZ(u8, prompt) catch {
+        const prompt_copy = std.heap.c_allocator.dupeSentinel(u8, prompt, 0) catch {
             self.acquireLock();
             self.status = .failed;
             self.releaseLock();

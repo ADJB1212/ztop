@@ -27,7 +27,7 @@ const MAX_DISK_SERVICES = 64;
 const SERVICE_RESCAN_INTERVAL = 20;
 
 pub const DiskCollector = struct {
-    services: [MAX_DISK_SERVICES]c.io_registry_entry_t = [_]c.io_registry_entry_t{0} ** MAX_DISK_SERVICES,
+    services: [MAX_DISK_SERVICES]c.io_registry_entry_t = @splat(0),
     service_count: usize = 0,
     polls_until_rescan: u8 = 0,
     initialized: bool = false,
@@ -52,7 +52,7 @@ pub const DiskCollector = struct {
         }
         defer _ = c.IOObjectRelease(iter);
 
-        var new_services: [MAX_DISK_SERVICES]c.io_registry_entry_t = [_]c.io_registry_entry_t{0} ** MAX_DISK_SERVICES;
+        var new_services: [MAX_DISK_SERVICES]c.io_registry_entry_t = @splat(0);
         var new_count: usize = 0;
 
         while (true) {

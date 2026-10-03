@@ -156,7 +156,7 @@ pub const SysInfo = struct {
     io: std.Io,
     prev_ticks: [4]u64 = .{ 0, 0, 0, 0 },
     prev_core_ticks: [MAX_CORES][4]u64 = std.mem.zeroes([MAX_CORES][4]u64),
-    core_usage: [MAX_CORES]f32 = [_]f32{0} ** MAX_CORES,
+    core_usage: [MAX_CORES]f32 = @splat(0),
     per_core_sampled_last: bool = false,
     ncpu: u32,
     topology_cores: [MAX_CORES]CpuLogicalCore = undefined,
@@ -1244,13 +1244,13 @@ fn efficiencyClassFromName(name: []const u8) CpuEfficiencyClass {
 
 fn readPerfLevelNumber(comptime T: type, perflevel: usize, field: []const u8) ?T {
     var name_buf: [64]u8 = undefined;
-    const sysctl_name = std.fmt.bufPrintZ(&name_buf, "hw.perflevel{d}.{s}", .{ perflevel, field }) catch return null;
+    const sysctl_name = std.mem.printSentinel(&name_buf, "hw.perflevel{d}.{s}", .{ perflevel, field }, 0) catch return null;
     return readSysctlNumber(T, sysctl_name);
 }
 
 fn readPerfLevelString(perflevel: usize, field: []const u8, buf: []u8) ?[]const u8 {
     var name_buf: [64]u8 = undefined;
-    const sysctl_name = std.fmt.bufPrintZ(&name_buf, "hw.perflevel{d}.{s}", .{ perflevel, field }) catch return null;
+    const sysctl_name = std.mem.printSentinel(&name_buf, "hw.perflevel{d}.{s}", .{ perflevel, field }, 0) catch return null;
     return readSysctlString(sysctl_name, buf);
 }
 

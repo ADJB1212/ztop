@@ -1,5 +1,6 @@
 .DS_Store
 zig-out
+zig-pkg
 .zig-cache
 benchmarks
 testing
@@ -11,3 +12,4 @@ testing
 ROADMAP.md
 scripts
 dist
+.pre-commit-config.yaml

@@ -17,9 +17,9 @@ const MAX_GPU_SERVICES = 16;
 const SERVICE_RESCAN_INTERVAL = 20;
 
 pub const GpuCollector = struct {
-    services: [MAX_GPU_SERVICES]c.io_registry_entry_t = [_]c.io_registry_entry_t{0} ** MAX_GPU_SERVICES,
+    services: [MAX_GPU_SERVICES]c.io_registry_entry_t = @splat(0),
     service_count: usize = 0,
-    static_gpus: [MAX_CACHED_GPUS]StaticGpuInfo = [_]StaticGpuInfo{.{}} ** MAX_CACHED_GPUS,
+    static_gpus: [MAX_CACHED_GPUS]StaticGpuInfo = @splat(.{}),
     polls_until_rescan: u8 = 0,
     initialized: bool = false,
 
@@ -43,7 +43,7 @@ pub const GpuCollector = struct {
         }
         defer _ = c.IOObjectRelease(iter);
 
-        var new_services: [MAX_GPU_SERVICES]c.io_registry_entry_t = [_]c.io_registry_entry_t{0} ** MAX_GPU_SERVICES;
+        var new_services: [MAX_GPU_SERVICES]c.io_registry_entry_t = @splat(0);
         var new_count: usize = 0;
         while (true) {
             const service = c.IOIteratorNext(iter);
@@ -59,7 +59,7 @@ pub const GpuCollector = struct {
         self.releaseServices();
         @memcpy(self.services[0..new_count], new_services[0..new_count]);
         self.service_count = new_count;
-        self.static_gpus = [_]StaticGpuInfo{.{}} ** MAX_CACHED_GPUS;
+        self.static_gpus = @splat(.{});
         self.polls_until_rescan = SERVICE_RESCAN_INTERVAL;
         self.initialized = true;
     }

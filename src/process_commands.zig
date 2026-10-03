@@ -5,7 +5,7 @@ const PID_INDEX_CAPACITY = common.MAX_PROCS * 2;
 const empty_pid_index = std.math.maxInt(u16);
 
 const ProcPidIndex = struct {
-    slots: [PID_INDEX_CAPACITY]u16 = [_]u16{empty_pid_index} ** PID_INDEX_CAPACITY,
+    slots: [PID_INDEX_CAPACITY]u16 = @splat(empty_pid_index),
     procs: []const common.ProcStats,
 
     fn init(procs: []const common.ProcStats) ProcPidIndex {
@@ -186,7 +186,7 @@ pub fn containsParentPid(entries: []const ZombieParentEntry, pid: u32) bool {
 
 pub fn matchesProcessFilter(proc: *const common.ProcStats, filter: []const u8) bool {
     if (filter.len == 0) return true;
-    if (std.ascii.indexOfIgnoreCase(proc.name(), filter) != null) return true;
+    if (std.ascii.findIgnoreCase(proc.name(), filter) != null) return true;
 
     var pid_buf: [10]u8 = undefined;
     const pid = std.fmt.bufPrint(&pid_buf, "{d}", .{proc.pid}) catch return false;

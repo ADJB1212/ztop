@@ -141,7 +141,7 @@ fn detectRunawayWriter(data: *PressureHintsData, procs: []const sysinfo.ProcStat
     const log_patterns = [_][]const u8{ "log", "journal", "syslog", "rsyslog", "logd", "logger", "fluent", "filebeat", "splunk" };
     var is_log_writer = false;
     for (log_patterns) |pat| {
-        if (std.ascii.indexOfIgnoreCase(top_name, pat) != null) {
+        if (std.ascii.findIgnoreCase(top_name, pat) != null) {
             is_log_writer = true;
             break;
         }

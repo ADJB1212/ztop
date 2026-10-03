@@ -1,5 +1,6 @@
 const std = @import("std");
 const manifest = @import("build.zig.zon");
+const Translator = @import("translate_c").Translator;
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -88,7 +89,17 @@ pub fn build(b: *std.Build) void {
         break :blk null;
     };
 
+    const translate_c = b.dependency("translate_c", .{});
+    const darwin_c: Translator = .init(translate_c, .{
+        .c_source_file = b.path("src/sysinfo/darwin/bindings.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    mod.addImport("darwin_c", darwin_c.mod);
+
     if (effective_sdk_root) |root| {
+        darwin_c.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/include" }) });
+        darwin_c.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ root, "System/Library/Frameworks" }) });
         exe.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/include" }) });
         exe.root_module.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ root, "System/Library/Frameworks" }) });
         exe.root_module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/lib/swift" }) });
@@ -140,9 +151,7 @@ pub fn build(b: *std.Build) void {
 
     run_cmd.step.dependOn(b.getInstallStep());
 
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
+    run_cmd.addPassthruArgs();
 
     const test_step = b.step("test", "Run unit tests");
 

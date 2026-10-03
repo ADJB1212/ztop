@@ -155,7 +155,7 @@ test "eventMaskInRange returns correct bitmask" {
     tl.detectAndRecordEvents(&snap1, &.{}, .celsius);
 
     const mask = tl.eventMaskInRange(500, 1500);
-    const cpu_bit = @as(u8, 1) << @intFromEnum(timeline_mod.EventKind.cpu_spike);
+    const cpu_bit = @as(u8, 1) << @backingInt(timeline_mod.EventKind.cpu_spike);
     try std.testing.expect(mask & cpu_bit != 0);
 
     // Out of range

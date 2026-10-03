@@ -12,7 +12,7 @@ pub const MAX_BOOKMARKS: usize = 10;
 const PID_SET_CAPACITY = common.MAX_PROCS * 2;
 
 const PidSet = struct {
-    slots: [PID_SET_CAPACITY]u32 = [_]u32{0} ** PID_SET_CAPACITY,
+    slots: [PID_SET_CAPACITY]u32 = @splat(0),
 
     fn startSlot(pid: u32) usize {
         return (@as(usize, pid) *% 0x9e37_79b1) & (PID_SET_CAPACITY - 1);
@@ -220,7 +220,7 @@ pub const Timeline = struct {
             .net_spike_cooldown = 0,
             .bookmarks = undefined,
             .bookmark_count = 0,
-            .diff_cache = [_]DiffCacheEntry{.{}} ** DIFF_CACHE_CAPACITY,
+            .diff_cache = @splat(.{}),
             .diff_cache_next = 0,
         };
     }
@@ -390,7 +390,7 @@ pub const Timeline = struct {
         for (0..self.ev_count) |i| {
             const ev = self.getEvent(i) orelse break;
             if (ev.timestamp_ms >= ts_start and ev.timestamp_ms <= ts_end) {
-                const bit = @as(u3, @intCast(@intFromEnum(ev.kind) & 7));
+                const bit = @as(u3, @intCast(@backingInt(ev.kind) & 7));
                 mask |= @as(u8, 1) << bit;
             }
         }
@@ -847,14 +847,14 @@ fn serializeSnapshot(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), snap: *con
     try appendOptF32(gpa, buf, snap.thermal.gpu_temp);
     try appendOptF32(gpa, buf, snap.battery.charge_percent);
     try appendOptF32(gpa, buf, snap.battery.power_draw_w);
-    try buf.append(gpa, @intFromEnum(snap.battery.status));
+    try buf.append(gpa, @backingInt(snap.battery.status));
     try appendU32(gpa, buf, snap.proc_count);
     for (snap.procs[0..snap.proc_count]) |p| {
         try appendU32(gpa, buf, p.pid);
         try appendU32(gpa, buf, p.ppid);
         try buf.append(gpa, p.name_len);
         try buf.appendSlice(gpa, p.name_buf[0..p.name_len]);
-        try buf.append(gpa, @intFromEnum(p.state));
+        try buf.append(gpa, @backingInt(p.state));
         try appendF32(gpa, buf, p.cpu_percent);
         try appendF32(gpa, buf, p.mem_percent);
         try appendU32(gpa, buf, p.threads);
@@ -867,7 +867,7 @@ fn serializeSnapshot(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), snap: *con
 
 fn serializeEvent(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), ev: *const TimelineEvent) !void {
     try appendI64(gpa, buf, ev.timestamp_ms);
-    try buf.append(gpa, @intFromEnum(ev.kind));
+    try buf.append(gpa, @backingInt(ev.kind));
     try appendU32(gpa, buf, ev.pid);
     try buf.append(gpa, ev.detail_len);
     try buf.appendSlice(gpa, ev.detail_buf[0..ev.detail_len]);

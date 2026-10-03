@@ -67,7 +67,7 @@ pub const Tui = struct {
             valid: bool = false,
         };
 
-        entries: [STYLE_CACHE_CAPACITY]Entry = [_]Entry{.{}} ** STYLE_CACHE_CAPACITY,
+        entries: [STYLE_CACHE_CAPACITY]Entry = @splat(.{}),
         next_replace: usize = 0,
 
         pub fn get(self: *StyleSequenceCache, style: Style) ![]const u8 {
@@ -379,8 +379,8 @@ pub const Tui = struct {
         raw.iflag.ISTRIP = false;
         raw.oflag.OPOST = false;
         raw.cflag.CSIZE = .CS8;
-        raw.cc[@intFromEnum(posix.V.MIN)] = 0;
-        raw.cc[@intFromEnum(posix.V.TIME)] = 1;
+        raw.cc[@backingInt(posix.V.MIN)] = 0;
+        raw.cc[@backingInt(posix.V.TIME)] = 1;
 
         try posix.tcsetattr(in.handle, .FLUSH, raw);
 
@@ -461,7 +461,7 @@ pub const Tui = struct {
     }
 
     pub fn writeSpaces(self: *Tui, count: usize) !void {
-        const spaces = [_]u8{' '} ** 128;
+        const spaces: [128]u8 = @splat(' ');
         var remaining = count;
         while (remaining > 0) {
             const chunk_len = @min(remaining, spaces.len);

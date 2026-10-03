@@ -100,19 +100,19 @@ pub fn renderTimelineBar(
             const ts = snap.timestamp_ms;
             const ev_mask = tl.eventMaskInRange(ts - 600, ts + 600);
 
-            if (ev_mask & (@as(u8, 1) << @intFromEnum(timeline_mod.EventKind.thermal_high)) != 0) {
+            if (ev_mask & (@as(u8, 1) << @backingInt(timeline_mod.EventKind.thermal_high)) != 0) {
                 try app_tui.writeStyled(.{ .fg = theme.usage_critical, .bold = true }, "T");
-            } else if (ev_mask & (@as(u8, 1) << @intFromEnum(timeline_mod.EventKind.cpu_spike)) != 0) {
+            } else if (ev_mask & (@as(u8, 1) << @backingInt(timeline_mod.EventKind.cpu_spike)) != 0) {
                 try app_tui.writeStyled(.{ .fg = theme.usage_warn, .bold = true }, "C");
-            } else if (ev_mask & (@as(u8, 1) << @intFromEnum(timeline_mod.EventKind.mem_pressure)) != 0) {
+            } else if (ev_mask & (@as(u8, 1) << @backingInt(timeline_mod.EventKind.mem_pressure)) != 0) {
                 try app_tui.writeStyled(.{ .fg = theme.memory_critical, .bold = true }, "M");
-            } else if (ev_mask & (@as(u8, 1) << @intFromEnum(timeline_mod.EventKind.disk_spike)) != 0) {
+            } else if (ev_mask & (@as(u8, 1) << @backingInt(timeline_mod.EventKind.disk_spike)) != 0) {
                 try app_tui.writeStyled(.{ .fg = theme.disk_title }, "D");
-            } else if (ev_mask & (@as(u8, 1) << @intFromEnum(timeline_mod.EventKind.net_spike)) != 0) {
+            } else if (ev_mask & (@as(u8, 1) << @backingInt(timeline_mod.EventKind.net_spike)) != 0) {
                 try app_tui.writeStyled(.{ .fg = theme.network_title }, "N");
-            } else if (ev_mask & (@as(u8, 1) << @intFromEnum(timeline_mod.EventKind.proc_birth)) != 0) {
+            } else if (ev_mask & (@as(u8, 1) << @backingInt(timeline_mod.EventKind.proc_birth)) != 0) {
                 try app_tui.writeStyled(.{ .fg = theme.usage_good }, "+");
-            } else if (ev_mask & (@as(u8, 1) << @intFromEnum(timeline_mod.EventKind.proc_death)) != 0) {
+            } else if (ev_mask & (@as(u8, 1) << @backingInt(timeline_mod.EventKind.proc_death)) != 0) {
                 try app_tui.writeStyled(.{ .fg = theme.muted }, "-");
             } else {
                 // No event: show CPU density block

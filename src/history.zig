@@ -10,7 +10,7 @@ pub fn History(comptime T: type, comptime clamp_max: ?T) type {
         const vector_lanes = vector_bytes / @sizeOf(T);
         const ValueVector = @Vector(vector_lanes, T);
 
-        samples: [MAX_HISTORY_SAMPLES]T = [_]T{0} ** MAX_HISTORY_SAMPLES,
+        samples: [MAX_HISTORY_SAMPLES]T = @splat(0),
         start: usize = 0,
         count: usize = 0,
 

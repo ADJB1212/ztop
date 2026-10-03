@@ -402,7 +402,7 @@ pub fn renderWhyBusyView(
             const sig = query_counter;
 
             var prompt_buf: [512]u8 = undefined;
-            if (std.fmt.bufPrintZ(&prompt_buf, "You are a macOS system monitor assistant. In 1 or 2 concise sentences (max 25 words total, no markdown bullets), explain why the process '{s}' might be causing a '{s}' usage spike at {d:.1}%. Give a direct, practical explanation.", .{ top_name, spikeLabel(kind), data.cpu_pct })) |prompt| {
+            if (std.mem.printSentinel(&prompt_buf, "You are a macOS system monitor assistant. In 1 or 2 concise sentences (max 25 words total, no markdown bullets), explain why the process '{s}' might be causing a '{s}' usage spike at {d:.1}%. Give a direct, practical explanation.", .{ top_name, spikeLabel(kind), data.cpu_pct }, 0)) |prompt| {
                 _ = ai_query.request(sig, prompt);
             } else |_| {}
         }

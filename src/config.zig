@@ -129,9 +129,9 @@ pub const ThemeOverrides = struct {
     command_prompt: ?tui.Tui.Color = null,
 
     pub fn apply(self: ThemeOverrides, theme: *Theme) void {
-        inline for (std.meta.fields(ThemeOverrides)) |field| {
-            if (@field(self, field.name)) |value| {
-                @field(theme, field.name) = value;
+        inline for (@typeInfo(ThemeOverrides).@"struct".field_names) |name| {
+            if (@field(self, name)) |value| {
+                @field(theme, name) = value;
             }
         }
     }
@@ -972,9 +972,9 @@ fn parseColor(value: []const u8) !tui.Tui.Color {
 }
 
 fn setColorOverride(overrides: *ThemeOverrides, field_name: []const u8, color: tui.Tui.Color) !void {
-    inline for (std.meta.fields(ThemeOverrides)) |field| {
-        if (std.mem.eql(u8, field_name, field.name)) {
-            @field(overrides, field.name) = color;
+    inline for (@typeInfo(ThemeOverrides).@"struct".field_names) |name| {
+        if (std.mem.eql(u8, field_name, name)) {
+            @field(overrides, name) = color;
             return;
         }
     }

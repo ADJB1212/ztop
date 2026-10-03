@@ -22,7 +22,7 @@ fn protoDisplay(theme: config.Theme, protocol: sysinfo.common.NetProtocol) Proto
 
 fn writeProtoPill(app_tui: *Tui, theme: config.Theme, protocol: sysinfo.common.NetProtocol) !void {
     const display = protoDisplay(theme, protocol);
-    var buf: [proto_label_width]u8 = [_]u8{' '} ** proto_label_width;
+    var buf: [proto_label_width]u8 = @splat(' ');
     const n = @min(display.label.len, proto_label_width);
     const left_pad = (proto_label_width - n) / 2;
     @memcpy(buf[left_pad..][0..n], display.label[0..n]);
@@ -57,7 +57,7 @@ fn statePillWidth(app_tui: *Tui) u16 {
 
 fn writeStatePill(app_tui: *Tui, theme: config.Theme, row_y: u16, right_edge_x: u16, state: sysinfo.common.NetConnState) !void {
     const display = stateDisplay(theme, state);
-    var buf: [state_label_width]u8 = [_]u8{' '} ** state_label_width;
+    var buf: [state_label_width]u8 = @splat(' ');
     const n = @min(display.label.len, state_label_width);
     @memcpy(buf[0..n], display.label[0..n]);
 
