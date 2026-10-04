@@ -155,7 +155,7 @@ pub fn collectZombieParents(procs: []const common.ProcStats, out: []ZombieParent
         if (proc.state != .zombie) continue;
 
         summary.zombie_count += 1;
-        if (proc.ppid == 0 or !hasProcess(procs, proc.ppid)) continue;
+        if (proc.ppid == 0) continue;
 
         var found = false;
         for (out[0..summary.parent_count]) |*entry| {
@@ -166,6 +166,7 @@ pub fn collectZombieParents(procs: []const common.ProcStats, out: []ZombieParent
         }
 
         if (found or summary.parent_count >= out.len) continue;
+        if (!hasProcess(procs, proc.ppid)) continue;
 
         out[summary.parent_count] = .{
             .pid = proc.ppid,

@@ -117,7 +117,45 @@ test "topWhyBusyProcIndices respects out slice capacity" {
     try std.testing.expectEqual(@as(usize, 1), out[1]); // cpu 80%
 }
 
-// ── findWhyBusyProcByPid ──────────────────────────────────────────────────────
+test "topWhyBusyProcIndices replaces lower values and preserves ties at capacity" {
+    const procs = [_]sysinfo.ProcStats{
+        makeProc(1, 10, 0, 0, 0),
+        makeProc(2, 30, 0, 0, 0),
+        makeProc(3, 30, 0, 0, 0),
+        makeProc(4, 50, 0, 0, 0),
+        makeProc(5, 30, 0, 0, 0),
+    };
+    var out: [3]usize = undefined;
+    const count = render.topWhyBusyProcIndices(&procs, .cpu, &out);
+    try std.testing.expectEqual(@as(usize, 3), count);
+    try std.testing.expectEqual(@as(usize, 3), out[0]);
+    try std.testing.expectEqual(@as(usize, 1), out[1]);
+    try std.testing.expectEqual(@as(usize, 2), out[2]);
+}
+
+test "topWhyBusyProcIndices excludes nonpositive and NaN values" {
+    const procs = [_]sysinfo.ProcStats{
+        makeProc(1, -10, 0, 0, 0),
+        makeProc(2, std.math.nan(f32), 0, 0, 0),
+        makeProc(3, 0, 0, 0, 0),
+        makeProc(4, 20, 0, 0, 0),
+    };
+    var out: [8]usize = undefined;
+    const count = render.topWhyBusyProcIndices(&procs, .cpu, &out);
+    try std.testing.expectEqual(@as(usize, 1), count);
+    try std.testing.expectEqual(@as(usize, 3), out[0]);
+    try std.testing.expectEqual(@as(usize, 0), render.topWhyBusyProcIndices(&procs, .cpu, out[0..0]));
+}
+
+test "topWhyBusyProcIndices caps results at eight" {
+    var procs: [12]sysinfo.ProcStats = undefined;
+    for (&procs, 0..) |*p, i| p.* = makeProc(@intCast(i + 1), @floatFromInt(i + 1), 0, 0, 0);
+    var out: [12]usize = @splat(std.math.maxInt(usize));
+    const count = render.topWhyBusyProcIndices(&procs, .cpu, &out);
+    try std.testing.expectEqual(@as(usize, 8), count);
+    for (out[0..count], 0..) |index, i| try std.testing.expectEqual(@as(usize, 11 - i), index);
+    try std.testing.expectEqual(std.math.maxInt(usize), out[count]);
+}
 
 test "findWhyBusyProcByPid returns null for empty slice" {
     const result = render.findWhyBusyProcByPid(&.{}, 42);

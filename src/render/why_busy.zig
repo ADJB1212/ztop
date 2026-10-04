@@ -59,34 +59,27 @@ fn procMetricValue(proc: sysinfo.ProcStats, metric: ProcMetric) f64 {
 
 /// Find up to MAX_TOP indices of top processes by metric, descending.
 pub fn topProcIndices(procs: []const sysinfo.ProcStats, metric: ProcMetric, out: []usize) usize {
-    var selected: [MAX_TOP]usize = undefined;
+    var values: [MAX_TOP]f64 = undefined;
     var sel_count: usize = 0;
     const n = @min(out.len, MAX_TOP);
+    if (n == 0) return 0;
 
-    for (0..n) |_| {
-        var best_idx: ?usize = null;
-        var best_val: f64 = 0;
-        for (procs, 0..) |proc, i| {
-            var already = false;
-            for (selected[0..sel_count]) |s| {
-                if (s == i) {
-                    already = true;
-                    break;
-                }
-            }
-            if (already) continue;
-            const v = procMetricValue(proc, metric);
-            if (v > best_val) {
-                best_val = v;
-                best_idx = i;
-            }
+    for (procs, 0..) |proc, i| {
+        const value = procMetricValue(proc, metric);
+        if (!(value > 0)) continue;
+
+        var insert_at: usize = 0;
+        while (insert_at < sel_count and value <= values[insert_at]) : (insert_at += 1) {}
+        if (insert_at == n) continue;
+
+        sel_count = @min(sel_count + 1, n);
+        var j = sel_count - 1;
+        while (j > insert_at) : (j -= 1) {
+            out[j] = out[j - 1];
+            values[j] = values[j - 1];
         }
-        if (best_val <= 0) break;
-        if (best_idx) |idx| {
-            selected[sel_count] = idx;
-            out[sel_count] = idx;
-            sel_count += 1;
-        } else break;
+        out[insert_at] = i;
+        values[insert_at] = value;
     }
     return sel_count;
 }

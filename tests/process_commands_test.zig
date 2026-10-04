@@ -43,6 +43,25 @@ test "containsParentPid matches collected parent processes" {
     try std.testing.expect(!process_commands.containsParentPid(&entries, 99));
 }
 
+test "collectZombieParents keeps counting existing groups when output is full" {
+    const procs = [_]common.ProcStats{
+        proc(100, 1, .running),
+        proc(101, 1, .sleeping),
+        proc(200, 999, .zombie),
+        proc(201, 100, .zombie),
+        proc(202, 101, .zombie),
+        proc(203, 100, .zombie),
+        proc(204, 0, .zombie),
+    };
+    var out: [1]process_commands.ZombieParentEntry = undefined;
+    const summary = process_commands.collectZombieParents(&procs, &out);
+
+    try std.testing.expectEqual(@as(usize, 1), summary.parent_count);
+    try std.testing.expectEqual(@as(usize, 5), summary.zombie_count);
+    try std.testing.expectEqual(@as(u32, 100), out[0].pid);
+    try std.testing.expectEqual(@as(u32, 2), out[0].zombie_count);
+}
+
 test "matchesProcessFilter compares names without temporary lowercase copies" {
     var candidate = proc(1234, 1, .running);
     @memcpy(candidate.name_buf[0..11], "Chrome Help");

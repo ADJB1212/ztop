@@ -156,9 +156,6 @@ pub fn main(main_init: std.process.Init) !void {
     var diff_anchor: ?usize = null;
     var refresh_interval_ms: ?u32 = null;
     var top_n: ?usize = null;
-    // Buffer for snapshot procs when displaying scrubbed view
-    var scrub_proc_buf: [timeline_mod.MAX_SNAPSHOT_PROCS]ztop.sysinfo.ProcStats = undefined;
-    var scrub_proc_count: usize = 0;
 
     // ── Crash-adjacent session recovery ──────────────────────────────────────
     // Compute the session file path once; reused on clean exit to persist data.
@@ -374,25 +371,21 @@ pub fn main(main_init: std.process.Init) !void {
                 var wifi_ssid_buf: [96]u8 = undefined;
                 var wifi_generation_buf: [96]u8 = undefined;
                 var wifi_detail_lines: [2]render.DetailLine = undefined;
-                scrub_proc_count = 0;
+                const scrub_snapshot = if (is_scrubbing) timeline.getSnapshot(scrub_offset) else null;
+                const scrub_procs: []const ztop.sysinfo.ProcStats = if (scrub_snapshot) |snap| snap.procs[0..snap.proc_count] else &.{};
+                const scrub_proc_count = scrub_procs.len;
 
-                if (is_scrubbing) {
-                    if (timeline.getSnapshot(scrub_offset)) |snap| {
-                        display_cpu = .{
-                            .usage_percent = snap.cpu_usage_pct,
-                            .cores = snap.cpu_cores,
-                            .per_core_usage = &.{},
-                        };
-                        display_mem = snap.mem;
-                        display_disk = snap.disk;
-                        display_net = snap.net;
-                        display_thermal = snap.thermal;
-                        display_battery = snap.battery;
-                        scrub_proc_count = snap.proc_count;
-                        for (0..scrub_proc_count) |i| {
-                            scrub_proc_buf[i] = snap.procs[i];
-                        }
-                    }
+                if (scrub_snapshot) |snap| {
+                    display_cpu = .{
+                        .usage_percent = snap.cpu_usage_pct,
+                        .cores = snap.cpu_cores,
+                        .per_core_usage = &.{},
+                    };
+                    display_mem = snap.mem;
+                    display_disk = snap.disk;
+                    display_net = snap.net;
+                    display_thermal = snap.thermal;
+                    display_battery = snap.battery;
                 }
                 const wifi_ssid_line = formatWifiSsidLine(display_net, &wifi_ssid_buf);
                 const wifi_generation_line = formatWifiGenerationLine(display_net, &wifi_generation_buf);
@@ -552,7 +545,9 @@ pub fn main(main_init: std.process.Init) !void {
                 }
 
                 // Bottom Box: Processes, Threads, or Connections
-                if (current_tab == 4) {
+                if (diff_active) {
+                    // The diff view occupies both panes.
+                } else if (current_tab == 4) {
                     try main_view.renderConnectionsTable(
                         &app_tui,
                         theme,
@@ -569,14 +564,13 @@ pub fn main(main_init: std.process.Init) !void {
                 } else if (current_tab == 5 and procs_box_height >= 5) {
                     // Current procs: use scrubbed snapshot procs if scrubbing
                     const wb_procs: []const ztop.sysinfo.ProcStats = if (is_scrubbing and scrub_proc_count > 0)
-                        scrub_proc_buf[0..scrub_proc_count]
+                        scrub_procs
                     else
                         cached_procs;
 
                     // "Before" snapshot: 5 ticks earlier than current view position
                     const before_offset = (if (is_scrubbing) scrub_offset else 0) + 5;
-                    var before_snap_buf: [timeline_mod.MAX_SNAPSHOT_PROCS]ztop.sysinfo.ProcStats = undefined;
-                    var before_snap_count: usize = 0;
+                    var before_procs: []const ztop.sysinfo.ProcStats = &.{};
                     var before_cpu_pct: ?f32 = null;
                     var before_mem_pct: ?f32 = null;
                     var before_disk_rate: ?u64 = null;
@@ -587,15 +581,10 @@ pub fn main(main_init: std.process.Init) !void {
                         before_mem_pct = bsnap.mem_usage_pct;
                         before_disk_rate = bsnap.disk.read_bytes_ps + bsnap.disk.write_bytes_ps;
                         before_net_rate = bsnap.net.rx_bytes_ps + bsnap.net.tx_bytes_ps;
-                        const cnt = @min(bsnap.proc_count, timeline_mod.MAX_SNAPSHOT_PROCS);
-                        for (0..cnt) |bi| before_snap_buf[bi] = bsnap.procs[bi];
-                        before_snap_count = cnt;
+                        before_procs = bsnap.procs[0..bsnap.proc_count];
                     }
 
-                    const cur_ts: i64 = if (is_scrubbing)
-                        (if (timeline.getSnapshot(scrub_offset)) |s| s.timestamp_ms else 0)
-                    else
-                        0;
+                    const cur_ts: i64 = if (scrub_snapshot) |snap| snap.timestamp_ms else 0;
 
                     try render.renderWhyBusyView(
                         &app_tui,
@@ -616,7 +605,7 @@ pub fn main(main_init: std.process.Init) !void {
                             .disk_rate_before = before_disk_rate,
                             .net_rate_before = before_net_rate,
                             .procs = wb_procs,
-                            .procs_before = before_snap_buf[0..before_snap_count],
+                            .procs_before = before_procs,
                             .timestamp_ms = cur_ts,
                         },
                     );
@@ -691,7 +680,7 @@ pub fn main(main_init: std.process.Init) !void {
                         const visible_column_count = current_process_columns.countVisible() + 1; // Name is always visible.
                         const title = if (is_scrubbing) blk: {
                             const newest = timeline.getSnapshot(0);
-                            const cur = timeline.getSnapshot(scrub_offset);
+                            const cur = scrub_snapshot;
                             if (newest != null and cur != null) {
                                 const delta_s = @divTrunc(newest.?.timestamp_ms - cur.?.timestamp_ms, 1000);
                                 var dur_buf: [16]u8 = undefined;
@@ -800,7 +789,7 @@ pub fn main(main_init: std.process.Init) !void {
                             const idx = scroll_offset + row;
                             if (idx >= filtered_count) break;
                             const proc_idx = filtered_indices[idx];
-                            const proc = if (is_scrubbing) &scrub_proc_buf[proc_idx] else &cached_procs[proc_idx];
+                            const proc = if (is_scrubbing) &scrub_procs[proc_idx] else &cached_procs[proc_idx];
 
                             const is_selected = (idx == selected_idx) and !show_help;
 
