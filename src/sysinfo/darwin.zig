@@ -167,11 +167,13 @@ pub const SysInfo = struct {
     topology_has_cache_groups: bool = false,
     topology_has_efficiency_classes: bool = false,
     topology_loaded: bool = false,
+    topology_cache: common.CpuTopologyCache = .{},
     total_mem: u64,
     page_size: usize,
     host_port: mach_port_t,
     timebase: MachTimebaseInfo,
-    prev_procs: [MAX_PROCS]ProcCpuEntry = undefined,
+    proc_buffers: [2][MAX_PROCS]ProcCpuEntry = undefined,
+    prev_proc_buffer: u1 = 0,
     prev_proc_count: usize = 0,
     prev_time: u64 = 0,
     prev_disk_read: u64 = 0,
@@ -240,6 +242,7 @@ pub const SysInfo = struct {
     fn loadTopology(self: *SysInfo) void {
         if (self.topology_loaded) return;
         readCpuTopology(self) catch self.synthesizeTopology(@intCast(self.ncpu));
+        self.topology_cache.build(self.topology_cores[0..self.topology_count]);
         self.topology_loaded = true;
     }
 
@@ -411,6 +414,8 @@ pub const SysInfo = struct {
     pub fn getCpuTopology(self: *const SysInfo) CpuTopology {
         return .{
             .logical_cores = self.topology_cores[0..self.topology_count],
+            .physical_rows = self.topology_cache.rows[0..self.topology_cache.row_count],
+            .lines = self.topology_cache.lines[0..self.topology_cache.line_count],
             .physical_cores = self.topology_physical_cores,
             .package_count = self.topology_package_count,
             .numa_node_count = self.topology_numa_count,
@@ -719,8 +724,8 @@ pub const SysInfo = struct {
     }
 
     fn findPrevProcEntry(self: *const SysInfo, pid: u32) ?*const ProcCpuEntry {
-        // Binary search — prev_procs is kept sorted by PID
-        const slice = self.prev_procs[0..self.prev_proc_count];
+        // The previous sample is kept sorted by PID.
+        const slice = self.proc_buffers[self.prev_proc_buffer][0..self.prev_proc_count];
         var lo: usize = 0;
         var hi: usize = slice.len;
         while (lo < hi) {
@@ -752,7 +757,8 @@ pub const SysInfo = struct {
         const num_pids: usize = if (num_pids_raw > 0) @intCast(num_pids_raw) else 0;
 
         var proc_count: usize = 0;
-        var new_procs: [MAX_PROCS]ProcCpuEntry = undefined;
+        const new_proc_buffer = self.prev_proc_buffer ^ 1;
+        const new_procs = &self.proc_buffers[new_proc_buffer];
         var new_proc_count: usize = 0;
 
         for (pid_buf[0..num_pids]) |raw_pid| {
@@ -904,14 +910,14 @@ pub const SysInfo = struct {
             proc_count += 1;
         }
 
-        @memcpy(self.prev_procs[0..new_proc_count], new_procs[0..new_proc_count]);
-        self.prev_proc_count = new_proc_count;
         // Sort by PID for binary search in findPrevProcEntry
-        std.mem.sort(ProcCpuEntry, self.prev_procs[0..new_proc_count], {}, struct {
+        std.mem.sort(ProcCpuEntry, new_procs[0..new_proc_count], {}, struct {
             fn lessThan(_: void, a: ProcCpuEntry, b: ProcCpuEntry) bool {
                 return a.pid < b.pid;
             }
         }.lessThan);
+        self.prev_proc_buffer = new_proc_buffer;
+        self.prev_proc_count = new_proc_count;
         self.prev_time = current_time;
         self.prev_ms = now_ms;
 
@@ -1019,7 +1025,7 @@ pub const SysInfo = struct {
         var fd_buf: [4096]c.struct_proc_fdinfo = undefined;
 
         if (self.prev_proc_count > 0) {
-            for (self.prev_procs[0..self.prev_proc_count]) |proc| {
+            for (self.proc_buffers[self.prev_proc_buffer][0..self.prev_proc_count]) |proc| {
                 try collectProcessConnections(
                     allocator,
                     result,

@@ -10,79 +10,7 @@ const CpuTopology = sysinfo.CpuTopology;
 const CpuEfficiencyClass = sysinfo.CpuEfficiencyClass;
 const MetricHistory = history_mod.MetricHistory;
 
-const TopologyPhysicalRow = struct {
-    physical_id: u16,
-    package_id: u16,
-    numa_node_id: i16,
-    shared_cache_group_id: i16,
-    shared_cache_level: u8,
-    efficiency_class: CpuEfficiencyClass,
-};
-
-const TopologyLine = union(enum) {
-    header: TopologyPhysicalRow,
-    row: TopologyPhysicalRow,
-};
-
-fn efficiencySortKey(class: CpuEfficiencyClass) u8 {
-    return switch (class) {
-        .performance => 0,
-        .balanced => 1,
-        .efficiency => 2,
-        .unknown => 3,
-    };
-}
-
-fn sameTopologySection(a: TopologyPhysicalRow, b: TopologyPhysicalRow) bool {
-    return a.package_id == b.package_id and
-        a.numa_node_id == b.numa_node_id and
-        a.shared_cache_group_id == b.shared_cache_group_id and
-        a.shared_cache_level == b.shared_cache_level and
-        a.efficiency_class == b.efficiency_class;
-}
-
-fn collectTopologyRows(topology: CpuTopology, rows: *[sysinfo.common.MAX_CORES]TopologyPhysicalRow) usize {
-    var row_count: usize = 0;
-    // Bitmap: one bit per physical_id (max 256 = MAX_CORES)
-    var seen: [sysinfo.common.MAX_CORES / 8]u8 = std.mem.zeroes([sysinfo.common.MAX_CORES / 8]u8);
-
-    for (topology.logical_cores) |logical_core| {
-        const pid = logical_core.physical_id;
-        if (pid >= sysinfo.common.MAX_CORES) continue;
-        const byte_idx = pid / 8;
-        const bit: u3 = @intCast(pid % 8);
-        if (seen[byte_idx] & (@as(u8, 1) << bit) != 0) continue;
-        seen[byte_idx] |= @as(u8, 1) << bit;
-        if (row_count >= rows.len) continue;
-
-        rows[row_count] = .{
-            .physical_id = logical_core.physical_id,
-            .package_id = logical_core.package_id,
-            .numa_node_id = logical_core.numa_node_id,
-            .shared_cache_group_id = logical_core.shared_cache_group_id,
-            .shared_cache_level = logical_core.shared_cache_level,
-            .efficiency_class = logical_core.efficiency_class,
-        };
-        row_count += 1;
-    }
-
-    std.mem.sort(TopologyPhysicalRow, rows[0..row_count], {}, struct {
-        fn lessThan(_: void, a: TopologyPhysicalRow, b: TopologyPhysicalRow) bool {
-            const a_numa = if (a.numa_node_id >= 0) a.numa_node_id else std.math.maxInt(i16);
-            const b_numa = if (b.numa_node_id >= 0) b.numa_node_id else std.math.maxInt(i16);
-            if (a_numa != b_numa) return a_numa < b_numa;
-            if (a.package_id != b.package_id) return a.package_id < b.package_id;
-            const a_eff = efficiencySortKey(a.efficiency_class);
-            const b_eff = efficiencySortKey(b.efficiency_class);
-            if (a_eff != b_eff) return a_eff < b_eff;
-            if (a.shared_cache_level != b.shared_cache_level) return a.shared_cache_level < b.shared_cache_level;
-            if (a.shared_cache_group_id != b.shared_cache_group_id) return a.shared_cache_group_id < b.shared_cache_group_id;
-            return a.physical_id < b.physical_id;
-        }
-    }.lessThan);
-
-    return row_count;
-}
+const TopologyPhysicalRow = sysinfo.common.CpuTopologyRow;
 
 fn buildTopologyHeaderText(buf: []u8, row: TopologyPhysicalRow, topology: CpuTopology) []const u8 {
     var writer: std.Io.Writer = .fixed(buf);
@@ -179,9 +107,7 @@ fn renderTopologyHeaderLine(app_tui: *Tui, theme: config.Theme, column_width: u1
 
     const used = fixed + visible_label.len;
     if (@as(usize, @intCast(column_width)) > used) {
-        for (0..(@as(usize, @intCast(column_width)) - used)) |_| {
-            try app_tui.printStyled(.{ .fg = theme.muted }, "━", .{});
-        }
+        try app_tui.writeRepeated(.{ .fg = theme.muted }, "━", @as(usize, @intCast(column_width)) - used);
     }
 }
 
@@ -331,9 +257,8 @@ pub fn renderCpuTopologyBox(
         return;
     }
 
-    var rows: [sysinfo.common.MAX_CORES]TopologyPhysicalRow = undefined;
-    const row_count = collectTopologyRows(topology, &rows);
-    if (row_count == 0) {
+    const rows = topology.physical_rows;
+    if (rows.len == 0) {
         try renderPerCoreUsageArea(app_tui, theme, content_x, base_body_y, content_width, topology_height, cpu);
         if (graph_height > 0) {
             try graphs.renderHistoryGraph(app_tui, theme, content_x, base_body_y + topology_height, content_width, graph_height, history, .cpu);
@@ -341,20 +266,11 @@ pub fn renderCpuTopologyBox(
         return;
     }
 
-    var lines: [sysinfo.common.MAX_CORES * 2]TopologyLine = undefined;
-    var line_count: usize = 0;
-    for (rows[0..row_count], 0..) |row, idx| {
-        if (idx == 0 or !sameTopologySection(rows[idx - 1], row)) {
-            lines[line_count] = .{ .header = row };
-            line_count += 1;
-        }
-        lines[line_count] = .{ .row = row };
-        line_count += 1;
-    }
+    const lines = topology.lines;
 
     const body_height: usize = topology_height;
     const usable_width: usize = content_width;
-    const columns = @max(std.math.divCeil(usize, line_count, body_height) catch 1, 1);
+    const columns = @max(std.math.divCeil(usize, lines.len, body_height) catch 1, 1);
     const column_gap: usize = if (columns > 1) 2 else 0;
     const column_width = if (columns > 0) (usable_width -| column_gap * (columns - 1)) / columns else usable_width;
     if (column_width == 0) {
@@ -367,7 +283,7 @@ pub fn renderCpuTopologyBox(
 
     var max_row_width: usize = 0;
     var header_buf: [64]u8 = undefined;
-    for (rows[0..row_count]) |row| {
+    for (rows) |row| {
         const header = buildTopologyHeaderText(&header_buf, row, topology);
         max_row_width = @max(max_row_width, header.len + 4);
 
@@ -379,7 +295,7 @@ pub fn renderCpuTopologyBox(
     if (column_width < max_row_width) {
         try renderPerCoreUsageArea(app_tui, theme, content_x, base_body_y, content_width, topology_height, cpu);
     } else {
-        for (lines[0..line_count], 0..) |line, idx| {
+        for (lines, 0..) |line, idx| {
             const column = idx / body_height;
             const row = idx % body_height;
             const x = content_x + @as(u16, @intCast(column * (column_width + column_gap)));

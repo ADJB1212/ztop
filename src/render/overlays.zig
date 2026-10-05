@@ -60,7 +60,7 @@ fn writeTextCell(app_tui: *Tui, style: Tui.Style, text: []const u8, width: usize
     const full_width = textWidth(text);
     if (full_width <= width) {
         try app_tui.writeStyled(style, text);
-        for (full_width..width) |_| try app_tui.writeStyled(style, " ");
+        try app_tui.writeStyledSpaces(style, width - full_width);
         return;
     }
 
@@ -74,7 +74,7 @@ fn writeTextCell(app_tui: *Tui, style: Tui.Style, text: []const u8, width: usize
     try app_tui.writeStyled(style, clipped);
     try app_tui.writeStyled(style, ".");
     const used = @min(width, clipped_width + 1);
-    for (used..width) |_| try app_tui.writeStyled(style, " ");
+    try app_tui.writeStyledSpaces(style, width - used);
 }
 
 fn renderHelpItemCell(
@@ -102,7 +102,7 @@ fn renderHelpItemCell(
             try writeTextCell(app_tui, .{ .fg = theme.muted }, entry.description, description_width);
         }
     } else {
-        for (0..column_width) |_| try app_tui.bufWrite(" ");
+        try app_tui.writeSpaces(column_width);
     }
 }
 
@@ -146,7 +146,7 @@ pub fn renderHelpOverlay(
 
     for (0..help_height) |i| {
         try app_tui.moveCursor(h_x, h_y + @as(u16, @intCast(i)));
-        for (0..help_width) |_| try app_tui.bufWrite(" ");
+        try app_tui.writeSpaces(help_width);
     }
 
     try app_tui.drawBoxStyled(h_x, h_y, help_width, help_height, "Help", .{ .fg = theme.border }, .{ .fg = theme.text, .bold = true });
@@ -172,7 +172,7 @@ pub fn renderHelpOverlay(
     for (0..rows_to_render) |row_idx| {
         try app_tui.moveCursor(content_x, row_start_y + @as(u16, @intCast(row_idx)));
         try renderHelpItemCell(app_tui, theme, left_items[row_idx], left_column_width, left_key_width);
-        for (0..column_gap) |_| try app_tui.bufWrite(" ");
+        try app_tui.writeSpaces(column_gap);
         const right_item: ?HelpItem = if (row_idx < right_items.len) right_items[row_idx] else null;
         try renderHelpItemCell(app_tui, theme, right_item, right_column_width, right_key_width);
     }
@@ -205,7 +205,7 @@ pub fn renderHelpOverlay(
         const clipped_repo_label = util.clipUtf8(repo_label, repo_label_width);
         const clipped_repo_label_width = textWidth(clipped_repo_label);
         try app_tui.writeStyledHyperlink(.{ .fg = theme.tab_active, .underline = true }, repo_url, clipped_repo_label);
-        for (clipped_repo_label_width..repo_label_width) |_| try app_tui.writeStyled(.{ .fg = theme.text }, " ");
+        try app_tui.writeStyledSpaces(.{ .fg = theme.text }, repo_label_width - clipped_repo_label_width);
     }
 
     try app_tui.moveCursor(content_x, footer_close_y);
@@ -228,7 +228,7 @@ pub fn renderColumnPickerOverlay(
 
     for (0..picker_height) |i| {
         try app_tui.moveCursor(picker_x, picker_y + @as(u16, @intCast(i)));
-        for (0..picker_width) |_| try app_tui.bufWrite(" ");
+        try app_tui.writeSpaces(picker_width);
     }
 
     try app_tui.drawBoxStyled(picker_x, picker_y, picker_width, picker_height, picker_title, .{ .fg = theme.border }, .{ .fg = theme.text, .bold = true });

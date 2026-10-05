@@ -142,13 +142,10 @@ pub fn renderMeter(
     const full_blocks = filled_eighths / 8;
     const partial_block = filled_eighths % 8;
 
-    for (0..width) |idx| {
-        if (idx < full_blocks) {
-            try app_tui.writeStyled(fill_style, meter_blocks[8]);
-        } else if (idx == full_blocks and partial_block > 0) {
-            try app_tui.writeStyled(fill_style, meter_blocks[partial_block]);
-        } else {
-            try app_tui.writeStyled(empty_style, "─");
-        }
+    try app_tui.writeRepeated(fill_style, meter_blocks[8], full_blocks);
+    if (partial_block > 0) {
+        try app_tui.writeStyled(fill_style, meter_blocks[partial_block]);
     }
+    const filled_columns = full_blocks + @intFromBool(partial_block > 0);
+    try app_tui.writeRepeated(empty_style, "─", width - filled_columns);
 }

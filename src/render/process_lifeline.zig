@@ -47,7 +47,7 @@ pub fn renderLifelineView(
     // Divider
     const div_y = y + 1 + graph_height;
     try app_tui.moveCursor(x + 1, div_y);
-    for (0..width -| 2) |_| try app_tui.writeStyled(.{ .fg = theme.border, .dim = true }, "─");
+    try app_tui.writeRepeated(.{ .fg = theme.border, .dim = true }, "─", width -| 2);
 
     // Events List
     const event_header_y = div_y + 1;

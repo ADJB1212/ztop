@@ -470,6 +470,23 @@ pub const Tui = struct {
         }
     }
 
+    pub fn writeRepeated(self: *Tui, style: Style, comptime char: []const u8, count: usize) !void {
+        if (count == 0 or char.len == 0) return;
+
+        try self.setStyleIfChanged(style);
+        var buf: [512 * char.len]u8 = undefined;
+        const chunk_count = @min(count, 512);
+        for (0..chunk_count) |i| {
+            @memcpy(buf[i * char.len ..][0..char.len], char);
+        }
+        var remaining = count;
+        while (remaining > 0) {
+            const repeats = @min(remaining, chunk_count);
+            try self.bufWrite(buf[0 .. repeats * char.len]);
+            remaining -= repeats;
+        }
+    }
+
     fn flushBuffer(self: *Tui) !void {
         if (self.frame_len == 0) return;
         try self.out.writeStreamingAll(self.io, self.frame_buf[0..self.frame_len]);
@@ -564,22 +581,12 @@ pub const Tui = struct {
     pub fn drawBoxStyled(self: *Tui, x: u16, y: u16, width: u16, height: u16, title: []const u8, border_style: Style, title_style: Style) !void {
         try self.setStyleIfChanged(border_style);
 
-        // Build horizontal border line ("─" repeated) once, reuse for top and bottom.
-        // "─" is 3 bytes in UTF-8. Max terminal width ~512 cols → 512*3 = 1536 bytes.
-        var h_border_buf: [512 * 3]u8 = undefined;
         const repeat_count: usize = if (width >= 2) width - 2 else 0;
-        const h_border_len = repeat_count * 3;
-        for (0..repeat_count) |i| {
-            h_border_buf[i * 3] = 0xe2; // "─" = U+2500 = 0xE2 0x94 0x80
-            h_border_buf[i * 3 + 1] = 0x94;
-            h_border_buf[i * 3 + 2] = 0x80;
-        }
-        const h_border = h_border_buf[0..h_border_len];
 
         // Draw top border
         try self.moveCursor(x, y);
         try self.bufWrite("╭");
-        try self.bufWrite(h_border);
+        try self.writeRepeated(border_style, "─", repeat_count);
         try self.bufWrite("╮");
 
         // Draw sides
@@ -593,7 +600,7 @@ pub const Tui = struct {
         // Draw bottom border
         try self.moveCursor(x, y + height - 1);
         try self.bufWrite("╰");
-        try self.bufWrite(h_border);
+        try self.writeRepeated(border_style, "─", repeat_count);
         try self.bufWrite("╯");
         try self.resetStyle();
 

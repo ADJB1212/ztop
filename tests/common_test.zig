@@ -27,6 +27,17 @@ test "ProcStats defaults" {
     try std.testing.expectEqual(common.ProcState.unknown, proc.state);
 }
 
+test "ProcStats has no padding" {
+    const field_bytes = comptime blk: {
+        var total: usize = 0;
+        for (@typeInfo(common.ProcStats).@"struct".field_types) |Field| {
+            total += @sizeOf(Field);
+        }
+        break :blk total;
+    };
+    try std.testing.expectEqual(field_bytes, @sizeOf(common.ProcStats));
+}
+
 test "ProcStats launch command slice" {
     var proc = common.ProcStats{
         .pid = 4321,
@@ -41,10 +52,68 @@ test "ProcStats launch command slice" {
 test "CpuTopology defaults" {
     const topology = common.CpuTopology{};
     try std.testing.expectEqual(@as(usize, 0), topology.logical_cores.len);
+    try std.testing.expectEqual(@as(usize, 0), topology.physical_rows.len);
+    try std.testing.expectEqual(@as(usize, 0), topology.lines.len);
     try std.testing.expectEqual(@as(u16, 0), topology.physical_cores);
     try std.testing.expectEqual(@as(u16, 1), topology.package_count);
     try std.testing.expect(!topology.has_numa);
     try std.testing.expect(!topology.has_smt);
+}
+
+test "topology cache deduplicates cores and groups sorted rows into sections" {
+    const cores = [_]common.CpuLogicalCore{
+        .{ .logical_id = 0, .physical_id = 0, .package_id = 1 },
+        .{ .logical_id = 1, .physical_id = 2, .efficiency_class = .efficiency },
+        .{ .logical_id = 2, .physical_id = 3, .efficiency_class = .performance },
+        .{ .logical_id = 3, .physical_id = 1, .efficiency_class = .performance },
+        .{ .logical_id = 4, .physical_id = 1, .efficiency_class = .performance, .thread_index = 1 },
+        .{ .logical_id = 5, .physical_id = 4, .numa_node_id = 0 },
+        .{ .logical_id = 6, .physical_id = common.MAX_CORES },
+    };
+    var cache: common.CpuTopologyCache = .{};
+    cache.build(&cores);
+
+    const expected_ids = [_]u16{ 4, 1, 3, 2, 0 };
+    try std.testing.expectEqual(expected_ids.len, cache.row_count);
+    for (expected_ids, cache.rows[0..cache.row_count]) |id, row| {
+        try std.testing.expectEqual(id, row.physical_id);
+    }
+    const expected_line_ids = [_]u16{ 4, 4, 1, 1, 3, 2, 2, 0, 0 };
+    const expected_headers = [_]bool{ true, false, true, false, false, true, false, true, false };
+    try std.testing.expectEqual(expected_line_ids.len, cache.line_count);
+    for (expected_line_ids, expected_headers, cache.lines[0..cache.line_count]) |id, header, line| {
+        switch (line) {
+            .header => |row| {
+                try std.testing.expectEqual(true, header);
+                try std.testing.expectEqual(id, row.physical_id);
+            },
+            .row => |row| {
+                try std.testing.expectEqual(false, header);
+                try std.testing.expectEqual(id, row.physical_id);
+            },
+        }
+    }
+}
+
+test "topology cache handles maximum capacity and resets on rebuild" {
+    var cores: [common.MAX_CORES]common.CpuLogicalCore = undefined;
+    for (&cores, 0..) |*core, idx| {
+        core.* = .{
+            .logical_id = @intCast(idx),
+            .physical_id = @intCast(common.MAX_CORES - idx - 1),
+            .package_id = @intCast(idx),
+        };
+    }
+    var cache: common.CpuTopologyCache = .{};
+    cache.build(&cores);
+    try std.testing.expectEqual(common.MAX_CORES, cache.row_count);
+    try std.testing.expectEqual(common.MAX_CORES * 2, cache.line_count);
+    try std.testing.expectEqual(@as(u16, common.MAX_CORES - 1), cache.rows[0].physical_id);
+    try std.testing.expectEqual(@as(u16, 0), cache.rows[cache.row_count - 1].physical_id);
+
+    cache.build(&.{});
+    try std.testing.expectEqual(@as(usize, 0), cache.row_count);
+    try std.testing.expectEqual(@as(usize, 0), cache.line_count);
 }
 
 test "CpuLogicalCore defaults" {

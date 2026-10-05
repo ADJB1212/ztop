@@ -44,7 +44,7 @@ brew install ztop
 
 ### Build from Source
 
-**Requirements:** Zig `0.16.0` or newer, macOS (ARM / Apple Silicon), a POSIX terminal.
+**Requirements:** Zig `0.17.0` or newer, macOS (ARM / Apple Silicon), a POSIX terminal.
 
 ```bash
 git clone https://github.com/ADJB1212/ztop.git

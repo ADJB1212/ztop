@@ -117,7 +117,7 @@ pub fn renderHeader(
 
     for (tab_defs, 0..) |def, i| {
         if (i > 0) {
-            for (0..gap) |_| try app_tui.bufWrite(" ");
+            try app_tui.writeSpaces(gap);
             tab_x += gap;
         }
 
@@ -422,7 +422,7 @@ pub fn renderConnectionsTable(
 
         if (is_selected) {
             try app_tui.setStyle(.{ .bg = theme.selection_bg });
-            for (0..box_width - 4) |_| try app_tui.bufWrite(" ");
+            try app_tui.writeSpaces(box_width - 4);
             try app_tui.moveCursor(box_x + 2, box_y + 1 + @as(u16, @intCast(row)));
         }
 
@@ -543,7 +543,7 @@ pub fn renderThreadTable(
 
         if (is_selected) {
             try app_tui.setStyle(.{ .bg = theme.selection_bg });
-            for (0..box_width - 4) |_| try app_tui.bufWrite(" ");
+            try app_tui.writeSpaces(box_width - 4);
             try app_tui.moveCursor(box_x + 2, box_y + 1 + @as(u16, @intCast(row)));
         }
 
@@ -566,14 +566,9 @@ pub fn renderThreadTable(
                 "{s} ",
                 .{thr.name()},
             );
-            for (thr.name().len..name_width) |_| {
-                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg } else .{}, " ", .{});
-            }
+            try app_tui.writeStyledSpaces(if (is_selected) .{ .bg = theme.selection_bg } else .{}, name_width - thr.name().len);
         } else {
-            for (0..name_width) |_| {
-                try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg } else .{}, " ", .{});
-            }
-            try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg } else .{}, " ", .{});
+            try app_tui.writeStyledSpaces(if (is_selected) .{ .bg = theme.selection_bg } else .{}, name_width + 1);
         }
 
         const cpu_style: Tui.Style = if (is_selected)

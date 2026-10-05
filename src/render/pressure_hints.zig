@@ -445,7 +445,7 @@ pub fn renderPressureHintsView(
     // ── Divider ──
     if (cur_y < y + height - 1) {
         try app_tui.moveCursor(x + 1, cur_y);
-        for (0..width -| 2) |_| try app_tui.writeStyled(.{ .fg = theme.border, .dim = true }, "─");
+        try app_tui.writeRepeated(.{ .fg = theme.border, .dim = true }, "─", width -| 2);
         cur_y += 1;
     }
 

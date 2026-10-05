@@ -5,6 +5,7 @@ test {
     _ = @import("config_test.zig");
     _ = @import("history_test.zig");
     _ = @import("process_commands_test.zig");
+    _ = @import("process_tracer_test.zig");
     _ = @import("render_test.zig");
     _ = @import("why_busy_test.zig");
     _ = @import("pressure_hints_test.zig");

@@ -202,9 +202,7 @@ pub fn renderDiffView(
             try app_tui.printStyled(.{ .fg = theme.text }, "{s}", .{display_name});
             // Pad to 16
             if (display_name.len < 17) {
-                for (0..17 - display_name.len) |_| {
-                    try app_tui.bufWrite(" ");
-                }
+                try app_tui.writeSpaces(17 - display_name.len);
             }
 
             // CPU change

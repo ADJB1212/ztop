@@ -154,9 +154,7 @@ fn renderRateLane(
     if (label_width > 0) {
         try app_tui.moveCursor(x, y);
         try app_tui.printStyled(.{ .fg = series.color, .bold = true }, "{s}", .{series.short_label});
-        for (series.short_label.len..label_width) |_| {
-            try app_tui.bufWrite(" ");
-        }
+        try app_tui.writeSpaces(label_width - series.short_label.len);
     }
 
     const graph_x = x + label_width;

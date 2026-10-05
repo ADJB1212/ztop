@@ -98,7 +98,7 @@ pub fn renderPipelineLensView(
 
         if (is_sel) {
             try app_tui.setStyle(.{ .bg = theme.selection_bg });
-            for (0..inner_width) |_| try app_tui.bufWrite(" ");
+            try app_tui.writeSpaces(inner_width);
             try app_tui.moveCursor(inner_x, row_y);
         }
 

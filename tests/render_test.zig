@@ -25,6 +25,70 @@ fn testTui(frame_buf: []u8) tui.Tui {
     };
 }
 
+test "repeated UTF-8 glyphs and padding preserve style transitions" {
+    var buf: [1024]u8 = undefined;
+    var app_tui = testTui(&buf);
+    const style: tui.Tui.Style = .{ .fg = .cyan };
+
+    try app_tui.writeRepeated(style, "─", 3);
+    try app_tui.writeRepeated(style, "█", 2);
+    try app_tui.writeSpaces(4);
+    try app_tui.writeRepeated(.{ .fg = .red }, ".", 2);
+
+    try std.testing.expectEqualStrings("\x1b[0;36m───██    \x1b[0;31m..", buf[0..app_tui.frame_len]);
+    try std.testing.expectEqual(tui.Tui.Style{ .fg = .red }, app_tui.current_style.?);
+}
+
+test "empty repeated runs leave output and style unchanged" {
+    var buf: [128]u8 = undefined;
+    var app_tui = testTui(&buf);
+
+    try app_tui.writeRepeated(.{ .fg = .red }, "─", 0);
+    try app_tui.writeRepeated(.{ .fg = .red }, "", 10);
+    try app_tui.writeSpaces(0);
+
+    try std.testing.expectEqual(@as(usize, 0), app_tui.frame_len);
+    try std.testing.expectEqual(@as(?tui.Tui.Style, null), app_tui.current_style);
+}
+
+test "repeated glyphs and spaces handle multiple chunks" {
+    var buf: [4096]u8 = undefined;
+    var app_tui = testTui(&buf);
+
+    try app_tui.writeRepeated(.{}, "─", 513);
+    try app_tui.writeSpaces(257);
+
+    try std.testing.expectEqual(@as(usize, 4 + 513 * 3 + 257), app_tui.frame_len);
+    try std.testing.expectEqualStrings("\x1b[0m", buf[0..4]);
+    for (0..513) |i| {
+        try std.testing.expectEqualStrings("─", buf[4 + i * 3 ..][0..3]);
+    }
+    for (buf[4 + 513 * 3 .. app_tui.frame_len]) |byte| {
+        try std.testing.expectEqual(@as(u8, ' '), byte);
+    }
+}
+
+test "box borders support widths larger than the repeat buffer" {
+    var buf: [8192]u8 = undefined;
+    var app_tui = testTui(&buf);
+
+    try app_tui.drawBoxStyled(1, 1, 600, 2, "", .{}, .{});
+
+    const prefix = "\x1b[0m\x1b[1;1H╭";
+    const middle = "╮\x1b[2;1H╰";
+    const suffix = "╯\x1b[0m";
+    const border_len = 598 * 3;
+    const bottom_start = prefix.len + border_len + middle.len;
+    try std.testing.expectEqual(prefix.len + border_len * 2 + middle.len + suffix.len, app_tui.frame_len);
+    try std.testing.expectEqualStrings(prefix, buf[0..prefix.len]);
+    try std.testing.expectEqualStrings(middle, buf[prefix.len + border_len .. bottom_start]);
+    try std.testing.expectEqualStrings(suffix, buf[bottom_start + border_len .. app_tui.frame_len]);
+    for (0..598) |i| {
+        try std.testing.expectEqualStrings("─", buf[prefix.len + i * 3 ..][0..3]);
+        try std.testing.expectEqualStrings("─", buf[bottom_start + i * 3 ..][0..3]);
+    }
+}
+
 fn expectCursorBeforeText(output: []const u8, cursor: []const u8, text: []const u8) !void {
     const cursor_index = std.mem.indexOf(u8, output, cursor) orelse return error.MissingCursor;
     const text_index = std.mem.indexOfPos(u8, output, cursor_index, text) orelse return error.MissingText;

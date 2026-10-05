@@ -158,7 +158,7 @@ pub fn renderCausalityGraph(
                 try app_tui.printStyled(.{ .fg = theme.text }, "{s}..", .{pname[0..name_col_width -| 2]});
             } else {
                 try app_tui.printStyled(.{ .fg = theme.text }, "{s}", .{pname});
-                for (0..name_col_width -| pname.len) |_| try app_tui.writeStyled(.{}, " ");
+                try app_tui.writeStyledSpaces(.{}, name_col_width -| pname.len);
             }
 
             // CPU%
@@ -230,7 +230,7 @@ pub fn renderCausalityGraph(
     if (summary_rows > 0) {
         const div_y = y + 1 + list_height + 1;
         try app_tui.moveCursor(x + 1, div_y - 1);
-        for (0..width -| 2) |_| try app_tui.writeStyled(.{ .fg = theme.border, .dim = true }, "─");
+        try app_tui.writeRepeated(.{ .fg = theme.border, .dim = true }, "─", width -| 2);
 
         // ── Resource Summary ──
         if (target_proc) |proc| {

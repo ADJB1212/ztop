@@ -164,12 +164,21 @@ test "cached proc stats preserves ppid and launch_cmd_fetched across polls" {
     try std.testing.expect(p1.len > 0);
     try std.testing.expect(si.prev_proc_count > 0);
 
-    for (si.prev_procs[0..si.prev_proc_count]) |entry| {
+    for (si.proc_buffers[si.prev_proc_buffer][0..si.prev_proc_count]) |entry| {
         try std.testing.expect(entry.launch_cmd_fetched);
     }
 
     const p2 = try si.getProcStats(&buf2, .cpu);
     try std.testing.expect(p2.len > 0);
+
+    const p3 = try si.getProcStats(&buf1, .cpu);
+    try std.testing.expect(p3.len > 0);
+    try std.testing.expectEqual(p3.len, si.prev_proc_count);
+    const cached = si.proc_buffers[si.prev_proc_buffer][0..si.prev_proc_count];
+    for (cached, 0..) |entry, i| {
+        try std.testing.expect(entry.launch_cmd_fetched);
+        if (i > 0) try std.testing.expect(cached[i - 1].pid < entry.pid);
+    }
 }
 
 test "aggregate CPU stats avoid per-core sampling" {

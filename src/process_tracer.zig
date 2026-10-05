@@ -3,6 +3,26 @@ const common = @import("sysinfo/common.zig");
 const MetricHistory = @import("history.zig").MetricHistory;
 const SysInfo = @import("sysinfo.zig").SysInfo;
 
+const SocketKey = struct {
+    protocol: common.NetProtocol,
+    local_port: u16,
+    remote_port: u16,
+    local_addr: [46]u8,
+    remote_addr: [46]u8,
+
+    fn fromConnection(conn: common.NetConnection) SocketKey {
+        return .{
+            .protocol = conn.protocol,
+            .local_port = conn.local_port,
+            .remote_port = conn.remote_port,
+            .local_addr = conn.local_addr,
+            .remote_addr = conn.remote_addr,
+        };
+    }
+};
+
+const SocketSet = std.AutoHashMapUnmanaged(SocketKey, void);
+
 pub const ProcessTraceEventKind = enum {
     state_transition,
     cpu_burst,
@@ -39,6 +59,8 @@ pub const ProcessTracer = struct {
     prev_mem_percent: f32 = 0,
     prev_cpu_percent: f32 = 0,
     prev_sockets: std.ArrayList(common.NetConnection),
+    prev_socket_set: SocketSet = .empty,
+    current_socket_set: SocketSet = .empty,
     allocator: std.mem.Allocator,
 
     is_dead: bool = false,
@@ -55,6 +77,8 @@ pub const ProcessTracer = struct {
 
     pub fn deinit(self: *ProcessTracer) void {
         self.prev_sockets.deinit(self.allocator);
+        self.prev_socket_set.deinit(self.allocator);
+        self.current_socket_set.deinit(self.allocator);
         self.allocator.destroy(self);
     }
 
@@ -78,15 +102,6 @@ pub const ProcessTracer = struct {
     pub fn getEvent(self: *const ProcessTracer, index: usize) ?*const ProcessTraceEvent {
         if (index >= self.ev_count) return null;
         return &self.events[(self.ev_start + index) % self.events.len];
-    }
-
-    fn netConnectionsEqual(a: *const common.NetConnection, b: *const common.NetConnection) bool {
-        if (a.protocol != b.protocol) return false;
-        if (a.local_port != b.local_port) return false;
-        if (a.remote_port != b.remote_port) return false;
-        if (!std.mem.eql(u8, &a.local_addr, &b.local_addr)) return false;
-        if (!std.mem.eql(u8, &a.remote_addr, &b.remote_addr)) return false;
-        return true;
     }
 
     pub fn update(self: *ProcessTracer, sys_info: *SysInfo, ts: i64, proc_opt: ?common.ProcStats) void {
@@ -135,34 +150,31 @@ pub const ProcessTracer = struct {
         const conns = sys_info.getProcNetConnections(self.allocator, self.pid) catch &.{};
         defer self.allocator.free(conns);
 
-        // Diff sockets
+        self.updateSockets(conns, ts) catch {};
+    }
+
+    pub fn updateSockets(self: *ProcessTracer, conns: []const common.NetConnection, ts: i64) !void {
+        try self.prev_sockets.ensureTotalCapacity(self.allocator, conns.len);
+        try self.current_socket_set.ensureTotalCapacity(self.allocator, @intCast(conns.len));
+        self.current_socket_set.clearRetainingCapacity();
+        for (conns) |conn| {
+            self.current_socket_set.putAssumeCapacity(SocketKey.fromConnection(conn), {});
+        }
+
         for (conns) |curr| {
-            var found = false;
-            for (self.prev_sockets.items) |prev| {
-                if (netConnectionsEqual(&curr, &prev)) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
+            if (!self.prev_socket_set.contains(SocketKey.fromConnection(curr))) {
                 self.appendEvent(.socket_open, ts, "Socket opened: {s} {s}:{d} -> {s}:{d}", .{ @tagName(curr.protocol), std.mem.sliceTo(&curr.local_addr, 0), curr.local_port, std.mem.sliceTo(&curr.remote_addr, 0), curr.remote_port });
             }
         }
 
         for (self.prev_sockets.items) |prev| {
-            var found = false;
-            for (conns) |curr| {
-                if (netConnectionsEqual(&curr, &prev)) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
+            if (!self.current_socket_set.contains(SocketKey.fromConnection(prev))) {
                 self.appendEvent(.socket_close, ts, "Socket closed: {s} {s}:{d} -> {s}:{d}", .{ @tagName(prev.protocol), std.mem.sliceTo(&prev.local_addr, 0), prev.local_port, std.mem.sliceTo(&prev.remote_addr, 0), prev.remote_port });
             }
         }
 
         self.prev_sockets.clearRetainingCapacity();
-        self.prev_sockets.appendSlice(self.allocator, conns) catch {};
+        self.prev_sockets.appendSliceAssumeCapacity(conns);
+        std.mem.swap(SocketSet, &self.prev_socket_set, &self.current_socket_set);
     }
 };

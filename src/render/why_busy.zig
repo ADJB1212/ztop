@@ -194,7 +194,7 @@ fn renderProcRow(
         try app_tui.printStyled(.{ .fg = theme.text }, "{s}..", .{pname[0..name_width -| 2]});
     } else {
         try app_tui.printStyled(.{ .fg = theme.text }, "{s}", .{pname});
-        for (pname.len..name_width) |_| try app_tui.bufWrite(" ");
+        try app_tui.writeSpaces(name_width - pname.len);
     }
     try app_tui.bufWrite(" ");
 
@@ -334,7 +334,7 @@ pub fn renderWhyBusyView(
     // Divider
     if (cur_y < y + height - 1) {
         try app_tui.moveCursor(x + 1, cur_y);
-        for (0..width -| 2) |_| try app_tui.writeStyled(.{ .fg = theme.border, .dim = true }, "─");
+        try app_tui.writeRepeated(.{ .fg = theme.border, .dim = true }, "─", width -| 2);
         cur_y += 1;
     }
 

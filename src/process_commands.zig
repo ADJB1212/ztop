@@ -150,6 +150,7 @@ pub const ZombieParentSummary = struct {
 
 pub fn collectZombieParents(procs: []const common.ProcStats, out: []ZombieParentEntry) ZombieParentSummary {
     var summary: ZombieParentSummary = .{};
+    const pid_to_idx = ProcPidIndex.init(procs);
 
     for (procs) |*proc| {
         if (proc.state != .zombie) continue;
@@ -166,7 +167,7 @@ pub fn collectZombieParents(procs: []const common.ProcStats, out: []ZombieParent
         }
 
         if (found or summary.parent_count >= out.len) continue;
-        if (!hasProcess(procs, proc.ppid)) continue;
+        if (pid_to_idx.get(proc.ppid) == null) continue;
 
         out[summary.parent_count] = .{
             .pid = proc.ppid,
@@ -192,13 +193,6 @@ pub fn matchesProcessFilter(proc: *const common.ProcStats, filter: []const u8) b
     var pid_buf: [10]u8 = undefined;
     const pid = std.fmt.bufPrint(&pid_buf, "{d}", .{proc.pid}) catch return false;
     return std.mem.indexOf(u8, pid, filter) != null;
-}
-
-fn hasProcess(procs: []const common.ProcStats, pid: u32) bool {
-    for (procs) |*proc| {
-        if (proc.pid == pid) return true;
-    }
-    return false;
 }
 
 pub const BuildStage = enum {

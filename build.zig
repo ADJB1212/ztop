@@ -15,7 +15,6 @@ pub fn build(b: *std.Build) void {
 
     const mod = b.addModule("ztop", .{
         .root_source_file = b.path("src/root.zig"),
-
         .target = target,
     });
 
@@ -33,6 +32,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     exe.root_module.addOptions("build_options", build_options);
+    exe.link_gc_sections = true;
 
     const tests_module = b.createModule(.{
         .root_source_file = b.path("tests/main.zig"),
@@ -55,7 +55,7 @@ pub fn build(b: *std.Build) void {
         std.debug.panic("ztop is only supported on ARM (Apple Silicon) Macs", .{});
     }
 
-    const swiftc = b.addSystemCommand(&.{ "swiftc", "-O", "-gnone", "-j", "6", "-emit-library", "-static", "-framework", "FoundationModels" });
+    const swiftc = b.addSystemCommand(&.{ "swiftc", "-O", "-gnone", "-emit-library", "-static", "-framework", "FoundationModels" });
     if (sdk_root) |root| {
         swiftc.addArgs(&.{ "-sdk", root });
     }
@@ -67,7 +67,7 @@ pub fn build(b: *std.Build) void {
 
     exe.root_module.addCSourceFiles(.{
         .files = &.{ "src/sysinfo/darwin/wifi.m", "src/sysinfo/darwin/power.m" },
-        .flags = &.{"-O3"},
+        .flags = &.{ "-O3", "-ffast-math", "-ftree-vectorize" },
     });
 
     tests.root_module.addCSourceFiles(.{

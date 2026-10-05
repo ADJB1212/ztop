@@ -28,6 +28,8 @@ pub const CpuLogicalCore = struct {
 
 pub const CpuTopology = struct {
     logical_cores: []const CpuLogicalCore = &.{},
+    physical_rows: []const CpuTopologyRow = &.{},
+    lines: []const CpuTopologyLine = &.{},
     physical_cores: u16 = 0,
     package_count: u16 = 1,
     numa_node_count: u16 = 0,
@@ -35,6 +37,86 @@ pub const CpuTopology = struct {
     has_smt: bool = false,
     has_cache_groups: bool = false,
     has_efficiency_classes: bool = false,
+};
+
+pub const CpuTopologyRow = struct {
+    physical_id: u16,
+    package_id: u16,
+    numa_node_id: i16,
+    shared_cache_group_id: i16,
+    shared_cache_level: u8,
+    efficiency_class: CpuEfficiencyClass,
+
+    fn efficiencySortKey(class: CpuEfficiencyClass) u8 {
+        return switch (class) {
+            .performance => 0,
+            .balanced => 1,
+            .efficiency => 2,
+            .unknown => 3,
+        };
+    }
+
+    fn lessThan(_: void, a: CpuTopologyRow, b: CpuTopologyRow) bool {
+        const a_numa = if (a.numa_node_id >= 0) a.numa_node_id else std.math.maxInt(i16);
+        const b_numa = if (b.numa_node_id >= 0) b.numa_node_id else std.math.maxInt(i16);
+        if (a_numa != b_numa) return a_numa < b_numa;
+        if (a.package_id != b.package_id) return a.package_id < b.package_id;
+        const a_eff = efficiencySortKey(a.efficiency_class);
+        const b_eff = efficiencySortKey(b.efficiency_class);
+        if (a_eff != b_eff) return a_eff < b_eff;
+        if (a.shared_cache_level != b.shared_cache_level) return a.shared_cache_level < b.shared_cache_level;
+        if (a.shared_cache_group_id != b.shared_cache_group_id) return a.shared_cache_group_id < b.shared_cache_group_id;
+        return a.physical_id < b.physical_id;
+    }
+
+    fn sameSection(a: CpuTopologyRow, b: CpuTopologyRow) bool {
+        return a.package_id == b.package_id and
+            a.numa_node_id == b.numa_node_id and
+            a.shared_cache_group_id == b.shared_cache_group_id and
+            a.shared_cache_level == b.shared_cache_level and
+            a.efficiency_class == b.efficiency_class;
+    }
+};
+
+pub const CpuTopologyLine = union(enum) {
+    header: CpuTopologyRow,
+    row: CpuTopologyRow,
+};
+
+pub const CpuTopologyCache = struct {
+    rows: [MAX_CORES]CpuTopologyRow = undefined,
+    row_count: usize = 0,
+    lines: [MAX_CORES * 2]CpuTopologyLine = undefined,
+    line_count: usize = 0,
+
+    pub fn build(self: *CpuTopologyCache, logical_cores: []const CpuLogicalCore) void {
+        self.row_count = 0;
+        self.line_count = 0;
+        var seen: [MAX_CORES]bool = @splat(false);
+        for (logical_cores) |core| {
+            if (core.physical_id >= MAX_CORES or seen[core.physical_id]) continue;
+            seen[core.physical_id] = true;
+            self.rows[self.row_count] = .{
+                .physical_id = core.physical_id,
+                .package_id = core.package_id,
+                .numa_node_id = core.numa_node_id,
+                .shared_cache_group_id = core.shared_cache_group_id,
+                .shared_cache_level = core.shared_cache_level,
+                .efficiency_class = core.efficiency_class,
+            };
+            self.row_count += 1;
+        }
+        std.mem.sort(CpuTopologyRow, self.rows[0..self.row_count], {}, CpuTopologyRow.lessThan);
+
+        for (self.rows[0..self.row_count], 0..) |row, idx| {
+            if (idx == 0 or !CpuTopologyRow.sameSection(self.rows[idx - 1], row)) {
+                self.lines[self.line_count] = .{ .header = row };
+                self.line_count += 1;
+            }
+            self.lines[self.line_count] = .{ .row = row };
+            self.line_count += 1;
+        }
+    }
 };
 
 pub const MemStats = struct {
@@ -162,20 +244,20 @@ pub const ProcState = enum {
 };
 
 pub const ProcStats = struct {
-    pid: u32,
-    ppid: u32 = 0,
-    name_buf: [64]u8 = std.mem.zeroes([64]u8),
-    name_len: u8 = 0,
-    launch_cmd_buf: [256]u8 = std.mem.zeroes([256]u8),
-    launch_cmd_len: u16 = 0,
-    state: ProcState = .unknown,
-    cpu_percent: f32 = 0,
-    mem_percent: f32 = 0,
-    threads: u32 = 0,
     disk_read_ps: u64 = 0,
     disk_write_ps: u64 = 0,
     wakeups_ps: u64 = 0,
     context_switches_ps: u64 = 0,
+    pid: u32,
+    ppid: u32 = 0,
+    threads: u32 = 0,
+    cpu_percent: f32 = 0,
+    mem_percent: f32 = 0,
+    launch_cmd_len: u16 = 0,
+    name_len: u8 = 0,
+    state: ProcState = .unknown,
+    name_buf: [64]u8 = std.mem.zeroes([64]u8),
+    launch_cmd_buf: [256]u8 = std.mem.zeroes([256]u8),
 
     pub fn name(self: *const ProcStats) []const u8 {
         return self.name_buf[0..self.name_len];
