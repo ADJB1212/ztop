@@ -1,11 +1,11 @@
 # ztop
 
 ![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)
-![Zig](https://img.shields.io/badge/Zig-0.16%2B-orange)
+![Zig](https://img.shields.io/badge/Zig-0.17%2B-orange)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 
 <p align="center">
-    <img src="./assets/screenshot.png" width="800"/>
+    <img src="./assets/screenshot.webp" width="800"/>
 </p>
 
 `ztop` is a terminal system monitor for macOS. It gives you a fast, keyboard-driven view of CPU load, memory pressure, disk and network throughput, hardware sensors, GPU activity, battery status, and the busiest processes — without leaving the shell.
