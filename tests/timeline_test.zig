@@ -604,3 +604,37 @@ test "fromBytes rejects trailing data" {
     var restored = Timeline.init();
     try std.testing.expectError(error.InvalidSessionFile, restored.fromBytes(extended));
 }
+
+test "session preserves the power averaging window" {
+    var tl = Timeline.init();
+    var snap = makeSnap(1000, 10);
+    snap.battery.power_draw_w = 4;
+    snap.battery.power_window_seconds = 1800;
+    tl.recordSnapshot(snap, &.{});
+    const bytes = try tl.toBytes(std.testing.allocator);
+    defer std.testing.allocator.free(bytes);
+    var restored = Timeline.init();
+    try restored.fromBytes(bytes);
+    try std.testing.expectEqual(@as(?f32, 4), restored.getSnapshot(0).?.battery.power_draw_w);
+    try std.testing.expectEqual(@as(?f32, 1800), restored.getSnapshot(0).?.battery.power_window_seconds);
+}
+
+test "version two sessions retain power with no averaging window" {
+    var tl = Timeline.init();
+    var snap = makeSnap(1000, 10);
+    snap.battery.power_draw_w = 4;
+    tl.recordSnapshot(snap, &.{});
+    const bytes = try tl.toBytes(std.testing.allocator);
+    defer std.testing.allocator.free(bytes);
+    // Remove the optional window field after this snapshot's battery power.
+    const window_offset = 12 + 8 + 4 + 4 + 7 * 8 + 4 + 6 * 8 + 4 * 5;
+    const legacy = try std.testing.allocator.alloc(u8, bytes.len - 5);
+    defer std.testing.allocator.free(legacy);
+    @memcpy(legacy[0..window_offset], bytes[0..window_offset]);
+    @memcpy(legacy[window_offset..], bytes[window_offset + 5 ..]);
+    std.mem.writeInt(u32, legacy[4..8], 2, .little);
+    var restored = Timeline.init();
+    try restored.fromBytes(legacy);
+    try std.testing.expectEqual(@as(?f32, 4), restored.getSnapshot(0).?.battery.power_draw_w);
+    try std.testing.expectEqual(null, restored.getSnapshot(0).?.battery.power_window_seconds);
+}

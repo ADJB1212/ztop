@@ -2,6 +2,7 @@ const std = @import("std");
 const common = @import("common.zig");
 
 pub const bindings = @import("darwin/bindings.zig");
+pub const power = @import("darwin/power.zig");
 const cf_util = @import("darwin/cf_util.zig");
 const gpu_mod = @import("darwin/gpu.zig");
 const net_mod = @import("darwin/net.zig");
@@ -199,7 +200,8 @@ pub const SysInfo = struct {
     prev_thermal_ms: ?i64 = null,
     power_handle: ?*anyopaque = null,
     prev_power_ms: i64 = 0,
-    last_power_reading: ?bindings.PowerReadingRaw = null,
+    power_sampler: power.Sampler = .{},
+    last_power_reading: power.Reading = .{},
     battery_stats: BatteryStats = .{},
     prev_battery_ms: ?i64 = null,
     swap_usage: xsw_usage = std.mem.zeroes(xsw_usage),
@@ -239,6 +241,7 @@ pub const SysInfo = struct {
             .power_handle = bindings.ztop_power_init(),
             .prev_power_ms = now,
         };
+        self.prev_power_ms = @intCast(self.machToNs(bindings.mach_continuous_time()) / 1_000_000);
         self.loadTopology();
         self.initThermalSensors();
         return self;
@@ -276,14 +279,12 @@ pub const SysInfo = struct {
     }
 
     fn updatePowerSample(self: *SysInfo) void {
-        const now = nowMs(self.io);
+        const now: i64 = @intCast(self.machToNs(bindings.mach_continuous_time()) / 1_000_000);
         const elapsed = @as(f64, @floatFromInt(now - self.prev_power_ms)) / 1000.0;
-        if (elapsed < 0.05) return;
+        if (elapsed >= 0 and elapsed < 0.05) return;
         if (self.power_handle) |handle| {
-            const reading = bindings.ztop_power_sample(handle, elapsed);
-            if (reading.is_valid != 0) {
-                self.last_power_reading = reading;
-            }
+            const raw = bindings.ztop_power_sample(handle);
+            self.last_power_reading = self.power_sampler.observe(raw, @as(f64, @floatFromInt(now)) / 1000.0);
             self.prev_power_ms = now;
         }
     }
@@ -665,14 +666,14 @@ pub const SysInfo = struct {
                 const cpu_keys = [_][:0]const u8{ "Tp01", "Tp09", "Tp0D", "Te05", "Tf04", "TC0P" };
                 for (cpu_keys) |key| {
                     const val = bindings.ztop_smc_read_temperature(handle, key.ptr);
-                    if (val > max_cpu_temp) max_cpu_temp = val;
+                    if (power.isPlausibleDieTemperature(val) and val > max_cpu_temp) max_cpu_temp = val;
                 }
             }
             if (max_gpu_temp == 0) {
                 const gpu_keys = [_][:0]const u8{ "Tg05", "Tg0D", "Tg0L", "Tg0f", "Tg0j", "Tg0G", "Tg0U", "Tf14", "TG0P", "TG0D" };
                 for (gpu_keys) |key| {
                     const val = bindings.ztop_smc_read_temperature(handle, key.ptr);
-                    if (val > max_gpu_temp) max_gpu_temp = val;
+                    if (power.isPlausibleDieTemperature(val) and val > max_gpu_temp) max_gpu_temp = val;
                 }
             }
         }
@@ -685,18 +686,21 @@ pub const SysInfo = struct {
 
     pub fn getBatteryStats(self: *SysInfo) BatteryStats {
         const now = nowMs(self.io);
-        if (self.prev_battery_ms) |previous| {
-            if (now >= previous and now - previous < BATTERY_REFRESH_INTERVAL_MS) {
-                return self.battery_stats;
-            }
+        self.updatePowerSample();
+        const refresh = if (self.prev_battery_ms) |previous|
+            now < previous or now - previous >= BATTERY_REFRESH_INTERVAL_MS
+        else
+            true;
+        if (refresh) {
+            self.battery_stats = readBatteryStats();
+            self.prev_battery_ms = now;
         }
-
-        self.battery_stats = self.readBatteryStats();
-        self.prev_battery_ms = now;
+        self.battery_stats.power_draw_w = if (self.last_power_reading.soc_watts) |watts| @floatCast(watts) else null;
+        self.battery_stats.power_window_seconds = if (self.last_power_reading.soc_window_seconds) |seconds| @floatCast(seconds) else null;
         return self.battery_stats;
     }
 
-    fn readBatteryStats(self: *SysInfo) BatteryStats {
+    fn readBatteryStats() BatteryStats {
         var stats = BatteryStats{};
 
         const blob = c.IOPSCopyPowerSourcesInfo() orelse return stats;
@@ -738,13 +742,6 @@ pub const SysInfo = struct {
             }
         }
 
-        self.updatePowerSample();
-        if (self.last_power_reading) |last| {
-            if (last.soc_watts > 0) {
-                stats.power_draw_w = @floatCast(last.soc_watts);
-            }
-        }
-
         return stats;
     }
 
@@ -761,11 +758,12 @@ pub const SysInfo = struct {
         errdefer result.clearRetainingCapacity();
         try gpu_mod.appendAppleGpuStats(&self.gpu_collector, allocator, result);
         self.updatePowerSample();
-        if (self.last_power_reading) |last| {
-            if (last.gpu_watts > 0) {
-                for (result.items) |*gpu| {
-                    gpu.power_draw_w = @floatCast(last.gpu_watts);
-                }
+        for (result.items) |*gpu| {
+            gpu.power_draw_w = null;
+            gpu.power_window_seconds = null;
+            if (self.last_power_reading.gpu_watts) |watts| {
+                gpu.power_draw_w = @floatCast(watts);
+                if (self.last_power_reading.gpu_window_seconds) |seconds| gpu.power_window_seconds = @floatCast(seconds);
             }
         }
     }

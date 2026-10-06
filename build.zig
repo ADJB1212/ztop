@@ -118,7 +118,7 @@ fn configureNativeModule(b: *std.Build, module: *std.Build.Module, sdk_root: []c
     module.addObjectFile(fm_lib);
     module.addCSourceFiles(.{
         .files = &.{ "src/sysinfo/darwin/wifi.m", "src/sysinfo/darwin/power.m" },
-        .flags = &([_][]const u8{"-fuse-ld=lld"} ++ if (module.optimize != .debug) [_][]const u8{ "-O3", "-ftree-vectorize" } else [_][]const u8{ "-Wall", "-Wextra" }),
+        .flags = &([_][]const u8{"-fuse-ld=lld"} ++ if (module.optimize != .debug) [_][]const u8{ "-O3", "-fvectorize" } else [_][]const u8{ "-Wall", "-Wextra" }),
     });
     module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ sdk_root, "usr/include" }) });
     module.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ sdk_root, "System/Library/Frameworks" }) });

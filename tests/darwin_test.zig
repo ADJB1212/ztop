@@ -121,7 +121,7 @@ test "power sampling init, sample, and deinit" {
     const stats = si.getBatteryStats();
     _ = stats;
     if (si.power_handle) |handle| {
-        const reading = darwin.bindings.ztop_power_sample(handle, 1.0);
+        const reading = darwin.bindings.ztop_power_sample(handle);
         try std.testing.expect(reading.soc_watts >= 0.0);
     }
 }
@@ -290,7 +290,10 @@ test "battery results are sampled immediately then cached for five seconds" {
     const sampled_at = si.prev_battery_ms.?;
 
     si.battery_stats = sentinel;
-    try std.testing.expectEqual(sentinel, si.getBatteryStats());
+    const cached = si.getBatteryStats();
+    try std.testing.expectEqual(sentinel.charge_percent, cached.charge_percent);
+    try std.testing.expectEqual(sentinel.status, cached.status);
+    try std.testing.expectEqual(if (si.last_power_reading.soc_watts) |watts| @as(?f32, @floatCast(watts)) else null, cached.power_draw_w);
     try std.testing.expectEqual(sampled_at, si.prev_battery_ms.?);
 
     si.prev_battery_ms = std.Io.Clock.now(.real, std.testing.io).toMilliseconds() - 5_000;

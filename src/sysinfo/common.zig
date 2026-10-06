@@ -209,6 +209,7 @@ pub const GpuStats = struct {
     utilization_percent: ?f32 = null,
     temperature_c: ?f32 = null,
     power_draw_w: ?f32 = null,
+    power_window_seconds: ?f32 = null,
     memory_used_bytes: ?u64 = null,
     memory_total_bytes: ?u64 = null,
     core_count: ?u32 = null,
@@ -228,6 +229,7 @@ pub const BatteryStatus = enum {
 pub const BatteryStats = struct {
     charge_percent: ?f32 = null,
     power_draw_w: ?f32 = null,
+    power_window_seconds: ?f32 = null,
     status: BatteryStatus = .unknown,
 };
 

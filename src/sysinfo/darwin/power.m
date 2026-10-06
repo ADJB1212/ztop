@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 #include <mach/mach.h>
 
 typedef struct IOReportSubscriptionRef *IOReportSubscriptionRef;
@@ -108,6 +109,8 @@ static smc_key_info_cache_t *get_smc_key_cache_entry(uint32_t key_code) {
     return NULL;
 }
 
+bool ztop_smc_decode(uint32_t data_type, const uint8_t *bytes, uint32_t size, double *out_val);
+
 static bool smc_read_double(io_connect_t conn, const char *key, double *out_val) {
     if (!conn || !key || !out_val) return false;
     uint32_t key_code = four_char_code(key);
@@ -133,7 +136,7 @@ static bool smc_read_double(io_connect_t conn, const char *key, double *out_val)
 
         size_t output_size = sizeof(output);
         kern_return_t res = IOConnectCallStructMethod(conn, 2, &input, sizeof(input), &output, &output_size);
-        if (res != kIOReturnSuccess || output.keyInfo.dataSize == 0) {
+        if (res != kIOReturnSuccess || output.result != 0 || output.keyInfo.dataSize == 0 || output.keyInfo.dataSize > 32) {
             if (cached) {
                 cached->checked = true;
                 cached->valid = false;
@@ -161,11 +164,20 @@ static bool smc_read_double(io_connect_t conn, const char *key, double *out_val)
 
     size_t output_size = sizeof(output);
     kern_return_t res = IOConnectCallStructMethod(conn, 2, &input, sizeof(input), &output, &output_size);
-    if (res != kIOReturnSuccess) {
+    if (res != kIOReturnSuccess || output.result != 0) {
         return false;
     }
 
-    uint8_t *b = output.bytes;
+    return ztop_smc_decode(data_type, output.bytes, data_size, out_val);
+}
+
+bool ztop_smc_decode(uint32_t data_type, const uint8_t *b, uint32_t size, double *out_val) {
+    if (!b || !out_val || size > 32) return false;
+    uint32_t required = 2;
+    if (data_type == four_char_code("ui8 ") || data_type == four_char_code("si8 ")) required = 1;
+    else if (data_type == four_char_code("ui32") || data_type == four_char_code("flt ")) required = 4;
+    else if (data_type == four_char_code("ioft")) required = 8;
+    if (size < required) return false;
     if (data_type == four_char_code("ui8 ")) {
         *out_val = (double)b[0];
         return true;
@@ -179,9 +191,9 @@ static bool smc_read_double(io_connect_t conn, const char *key, double *out_val)
         float f = 0.0f;
         memcpy(&f, b, sizeof(float));
         *out_val = (double)f;
-        return true;
+        return isfinite(*out_val);
     } else if (data_type == four_char_code("fpe2")) {
-        *out_val = (double)(((int)b[0] << 6) + ((int)b[1] >> 2));
+        *out_val = (double)(((uint16_t)b[0] << 8) | b[1]) / 4.0;
         return true;
     } else if (data_type == four_char_code("sp78")) {
         int16_t val = (int16_t)(((uint16_t)b[0] << 8) | (uint16_t)b[1]);
@@ -198,6 +210,13 @@ static bool smc_read_double(io_connect_t conn, const char *key, double *out_val)
     } else if (data_type == four_char_code("si8 ")) {
         *out_val = (double)((int8_t)b[0]);
         return true;
+    } else if (data_type == four_char_code("ioft")) {
+        uint64_t bits = 0;
+        for (unsigned i = 0; i < 8; i++) bits |= (uint64_t)b[i] << (8 * i);
+        int64_t raw;
+        memcpy(&raw, &bits, sizeof(raw));
+        *out_val = (double)raw / 65536.0;
+        return true;
     }
     return false;
 }
@@ -207,17 +226,17 @@ static bool smc_read_double(io_connect_t conn, const char *key, double *out_val)
 typedef struct {
     IOReportSubscriptionRef sub;
     CFMutableDictionaryRef subbed_channels;
-    CFDictionaryRef prev_samples;
     io_connect_t smc_conn;
 } ztop_power_state_t;
 
 typedef struct {
+    uint64_t rails[4];
+    uint64_t gpu_nanojoules;
     double soc_watts;
-    double cpu_watts;
-    double gpu_watts;
-    double ane_watts;
-    double dram_watts;
-    int32_t is_valid;
+    uint32_t rail_mask;
+    uint32_t gpu_valid;
+    uint32_t soc_valid;
+    uint32_t rail_sources;
 } ztop_power_reading_t;
 
 void *ztop_power_init(void) {
@@ -247,7 +266,6 @@ void *ztop_power_init(void) {
             if (sub && subbed) {
                 state->sub = sub;
                 state->subbed_channels = subbed;
-                state->prev_samples = IOReportCreateSamples(sub, subbed, NULL);
             } else {
                 if (sub) CFRelease((CFTypeRef)sub);
                 if (subbed) CFRelease(subbed);
@@ -276,8 +294,8 @@ void *ztop_power_init(void) {
     return state;
 }
 
-ztop_power_reading_t ztop_power_sample(void *handle, double elapsed_seconds) {
-    ztop_power_reading_t result = {0.0, 0.0, 0.0, 0.0, 0.0, 0};
+ztop_power_reading_t ztop_power_sample(void *handle) {
+    ztop_power_reading_t result = {0};
     if (!handle) return result;
     ztop_power_state_t *state = (ztop_power_state_t *)handle;
 
@@ -285,116 +303,93 @@ ztop_power_reading_t ztop_power_sample(void *handle, double elapsed_seconds) {
         if (state->sub && state->subbed_channels) {
             CFDictionaryRef current = IOReportCreateSamples(state->sub, state->subbed_channels, NULL);
             if (current) {
-                if (!state->prev_samples || elapsed_seconds <= 0.0001) {
-                    if (state->prev_samples) CFRelease(state->prev_samples);
-                    state->prev_samples = current;
-                } else {
-                    CFDictionaryRef delta = IOReportCreateSamplesDelta(state->prev_samples, current, NULL);
-                    CFRelease(state->prev_samples);
-                    state->prev_samples = current;
-
-                    if (delta) {
-                        __block double cpu_w = 0.0, gpu_w = 0.0, ane_w = 0.0, dram_w = 0.0;
-                        __block double ecpu_w = 0.0, pcpu_w = 0.0;
-                        __block double pmp_ecpu = 0.0, pmp_pcpu = 0.0, pmp_gpu = 0.0, pmp_ane = 0.0, pmp_dram = 0.0;
-                        __block bool saw_em_ane = false;
-
-                        IOReportIterate(delta, ^(CFDictionaryRef channel) {
-                            if (IOReportChannelGetFormat(channel) != kKtopIOReportFormatSimple) {
-                                return (int)kKtopIOReportIterOk;
-                            }
-                            CFStringRef group_ref = IOReportChannelGetGroup(channel);
-                            CFStringRef name_ref = IOReportChannelGetChannelName(channel);
-                            if (!group_ref || !name_ref) return (int)kKtopIOReportIterOk;
-
-                            char group[128] = {0};
-                            char name[128] = {0};
-                            CFStringGetCString(group_ref, group, sizeof(group), kCFStringEncodingUTF8);
-                            CFStringGetCString(name_ref, name, sizeof(name), kCFStringEncodingUTF8);
-
-                            long raw_val = IOReportSimpleGetIntegerValue(channel, 0);
-                            double watts = ((double)raw_val / elapsed_seconds) / 1000.0;
-
-                            if (strcmp(group, "Energy Model") == 0) {
-                                if (strcmp(name, "CPU Energy") == 0) {
-                                    cpu_w += watts;
-                                } else {
-                                    size_t len = strlen(name);
-                                    if (len >= 4 && strcmp(name + len - 4, "_CPU") == 0) {
-                                        if (strncmp(name, "EACC", 4) == 0) ecpu_w += watts;
-                                        else if (strncmp(name, "PACC", 4) == 0) pcpu_w += watts;
-                                    } else if (strncmp(name, "GPU", 3) == 0 && strcmp(name, "GPU Energy") != 0) {
-                                        gpu_w += watts;
-                                    } else if (strncmp(name, "ANE", 3) == 0) {
-                                        ane_w += watts;
-                                        saw_em_ane = true;
-                                    } else if (strncmp(name, "DRAM", 4) == 0) {
-                                        dram_w += watts;
-                                    }
-                                }
-                            } else if (strcmp(group, "PMP") == 0) {
-                                CFStringRef sub_ref = IOReportChannelGetSubGroup(channel);
-                                char subgroup[128] = {0};
-                                if (sub_ref) {
-                                    CFStringGetCString(sub_ref, subgroup, sizeof(subgroup), kCFStringEncodingUTF8);
-                                }
-                                if (strcmp(subgroup, "Energy Counters") == 0) {
-                                    if (strcmp(name, "ANE") == 0) pmp_ane += watts;
-                                    else if (strcmp(name, "GPU") == 0 || strcmp(name, "GPU SRAM") == 0) pmp_gpu += watts;
-                                    else if (strcmp(name, "DRAM") == 0) pmp_dram += watts;
-                                    else if (strcmp(name, "ECPU") == 0) pmp_ecpu += watts;
-                                    else if (strcmp(name, "PCPU") == 0) pmp_pcpu += watts;
-                                }
-                            }
-                            return (int)kKtopIOReportIterOk;
-                        });
-
-                        CFRelease(delta);
-
-                        if (!saw_em_ane) {
-                            ane_w = pmp_ane;
-                            gpu_w = pmp_gpu;
-                            dram_w = pmp_dram;
-                            ecpu_w = pmp_ecpu;
-                            pcpu_w = pmp_pcpu;
-                            if (cpu_w == 0.0) cpu_w = pmp_ecpu + pmp_pcpu;
+                uint64_t em_values[4] = {0}, pmp_values[4] = {0};
+                uint64_t *em = em_values, *pmp = pmp_values;
+                __block uint64_t clusters = 0;
+                __block uint32_t em_mask = 0, pmp_mask = 0;
+                __block bool saw_clusters = false;
+                __block uint64_t gpu_nj = 0;
+                __block bool gpu_valid = false;
+                IOReportIterate(current, ^(CFDictionaryRef channel) {
+                    if (IOReportChannelGetFormat(channel) != kKtopIOReportFormatSimple) return (int)kKtopIOReportIterOk;
+                    CFStringRef group_ref = IOReportChannelGetGroup(channel);
+                    CFStringRef name_ref = IOReportChannelGetChannelName(channel);
+                    if (!group_ref || !name_ref) return (int)kKtopIOReportIterOk;
+                    char group[128] = {0}, name[128] = {0};
+                    if (!CFStringGetCString(group_ref, group, sizeof(group), kCFStringEncodingUTF8) ||
+                        !CFStringGetCString(name_ref, name, sizeof(name), kCFStringEncodingUTF8)) return (int)kKtopIOReportIterOk;
+                    long raw = IOReportSimpleGetIntegerValue(channel, 0);
+                    if (raw < 0) return (int)kKtopIOReportIterOk;
+                    uint64_t energy = (uint64_t)raw;
+                    int domain = -1;
+                    if (strcmp(group, "Energy Model") == 0) {
+                        if (strcmp(name, "GPU Energy") == 0) {
+                            gpu_nj += energy;
+                            gpu_valid = true;
+                        } else if (strcmp(name, "CPU Energy") == 0) domain = 0;
+                        else {
+                            size_t len = strlen(name);
+                            if (len >= 4 && strcmp(name + len - 4, "_CPU") == 0 &&
+                                (strncmp(name, "EACC", 4) == 0 || strncmp(name, "PACC", 4) == 0)) {
+                                clusters += energy;
+                                saw_clusters = true;
+                            } else if (strncmp(name, "GPU", 3) == 0) domain = 1;
+                            else if (strncmp(name, "ANE", 3) == 0) domain = 2;
+                            else if (strncmp(name, "DRAM", 4) == 0) domain = 3;
                         }
-                        if (cpu_w == 0.0 && (ecpu_w > 0.0 || pcpu_w > 0.0)) {
-                            cpu_w = ecpu_w + pcpu_w;
+                        if (domain >= 0) {
+                            em[domain] += energy;
+                            em_mask |= 1u << domain;
                         }
-
-                        result.cpu_watts = cpu_w;
-                        result.gpu_watts = gpu_w;
-                        result.ane_watts = ane_w;
-                        result.dram_watts = dram_w;
-                        result.soc_watts = cpu_w + gpu_w + ane_w + dram_w;
-                        result.is_valid = 1;
+                    } else if (strcmp(group, "PMP") == 0) {
+                        CFStringRef sub_ref = IOReportChannelGetSubGroup(channel);
+                        char subgroup[128] = {0};
+                        if (sub_ref) CFStringGetCString(sub_ref, subgroup, sizeof(subgroup), kCFStringEncodingUTF8);
+                        if (strcmp(subgroup, "Energy Counters") == 0) {
+                            if (strcmp(name, "ECPU") == 0 || strcmp(name, "PCPU") == 0) domain = 0;
+                            else if (strcmp(name, "GPU") == 0 || strcmp(name, "GPU SRAM") == 0) domain = 1;
+                            else if (strcmp(name, "ANE") == 0) domain = 2;
+                            else if (strcmp(name, "DRAM") == 0) domain = 3;
+                            if (domain >= 0) {
+                                pmp[domain] += energy;
+                                pmp_mask |= 1u << domain;
+                            }
+                        }
+                    }
+                    return (int)kKtopIOReportIterOk;
+                });
+                CFRelease(current);
+                if (!(em_mask & 1) && saw_clusters) {
+                    em[0] = clusters;
+                    em_mask |= 1;
+                }
+                for (unsigned i = 0; i < 4; i++) {
+                    uint32_t bit = 1u << i;
+                    if (em_mask & bit) {
+                        result.rails[i] = em[i];
+                        result.rail_mask |= bit;
+                        result.rail_sources |= bit;
+                    } else if (pmp_mask & bit) {
+                        result.rails[i] = pmp[i];
+                        result.rail_mask |= bit;
                     }
                 }
+                result.gpu_nanojoules = gpu_nj;
+                result.gpu_valid = gpu_valid;
             }
         }
-
-        if (state->smc_conn != 0) {
-            double pstr = 0.0, pzc0 = 0.0;
-            if (smc_read_double(state->smc_conn, "PSTR", &pstr) && pstr > 0.0) {
-                result.soc_watts = pstr;
-                result.is_valid = 1;
-            }
-            if ((result.cpu_watts == 0.0 || !result.is_valid) && smc_read_double(state->smc_conn, "PZC0", &pzc0) && pzc0 > 0.0) {
-                result.cpu_watts = pzc0;
-                result.is_valid = 1;
-            }
+        double pstr = 0;
+        if (smc_read_double(state->smc_conn, "PSTR", &pstr) && pstr >= 0 && isfinite(pstr)) {
+            result.soc_watts = pstr;
+            result.soc_valid = 1;
         }
     }
-
     return result;
 }
-
 void ztop_power_deinit(void *handle) {
     if (!handle) return;
     ztop_power_state_t *state = (ztop_power_state_t *)handle;
     @autoreleasepool {
-        if (state->prev_samples) CFRelease(state->prev_samples);
         if (state->subbed_channels) CFRelease(state->subbed_channels);
         if (state->sub) CFRelease((CFTypeRef)state->sub);
         if (state->smc_conn != 0) IOServiceClose(state->smc_conn);
@@ -412,5 +407,3 @@ double ztop_smc_read_temperature(void *handle, const char *key) {
     }
     return 0.0;
 }
-
-

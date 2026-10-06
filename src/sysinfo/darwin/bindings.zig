@@ -298,15 +298,18 @@ pub const TH_STATE_UNINTERRUPTIBLE: i32 = 4;
 pub const TH_STATE_HALTED: i32 = 5;
 
 pub const PowerReadingRaw = extern struct {
+    rails: [4]u64,
+    gpu_nanojoules: u64,
     soc_watts: f64,
-    cpu_watts: f64,
-    gpu_watts: f64,
-    ane_watts: f64,
-    dram_watts: f64,
-    is_valid: i32,
+    rail_mask: u32,
+    gpu_valid: u32,
+    soc_valid: u32,
+    rail_sources: u32,
 };
 
 pub extern "c" fn ztop_power_init() ?*anyopaque;
-pub extern "c" fn ztop_power_sample(handle: ?*anyopaque, elapsed_seconds: f64) PowerReadingRaw;
+pub extern "c" fn mach_continuous_time() u64;
+pub extern "c" fn ztop_power_sample(handle: ?*anyopaque) PowerReadingRaw;
+pub extern "c" fn ztop_smc_decode(data_type: u32, bytes: [*]const u8, size: u32, value: *f64) bool;
 pub extern "c" fn ztop_smc_read_temperature(handle: ?*anyopaque, key: [*c]const u8) f64;
 pub extern "c" fn ztop_power_deinit(handle: ?*anyopaque) void;

@@ -717,14 +717,14 @@ pub const Timeline = struct {
         const magic = try r.readBytesFixed(4);
         if (!std.mem.eql(u8, magic, &SESSION_MAGIC)) return error.InvalidSessionFile;
         const version = try r.readU32();
-        if (version != SESSION_VERSION) return error.UnsupportedSessionVersion;
+        if (version != 2 and version != SESSION_VERSION) return error.UnsupportedSessionVersion;
 
         var restored = Timeline.init();
 
         const snap_count = try r.readU32();
         if (snap_count > MAX_SNAPSHOTS) return error.InvalidSessionFile;
         for (0..snap_count) |_| {
-            const snap = try deserializeSnapshot(&r);
+            const snap = try deserializeSnapshot(&r, version);
             restored.recordSnapshot(snap, snap.procs[0..snap.proc_count]);
         }
 
@@ -785,7 +785,7 @@ pub const Timeline = struct {
 /// Magic bytes identifying a ztop session file.
 pub const SESSION_MAGIC: [4]u8 = "ZTOP".*;
 /// Binary format version. Increment when the schema changes incompatibly.
-pub const SESSION_VERSION: u32 = 2;
+pub const SESSION_VERSION: u32 = 3;
 /// Maximum file size that loadFromDisk will accept (guards against corrupt/huge files).
 const SESSION_MAX_BYTES: usize = 4 * 1024 * 1024;
 
@@ -847,6 +847,7 @@ fn serializeSnapshot(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), snap: *con
     try appendOptF32(gpa, buf, snap.thermal.gpu_temp);
     try appendOptF32(gpa, buf, snap.battery.charge_percent);
     try appendOptF32(gpa, buf, snap.battery.power_draw_w);
+    try appendOptF32(gpa, buf, snap.battery.power_window_seconds);
     try buf.append(gpa, @backingInt(snap.battery.status));
     try appendU32(gpa, buf, snap.proc_count);
     for (snap.procs[0..snap.proc_count]) |p| {
@@ -923,7 +924,7 @@ const ByteReader = struct {
     }
 };
 
-fn deserializeSnapshot(r: *ByteReader) !SystemSnapshot {
+fn deserializeSnapshot(r: *ByteReader, version: u32) !SystemSnapshot {
     var snap: SystemSnapshot = .{
         .timestamp_ms = try r.readI64(),
         .cpu_usage_pct = try r.readF32(),
@@ -955,6 +956,7 @@ fn deserializeSnapshot(r: *ByteReader) !SystemSnapshot {
         .battery = .{
             .charge_percent = try r.readOptF32(),
             .power_draw_w = try r.readOptF32(),
+            .power_window_seconds = if (version >= 3) try r.readOptF32() else null,
             .status = std.enums.fromInt(common.BatteryStatus, try r.readByte()) orelse .unknown,
         },
         .proc_count = 0,

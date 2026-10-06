@@ -205,7 +205,11 @@ pub fn renderSensorsTab(app_tui: *Tui, theme: config.Theme, cpu_box_x: u16, cpu_
             try app_tui.moveCursor(cpu_box_x + 2, cpu_box_y + 4);
             try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{power_label});
             if (battery.power_draw_w) |w| {
-                try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.2} W", .{w});
+                const averaged = (battery.power_window_seconds orelse 0) > 15;
+                try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{s}{d:4.2} W", .{ if (averaged) "~" else "", w });
+                if (battery.power_window_seconds) |seconds| {
+                    if (averaged and cpu_box_width >= 36) try app_tui.printStyled(.{ .fg = theme.muted }, " (avg {d:.0}{s})", .{ if (seconds >= 60) seconds / 60 else seconds, if (seconds >= 60) "m" else "s" });
+                }
             } else {
                 try app_tui.printStyled(.{ .fg = theme.muted }, "N/A", .{});
             }
@@ -285,7 +289,11 @@ pub fn renderSensorsTab(app_tui: *Tui, theme: config.Theme, cpu_box_x: u16, cpu_
             if (gpu.power_draw_w) |power_w| {
                 if (wrote_detail) try app_tui.printStyled(.{ .fg = theme.muted }, "  ", .{});
                 try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Power: ", .{});
-                try app_tui.printStyled(.{ .fg = theme.io_rate }, "{d:4.1} W", .{power_w});
+                const averaged = (gpu.power_window_seconds orelse 0) > 15;
+                try app_tui.printStyled(.{ .fg = theme.io_rate }, "{s}{d:4.1} W", .{ if (averaged) "~" else "", power_w });
+                if (gpu.power_window_seconds) |seconds| {
+                    if (averaged and gpu_box_width >= 80) try app_tui.printStyled(.{ .fg = theme.muted }, " (avg {d:.0}{s})", .{ if (seconds >= 60) seconds / 60 else seconds, if (seconds >= 60) "m" else "s" });
+                }
                 wrote_detail = true;
             }
 
