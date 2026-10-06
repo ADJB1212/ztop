@@ -141,17 +141,17 @@ pub fn renderMemoryBox(app_tui: *Tui, theme: config.Theme, x: u16, y: u16, width
     const mem_used_percent = memoryUsagePercent(mem);
     try app_tui.moveCursor(x + 2, y + 1);
     try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Used: ", .{});
-    try app_tui.printStyled(.{ .fg = render.memoryColor(theme, mem_used_percent), .bold = true }, "{d} GB", .{mem.used / 1024 / 1024 / 1024});
-    try app_tui.printStyled(.{ .fg = theme.muted }, " (C: {d}M B: {d}M)", .{ mem.cached / 1024 / 1024, mem.buffered / 1024 / 1024 });
+    try app_tui.printStyled(.{ .fg = render.memoryColor(theme, mem_used_percent), .bold = true }, "{d} GB", .{mem.used >> 30});
+    try app_tui.printStyled(.{ .fg = theme.muted }, " (C: {d}M B: {d}M)", .{ mem.cached >> 20, mem.buffered >> 20 });
 
     try app_tui.moveCursor(x + 2, y + 2);
     try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Free: ", .{});
-    try app_tui.printStyled(.{ .fg = theme.usage_good, .bold = true }, "{d} GB", .{mem.free / 1024 / 1024 / 1024});
+    try app_tui.printStyled(.{ .fg = theme.usage_good, .bold = true }, "{d} GB", .{mem.free >> 30});
 
     if (mem.swap_total > 0 and height >= 4) {
         try app_tui.moveCursor(x + 2, y + 3);
         try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "Swap: ", .{});
-        try app_tui.printStyled(.{ .fg = theme.memory_mid }, "{d} MB / {d} MB", .{ mem.swap_used / 1024 / 1024, mem.swap_total / 1024 / 1024 });
+        try app_tui.printStyled(.{ .fg = theme.memory_mid }, "{d} MB / {d} MB", .{ mem.swap_used >> 20, mem.swap_total >> 20 });
     }
 }
 

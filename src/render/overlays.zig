@@ -114,7 +114,7 @@ pub fn renderHelpOverlay(
     repo_url: []const u8,
     repo_label: []const u8,
 ) !void {
-    const left_count: usize = (help_items.len + 1) / 2;
+    const left_count: usize = (help_items.len + 1) >> 1;
     const right_count: usize = help_items.len - left_count;
     const row_count: usize = @max(left_count, right_count);
 
@@ -155,7 +155,7 @@ pub fn renderHelpOverlay(
     const content_width = help_width_usize -| 4;
     const column_gap: usize = if (content_width >= 70) 4 else if (content_width >= 44) 3 else 2;
     const columns_width = content_width -| column_gap;
-    const left_column_width = (columns_width + 1) / 2;
+    const left_column_width = (columns_width + 1) >> 1;
     const right_column_width = columns_width - left_column_width;
 
     const left_key_width = @min(maxKeyWidth(left_items), left_column_width -| 1);

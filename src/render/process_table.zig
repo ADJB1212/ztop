@@ -20,6 +20,163 @@ pub const ProcessTableLayout = struct {
 pub const min_process_name_width: usize = 8;
 pub const default_process_name_width: usize = 20;
 
+pub const ProcessTableCache = struct {
+    pub const Region = struct { x: u16, y: u16, width: u16, height: u16 };
+
+    const RowInput = struct {
+        theme: config.Theme,
+        layout: ProcessTableLayout,
+        proc: sysinfo.ProcStats,
+        is_selected: bool,
+        prefix: [256]u8 = @splat(0),
+        prefix_len: usize,
+        prefix_width: usize,
+        cpu_cores: u32,
+        system_power_w: ?f32,
+    };
+
+    allocator: std.mem.Allocator,
+    region: ?Region = null,
+    screen_width: u16 = 0,
+    screen_height: u16 = 0,
+    row_lengths: []usize = &.{},
+    row_inputs: []?RowInput = &.{},
+    content: []u8 = &.{},
+    stride: usize = 0,
+
+    pub fn init(allocator: std.mem.Allocator) ProcessTableCache {
+        return .{ .allocator = allocator };
+    }
+
+    pub fn deinit(self: *ProcessTableCache) void {
+        self.allocator.free(self.row_lengths);
+        self.allocator.free(self.row_inputs);
+        self.allocator.free(self.content);
+    }
+
+    pub fn clearFrame(self: *ProcessTableCache, app_tui: *Tui, width: u16, height: u16, region: ?Region) !void {
+        const preserve = region != null and std.meta.eql(self.region, region) and
+            self.screen_width == width and self.screen_height == height;
+        if (!preserve) {
+            self.region = null;
+            if (region) |rect| {
+                const stride = @as(usize, rect.width) * 3 + (config.process_column_order.len + 1) * 96;
+                if (self.stride != stride or self.row_lengths.len != rect.height) {
+                    const lengths = try self.allocator.alloc(usize, rect.height);
+                    errdefer self.allocator.free(lengths);
+                    const inputs = try self.allocator.alloc(?RowInput, rect.height);
+                    errdefer self.allocator.free(inputs);
+                    const content = try self.allocator.alloc(u8, stride * (@as(usize, rect.height) + 1));
+                    self.allocator.free(self.row_lengths);
+                    self.allocator.free(self.row_inputs);
+                    self.allocator.free(self.content);
+                    self.row_lengths = lengths;
+                    self.row_inputs = inputs;
+                    self.content = content;
+                    self.stride = stride;
+                }
+            }
+            @memset(self.row_lengths, 0);
+            @memset(self.row_inputs, null);
+            try app_tui.clear();
+            self.region = region;
+            self.screen_width = width;
+            self.screen_height = height;
+            return;
+        }
+
+        const rect = region.?;
+        try app_tui.resetStyle();
+        if (rect.y > 1) {
+            try app_tui.moveCursor(1, rect.y - 1);
+            try app_tui.bufWrite("\x1b[2K\x1b[1J");
+        }
+        if (@as(u32, rect.y) + rect.height <= height) {
+            try app_tui.moveCursor(1, rect.y + rect.height);
+            try app_tui.bufWrite("\x1b[J");
+        }
+        for (0..rect.height) |row| {
+            const y = rect.y + @as(u16, @intCast(row));
+            try app_tui.moveCursor(1, y);
+            try app_tui.writeSpaces(rect.x - 1);
+            try app_tui.moveCursor(rect.x + rect.width, y);
+            try app_tui.bufWrite("\x1b[K");
+        }
+    }
+
+    pub fn renderRow(
+        self: *ProcessTableCache,
+        app_tui: *Tui,
+        x: u16,
+        y: u16,
+        theme: *const config.Theme,
+        layout: *const ProcessTableLayout,
+        proc: *const sysinfo.ProcStats,
+        is_selected: bool,
+        prefix: []const u8,
+        prefix_width: usize,
+        cpu_cores: u32,
+        system_power_w: ?f32,
+    ) !void {
+        const rect = self.region orelse {
+            try app_tui.moveCursor(x, y);
+            try renderProcessRow(app_tui, theme, layout, proc, is_selected, prefix, prefix_width, cpu_cores, system_power_w);
+            try app_tui.resetStyle();
+            return;
+        };
+        const row = y - rect.y;
+        var input: ?RowInput = null;
+        if (prefix.len <= 256) {
+            var normalized_layout = layout.*;
+            @memset(normalized_layout.columns[layout.count..], .pid);
+            @memset(normalized_layout.column_widths[layout.count..], 0);
+            input = .{
+                .theme = theme.*,
+                .layout = normalized_layout,
+                .proc = proc.*,
+                .is_selected = is_selected,
+                .prefix_len = prefix.len,
+                .prefix_width = prefix_width,
+                .cpu_cores = cpu_cores,
+                .system_power_w = system_power_w,
+            };
+            @memcpy(input.?.prefix[0..prefix.len], prefix);
+            if (std.meta.eql(self.row_inputs[row], input)) return;
+        }
+        const previous = self.content[@as(usize, row) * self.stride ..][0..self.stride];
+        var scratch_tui = app_tui.*;
+        scratch_tui.frame_active = true;
+        scratch_tui.frame_buf = self.content[self.row_lengths.len * self.stride ..];
+        scratch_tui.frame_len = 0;
+        scratch_tui.current_style = null;
+        try renderProcessRow(&scratch_tui, theme, layout, proc, is_selected, prefix, prefix_width, cpu_cores, system_power_w);
+        const rendered = scratch_tui.frame_buf[0..scratch_tui.frame_len];
+        if (std.mem.eql(u8, previous[0..self.row_lengths[row]], rendered)) {
+            self.row_inputs[row] = input;
+            return;
+        }
+
+        try app_tui.moveCursor(x, y);
+        try app_tui.bufWrite(rendered);
+        app_tui.current_style = scratch_tui.current_style;
+        try app_tui.resetStyle();
+        @memcpy(previous[0..rendered.len], rendered);
+        self.row_lengths[row] = rendered.len;
+        self.row_inputs[row] = input;
+    }
+
+    pub fn finishRows(self: *ProcessTableCache, app_tui: *Tui, count: usize) !void {
+        const rect = self.region orelse return;
+        for (count..self.row_lengths.len) |row| {
+            if (self.row_lengths[row] == 0) continue;
+            try app_tui.moveCursor(rect.x, rect.y + @as(u16, @intCast(row)));
+            try app_tui.writeStyledSpaces(.{}, rect.width);
+            self.row_lengths[row] = 0;
+            self.row_inputs[row] = null;
+        }
+    }
+};
+
 pub fn processColumnWidth(column: ProcessColumn) usize {
     return switch (column) {
         .pid => 6,

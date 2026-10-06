@@ -75,6 +75,8 @@ const TH_STATE_UNINTERRUPTIBLE = bindings.TH_STATE_UNINTERRUPTIBLE;
 const TH_STATE_HALTED = bindings.TH_STATE_HALTED;
 
 const MAX_THREADS = common.MAX_THREADS;
+const THERMAL_REFRESH_INTERVAL_MS: i64 = 2_000;
+const BATTERY_REFRESH_INTERVAL_MS: i64 = 5_000;
 
 const kIOHIDEventTypeTemperature: i64 = 15;
 const kIOHIDEventTypePower: i64 = 25;
@@ -192,9 +194,13 @@ pub const SysInfo = struct {
     cached_sensors: [MAX_CACHED_THERMAL_SENSORS]CachedThermalSensor = undefined,
     cached_sensor_count: usize = 0,
     sensors_initialized: bool = false,
+    thermal_stats: ThermalStats = .{},
+    prev_thermal_ms: ?i64 = null,
     power_handle: ?*anyopaque = null,
     prev_power_ms: i64 = 0,
     last_power_reading: ?bindings.PowerReadingRaw = null,
+    battery_stats: BatteryStats = .{},
+    prev_battery_ms: ?i64 = null,
 
     pub fn init(io: std.Io) SysInfo {
         const host_port = bindings.mach_host_self();
@@ -448,7 +454,8 @@ pub const SysInfo = struct {
 
         var swap: xsw_usage = std.mem.zeroes(xsw_usage);
         var swap_size: usize = @sizeOf(xsw_usage);
-        _ = bindings.sysctlbyname("vm.swapusage", @ptrCast(&swap), &swap_size, null, 0);
+        var swap_mib = [_]c_int{ c.CTL_VM, c.VM_SWAPUSAGE };
+        _ = c.sysctl(&swap_mib, swap_mib.len, @ptrCast(&swap), &swap_size, null, 0);
 
         return .{
             .total = self.total_mem,
@@ -608,6 +615,19 @@ pub const SysInfo = struct {
     }
 
     pub fn getThermalStats(self: *SysInfo) ThermalStats {
+        const now = nowMs(self.io);
+        if (self.prev_thermal_ms) |previous| {
+            if (now >= previous and now - previous < THERMAL_REFRESH_INTERVAL_MS) {
+                return self.thermal_stats;
+            }
+        }
+
+        self.thermal_stats = self.readThermalStats();
+        self.prev_thermal_ms = now;
+        return self.thermal_stats;
+    }
+
+    fn readThermalStats(self: *SysInfo) ThermalStats {
         var stats = ThermalStats{};
         if (!self.sensors_initialized) {
             self.initThermalSensors();
@@ -655,6 +675,19 @@ pub const SysInfo = struct {
     }
 
     pub fn getBatteryStats(self: *SysInfo) BatteryStats {
+        const now = nowMs(self.io);
+        if (self.prev_battery_ms) |previous| {
+            if (now >= previous and now - previous < BATTERY_REFRESH_INTERVAL_MS) {
+                return self.battery_stats;
+            }
+        }
+
+        self.battery_stats = self.readBatteryStats();
+        self.prev_battery_ms = now;
+        return self.battery_stats;
+    }
+
+    fn readBatteryStats(self: *SysInfo) BatteryStats {
         var stats = BatteryStats{};
 
         const blob = c.IOPSCopyPowerSourcesInfo() orelse return stats;
@@ -724,7 +757,6 @@ pub const SysInfo = struct {
     }
 
     fn findPrevProcEntry(self: *const SysInfo, pid: u32) ?*const ProcCpuEntry {
-        // The previous sample is kept sorted by PID.
         const slice = self.proc_buffers[self.prev_proc_buffer][0..self.prev_proc_count];
         var lo: usize = 0;
         var hi: usize = slice.len;
@@ -754,7 +786,10 @@ pub const SysInfo = struct {
 
         var pid_buf: [MAX_PROCS]c_int = undefined;
         const num_pids_raw = bindings.proc_listallpids(&pid_buf, @intCast(MAX_PROCS * @sizeOf(c_int)));
-        const num_pids: usize = if (num_pids_raw > 0) @intCast(num_pids_raw) else 0;
+        const num_pids: usize = if (num_pids_raw > 0) @min(@as(usize, @intCast(num_pids_raw)), pid_buf.len) else 0;
+        std.mem.sort(c_int, pid_buf[0..num_pids], {}, std.sort.asc(c_int));
+        const prev_procs = self.proc_buffers[self.prev_proc_buffer][0..self.prev_proc_count];
+        var prev_index: usize = 0;
 
         var proc_count: usize = 0;
         const new_proc_buffer = self.prev_proc_buffer ^ 1;
@@ -767,7 +802,7 @@ pub const SysInfo = struct {
 
             var all_info: ProcTaskAllInfo = undefined;
             const info_ret = bindings.proc_pidinfo(raw_pid, PROC_PIDTASKALLINFO, 0, @ptrCast(&all_info), @sizeOf(ProcTaskAllInfo));
-            if (info_ret <= 0) continue;
+            if (info_ret != @sizeOf(ProcTaskAllInfo)) continue;
 
             const task_info = all_info.ptinfo;
             const bsd_info = all_info.pbsd;
@@ -804,7 +839,11 @@ pub const SysInfo = struct {
             var ppid: u32 = bsd_info.pbi_ppid;
             var effective_start_abstime: u64 = proc_start_abstime;
 
-            const prev_entry = self.findPrevProcEntry(pid);
+            while (prev_index < prev_procs.len and prev_procs[prev_index].pid < pid) : (prev_index += 1) {}
+            const prev_entry = if (prev_index < prev_procs.len and prev_procs[prev_index].pid == pid)
+                &prev_procs[prev_index]
+            else
+                null;
 
             if (prev_entry) |prev| {
                 const same_process = prev.proc_start_abstime == 0 or proc_start_abstime == 0 or prev.proc_start_abstime == proc_start_abstime;
@@ -839,10 +878,6 @@ pub const SysInfo = struct {
                 }
             }
 
-            if (name_len == 0) {
-                const name_ret = bindings.proc_name(raw_pid, &name_buf, name_buf.len);
-                name_len = if (name_ret > 0) @intCast(@min(@as(usize, @intCast(name_ret)), name_buf.len - 1)) else 0;
-            }
             if (name_len == 0) {
                 const registered_name_len = std.mem.indexOfScalar(u8, &bsd_info.pbi_name, 0) orelse bsd_info.pbi_name.len;
                 const source = if (registered_name_len > 0)
@@ -910,12 +945,6 @@ pub const SysInfo = struct {
             proc_count += 1;
         }
 
-        // Sort by PID for binary search in findPrevProcEntry
-        std.mem.sort(ProcCpuEntry, new_procs[0..new_proc_count], {}, struct {
-            fn lessThan(_: void, a: ProcCpuEntry, b: ProcCpuEntry) bool {
-                return a.pid < b.pid;
-            }
-        }.lessThan);
         self.prev_proc_buffer = new_proc_buffer;
         self.prev_proc_count = new_proc_count;
         self.prev_time = current_time;

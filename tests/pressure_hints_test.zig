@@ -75,6 +75,61 @@ fn findPattern(data: render.PressureHintsData, pattern: render.PatternKind) ?ren
     return null;
 }
 
+test "pressure hints cache reuses redraws until the next poll invalidates it" {
+    const tl = emptyTimeline();
+    const mem = makeMem(16 * 1024 * MB, 4 * 1024 * MB, 0, 0, 4 * 1024 * MB);
+    var procs = [_]sysinfo.ProcStats{makeProcNamed(11, 90, 10, 0, "first")};
+    var cache: render.PressureHintsCache = .{};
+
+    const first = cache.get(null, mem, 25, 80, 0, 0, .{}, &procs, &.{}, &tl, .celsius);
+    try std.testing.expectEqual(@as(u32, 11), findPattern(first.*, .runaway_cpu).?.culprit_pid);
+    procs[0] = makeProcNamed(22, 200, 10, 0, "second");
+    const redraw = cache.get(null, mem, 25, 80, 0, 0, .{}, &procs, &.{}, &tl, .celsius);
+    try std.testing.expectEqual(@as(u32, 11), findPattern(redraw.*, .runaway_cpu).?.culprit_pid);
+
+    cache.invalidate();
+    const next_poll = cache.get(null, mem, 25, 80, 0, 0, .{}, &procs, &.{}, &tl, .celsius);
+    const hint = findPattern(next_poll.*, .runaway_cpu).?;
+    try std.testing.expectEqual(@as(u32, 22), hint.culprit_pid);
+    try std.testing.expectEqualStrings("second", hint.culpritNameSlice());
+    try std.testing.expectEqual(render.HintSeverity.critical, hint.severity);
+
+    procs[0].cpu_percent = 10;
+    cache.invalidate();
+    const calm = cache.get(null, mem, 25, 10, 0, 0, .{}, &procs, &.{}, &tl, .celsius);
+    try std.testing.expectEqual(@as(usize, 0), calm.hint_count);
+}
+
+test "pressure hints cache rebuilds when scrubbing changes the displayed snapshot" {
+    const tl = emptyTimeline();
+    const mem = makeMem(16 * 1024 * MB, 4 * 1024 * MB, 0, 0, 4 * 1024 * MB);
+    var procs = [_]sysinfo.ProcStats{makeProc(11, 90, 10, 0)};
+    var cache: render.PressureHintsCache = .{};
+    _ = cache.get(null, mem, 25, 80, 0, 0, .{}, &procs, &.{}, &tl, .celsius);
+
+    procs[0].cpu_percent = 10;
+    const snapshot = cache.get(100, mem, 25, 10, 0, 0, .{}, &procs, &.{}, &tl, .celsius);
+    try std.testing.expectEqual(@as(usize, 0), snapshot.hint_count);
+    procs[0].cpu_percent = 90;
+    const redraw = cache.get(100, mem, 25, 80, 0, 0, .{}, &procs, &.{}, &tl, .celsius);
+    try std.testing.expectEqual(@as(usize, 0), redraw.hint_count);
+    const next_snapshot = cache.get(200, mem, 25, 80, 0, 0, .{}, &procs, &.{}, &tl, .celsius);
+    try std.testing.expect(findPattern(next_snapshot.*, .runaway_cpu) != null);
+
+    procs[0].cpu_percent = 10;
+    const live = cache.get(null, mem, 25, 10, 0, 0, .{}, &procs, &.{}, &tl, .celsius);
+    try std.testing.expectEqual(@as(usize, 0), live.hint_count);
+}
+
+test "pressure hints cache updates temperature units without a new poll" {
+    const tl = emptyTimeline();
+    const mem = makeMem(16 * 1024 * MB, 4 * 1024 * MB, 0, 0, 4 * 1024 * MB);
+    var cache: render.PressureHintsCache = .{};
+    _ = cache.get(null, mem, 25, 10, 0, 0, .{ .cpu_temp = 60 }, &.{}, &.{}, &tl, .celsius);
+    const updated = cache.get(null, mem, 25, 10, 0, 0, .{ .cpu_temp = 60 }, &.{}, &.{}, &tl, .fahrenheit);
+    try std.testing.expectEqual(@import("ztop").config.TemperatureUnit.fahrenheit, updated.temp_unit);
+}
+
 // ── no hints when system healthy ──────────────────────────────────────────────
 
 test "no hints when everything is calm" {

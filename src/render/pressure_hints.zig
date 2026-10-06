@@ -58,6 +58,38 @@ pub const PressureHintsData = struct {
     temp_unit: config.TemperatureUnit = .celsius,
 };
 
+pub const PressureHintsCache = struct {
+    data: PressureHintsData = .{},
+    valid: bool = false,
+    snapshot_timestamp_ms: ?i64 = null,
+
+    pub fn invalidate(self: *PressureHintsCache) void {
+        self.valid = false;
+    }
+
+    pub fn get(
+        self: *PressureHintsCache,
+        snapshot_timestamp_ms: ?i64,
+        mem: sysinfo.common.MemStats,
+        mem_pct: f32,
+        cpu_pct: f32,
+        disk_rate: u64,
+        net_rate: u64,
+        thermal: sysinfo.common.ThermalStats,
+        procs: []const sysinfo.ProcStats,
+        connections: []const sysinfo.common.NetConnection,
+        timeline: *const timeline_mod.Timeline,
+        temp_unit: config.TemperatureUnit,
+    ) *const PressureHintsData {
+        if (!self.valid or self.snapshot_timestamp_ms != snapshot_timestamp_ms or self.data.temp_unit != temp_unit) {
+            self.data = buildPressureHints(mem, mem_pct, cpu_pct, disk_rate, net_rate, thermal, procs, connections, timeline, temp_unit);
+            self.snapshot_timestamp_ms = snapshot_timestamp_ms;
+            self.valid = true;
+        }
+        return &self.data;
+    }
+};
+
 fn addHint(
     data: *PressureHintsData,
     pattern: PatternKind,
@@ -123,7 +155,7 @@ fn detectSwapPatterns(data: *PressureHintsData, mem: sysinfo.common.MemStats, pr
 }
 
 fn detectRunawayWriter(data: *PressureHintsData, procs: []const sysinfo.ProcStats, disk_total: u64) void {
-    if (disk_total < 5 * 1024 * 1024) return;
+    if (disk_total < 5 << 20) return;
 
     var top_pid: u32 = 0;
     var top_name: []const u8 = &.{};
@@ -136,7 +168,7 @@ fn detectRunawayWriter(data: *PressureHintsData, procs: []const sysinfo.ProcStat
         }
     }
 
-    if (top_write < 8 * 1024 * 1024) return;
+    if (top_write < 8 << 20) return;
 
     const log_patterns = [_][]const u8{ "log", "journal", "syslog", "rsyslog", "logd", "logger", "fluent", "filebeat", "splunk" };
     var is_log_writer = false;
@@ -153,7 +185,7 @@ fn detectRunawayWriter(data: *PressureHintsData, procs: []const sysinfo.ProcStat
     var title_buf: [52]u8 = undefined;
     var detail_buf: [128]u8 = undefined;
     const wfmt = util.formatUnit(top_write);
-    const sv: HintSeverity = if (top_write > 50 * 1024 * 1024) .critical else .warn;
+    const sv: HintSeverity = if (top_write > 50 << 20) .critical else .warn;
     const label = if (is_log_writer) "Log writer runaway" else "Disk write storm";
     const title = std.fmt.bufPrint(&title_buf, "{s}: {d:.1}{s}/s", .{ label, wfmt.value, wfmt.unit }) catch "Runaway writer";
     const detail = std.fmt.bufPrint(&detail_buf, "{d:.0}% of total disk writes. Check for log rotation loop, unbounded output, or missing write throttle.", .{share_pct}) catch "";

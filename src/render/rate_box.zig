@@ -256,8 +256,8 @@ pub fn renderDualRateBox(
     }
 
     const graph_y = content_y + 2;
-    const primary_height = (graph_rows + 1) / 2;
-    const secondary_height = graph_rows / 2;
+    const primary_height = (graph_rows + 1) >> 1;
+    const secondary_height = graph_rows >> 1;
     try renderRateLane(app_tui, theme, inner_x, graph_y, inner_width, @intCast(primary_height), primary, peak_rate);
     if (secondary_height > 0) {
         try renderRateLane(

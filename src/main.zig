@@ -68,6 +68,10 @@ pub fn main(main_init: std.process.Init) !void {
     var app_tui = try Tui.init(allocator, io, app_config.nerd_fonts, main_init.environ_map.get("TERM_PROGRAM"));
     defer app_tui.deinit();
 
+    var process_table_cache = render.ProcessTableCache.init(allocator);
+    defer process_table_cache.deinit();
+    var pressure_hints_cache: render.PressureHintsCache = .{};
+
     var sys_info = SysInfo.init(io);
     defer sys_info.deinit();
 
@@ -100,6 +104,8 @@ pub fn main(main_init: std.process.Init) !void {
     var filtered_is_lasts: [2048]u16 = std.mem.zeroes([2048]u16);
     var filtered_count: usize = 0;
     var tree_view: bool = app_config.default_tree_view;
+    var tree_cache_sort: ?ztop.sysinfo.SortBy = null;
+    var tree_cache_count: usize = 0;
 
     var zombie_parents: [ztop.sysinfo.common.MAX_PROCS]process_commands.ZombieParentEntry = undefined;
     var zombie_summary: process_commands.ZombieParentSummary = .{};
@@ -215,10 +221,12 @@ pub fn main(main_init: std.process.Init) !void {
     }
 
     try app_tui.bufWrite("\x1b]2;ztop\x1b\\");
+    var size = try app_tui.getWinSize();
 
     while (!quit_flag) {
         if (sigwinch_flag) {
             sigwinch_flag = false;
+            size = try app_tui.getWinSize();
             force_redraw = true;
         }
 
@@ -248,6 +256,7 @@ pub fn main(main_init: std.process.Init) !void {
             }
 
             cached_procs = try sys_info.getProcStats(proc_buf, sort_by);
+            tree_cache_sort = null;
             cached_procs = ztop.sysinfo.common.filterProcStatsByLaunchCommandSubstring(cached_procs, app_config.ignoredLaunchCommandSubstr());
 
             if (current_tab == 4) {
@@ -302,43 +311,31 @@ pub fn main(main_init: std.process.Init) !void {
             if (!is_scrubbing) {
                 timeline.recordSnapshot(tl_snap, cached_procs);
             }
+            pressure_hints_cache.invalidate();
         }
 
         if (force_redraw) {
             force_redraw = false;
-            const size = try app_tui.getWinSize();
             mouse_regions.reset();
             try app_tui.beginFrame();
             defer app_tui.endFrame() catch {};
-            try app_tui.clear();
 
             if (size.width < 40 or size.height < 15) {
+                try process_table_cache.clearFrame(&app_tui, size.width, size.height, null);
                 const msg = "Terminal too small";
                 const x = if (size.width > msg.len) (size.width - @as(u16, @intCast(msg.len))) / 2 else 1;
-                const y = size.height / 2;
+                const y = size.height >> 1;
                 try app_tui.moveCursor(x, y);
                 try app_tui.printStyled(.{ .fg = theme.usage_critical, .bold = true }, "{s}", .{msg});
                 try app_tui.setCursorStyle(.steady_block);
                 try app_tui.setCursorVisible(false);
             } else {
-                try main_view.renderHeader(
-                    &app_tui,
-                    theme,
-                    size.width,
-                    current_tab,
-                    sysname,
-                    release,
-                    machine,
-                    nodename,
-                    &mouse_regions,
-                );
-
                 const available_height = size.height -| 2;
                 const is_small_width = size.width < 80;
                 const top_boxes_height = if (current_tab == 1 and !is_small_width)
                     @max(available_height / 2, 6)
                 else if (is_small_width)
-                    available_height / 4
+                    available_height >> 2
                 else
                     available_height / 3;
 
@@ -360,6 +357,28 @@ pub fn main(main_init: std.process.Init) !void {
                 const timeline_bar_y: u16 = size.height -| 1;
                 const procs_box_height: u16 = size.height -| procs_box_y -| 1 -| @as(u16, if (timeline_bar_active) 1 else 0);
                 var process_layout: render.ProcessTableLayout = .{};
+
+                const diff_active = is_scrubbing and diff_anchor != null;
+                const cache_process_rows = !diff_active and current_tab != 4 and current_tab != 5 and
+                    !causality_view and !lifeline_view and !thread_view and
+                    !(pipeline_view and !is_scrubbing) and !show_help and !show_column_picker and procs_box_height >= 3;
+                try process_table_cache.clearFrame(&app_tui, size.width, size.height, if (cache_process_rows) .{
+                    .x = procs_box_x + 2,
+                    .y = procs_box_y + 1,
+                    .width = procs_box_width -| 4,
+                    .height = procs_box_height - 2,
+                } else null);
+                try main_view.renderHeader(
+                    &app_tui,
+                    theme,
+                    size.width,
+                    current_tab,
+                    sysname,
+                    release,
+                    machine,
+                    nodename,
+                    &mouse_regions,
+                );
 
                 // Build display state (live or from scrubbed snapshot)
                 var display_cpu = cpu;
@@ -406,7 +425,6 @@ pub fn main(main_init: std.process.Init) !void {
                 }
 
                 // Before/After Diff View (replaces normal content when active)
-                const diff_active = is_scrubbing and diff_anchor != null;
                 if (diff_active) {
                     if (timeline.computeDiff(diff_anchor.?, scrub_offset)) |snap_diff| {
                         const diff_box_height = size.height -| 2 -| 1 -| @as(u16, if (timeline_bar_active) 1 else 0);
@@ -521,14 +539,15 @@ pub fn main(main_init: std.process.Init) !void {
                         wifi_generation_line,
                     );
                 } else if (current_tab == 5 and cpu_box_height >= 5) {
-                    const ph_data = render.buildPressureHints(
+                    const ph_data = pressure_hints_cache.get(
+                        if (scrub_snapshot) |snap| snap.timestamp_ms else null,
                         display_mem,
                         memoryUsagePercent(display_mem),
                         display_cpu.usage_percent,
                         display_disk.read_bytes_ps + display_disk.write_bytes_ps,
                         display_net.rx_bytes_ps + display_net.tx_bytes_ps,
                         display_thermal,
-                        cached_procs,
+                        if (scrub_snapshot != null) scrub_procs else cached_procs,
                         cached_connections.items,
                         timeline,
                         app_config.temperature_unit,
@@ -540,7 +559,7 @@ pub fn main(main_init: std.process.Init) !void {
                         cpu_box_y,
                         size.width,
                         cpu_box_height,
-                        ph_data,
+                        ph_data.*,
                     );
                 }
 
@@ -713,6 +732,7 @@ pub fn main(main_init: std.process.Init) !void {
                         filtered_count = 0;
 
                         if (is_scrubbing) {
+                            tree_cache_sort = null;
                             // In scrub mode: show snapshot procs directly, no filtering
                             for (0..scrub_proc_count) |i| {
                                 filtered_indices[i] = i;
@@ -722,13 +742,18 @@ pub fn main(main_init: std.process.Init) !void {
                             const filter_str = filter_buf[0..filter_len];
 
                             if (tree_view and filter_len == 0 and !show_zombie_parents) {
-                                filtered_count = process_commands.buildTreeView(
-                                    cached_procs,
-                                    &filtered_indices,
-                                    &filtered_depths,
-                                    &filtered_is_lasts,
-                                );
+                                if (tree_cache_sort == null or tree_cache_sort.? != sort_by) {
+                                    tree_cache_count = process_commands.buildTreeView(
+                                        cached_procs,
+                                        &filtered_indices,
+                                        &filtered_depths,
+                                        &filtered_is_lasts,
+                                    );
+                                    tree_cache_sort = sort_by;
+                                }
+                                filtered_count = tree_cache_count;
                             } else {
+                                tree_cache_sort = null;
                                 for (cached_procs, 0..) |*proc, i| {
                                     if (show_zombie_parents and !process_commands.containsParentPid(zombie_parents[0..zombie_summary.parent_count], proc.pid)) {
                                         continue;
@@ -793,14 +818,6 @@ pub fn main(main_init: std.process.Init) !void {
 
                             const is_selected = (idx == selected_idx) and !show_help;
 
-                            try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1 + @as(u16, @intCast(row)));
-
-                            if (is_selected) {
-                                try app_tui.setStyle(.{ .bg = theme.selection_bg });
-                                try app_tui.writeSpaces(procs_box_width - 4);
-                                try app_tui.moveCursor(procs_box_x + 2, procs_box_y + 1 + @as(u16, @intCast(row)));
-                            }
-
                             var prefix_len: usize = 0;
                             var prefix_width: usize = 0;
                             if (!is_scrubbing and tree_view and filter_len == 0 and !show_zombie_parents) {
@@ -822,8 +839,10 @@ pub fn main(main_init: std.process.Init) !void {
                                 }
                             }
 
-                            try render.renderProcessRow(
+                            try process_table_cache.renderRow(
                                 &app_tui,
+                                procs_box_x + 2,
+                                procs_box_y + 1 + @as(u16, @intCast(row)),
                                 &theme,
                                 &process_layout,
                                 proc,
@@ -833,11 +852,8 @@ pub fn main(main_init: std.process.Init) !void {
                                 display_cpu.cores,
                                 display_battery.power_draw_w,
                             );
-
-                            if (is_selected) {
-                                try app_tui.resetStyle();
-                            }
                         }
+                        try process_table_cache.finishRows(&app_tui, @min(visible_rows, filtered_count -| scroll_offset));
                     }
                 }
 
@@ -955,7 +971,9 @@ pub fn main(main_init: std.process.Init) !void {
                 .pipeline_view = &pipeline_view,
                 .pipeline_row_count = &pipeline_row_count,
             };
+            const previous_sort = sort_by;
             force_redraw = try input_handler.handleAvailableInput(&input_ctx);
+            if (previous_sort != sort_by) tree_cache_sort = null;
         } else if (render.isAiQuerying()) {
             force_redraw = true;
         }

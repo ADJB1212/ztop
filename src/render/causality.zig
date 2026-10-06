@@ -24,7 +24,7 @@ fn writeProtoPill(app_tui: *Tui, theme: config.Theme, protocol: sysinfo.common.N
     const display = protoDisplay(theme, protocol);
     var buf: [proto_label_width]u8 = @splat(' ');
     const n = @min(display.label.len, proto_label_width);
-    const left_pad = (proto_label_width - n) / 2;
+    const left_pad = (proto_label_width - n) >> 1;
     @memcpy(buf[left_pad..][0..n], display.label[0..n]);
     const style: Tui.Style = .{ .bg = display.color, .fg = theme.selection_fg, .bold = true };
     _ = try util.writePill(app_tui, style, &buf);

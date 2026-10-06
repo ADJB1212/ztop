@@ -42,6 +42,7 @@ pub const renderRateHistoryGraph = graphs.renderRateHistoryGraph;
 
 // Re-exports from process_table.zig
 pub const ProcessTableLayout = process_table.ProcessTableLayout;
+pub const ProcessTableCache = process_table.ProcessTableCache;
 pub const min_process_name_width = process_table.min_process_name_width;
 pub const processColumnWidth = process_table.processColumnWidth;
 pub const planProcessTableLayout = process_table.planProcessTableLayout;
@@ -84,6 +85,7 @@ pub const HintSeverity = pressure_hints.HintSeverity;
 pub const PatternKind = pressure_hints.PatternKind;
 pub const PressureHint = pressure_hints.PressureHint;
 pub const PressureHintsData = pressure_hints.PressureHintsData;
+pub const PressureHintsCache = pressure_hints.PressureHintsCache;
 pub const buildPressureHints = pressure_hints.buildPressureHints;
 pub const renderPressureHintsView = pressure_hints.renderPressureHintsView;
 

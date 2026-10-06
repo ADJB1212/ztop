@@ -25,6 +25,55 @@ fn testTui(frame_buf: []u8) tui.Tui {
     };
 }
 
+test "frames buffer output with and without terminal synchronization" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    for ([_]bool{ false, true }) |synchronized| {
+        const out = try tmp.dir.createFile(std.testing.io, "frame", .{});
+        defer out.close(std.testing.io);
+        var buf: [128]u8 = undefined;
+        var app_tui = testTui(&buf);
+        app_tui.out = out;
+        app_tui.frame_active = false;
+        app_tui.features.synchronized_output = synchronized;
+
+        try app_tui.beginFrame();
+        try app_tui.beginFrame();
+        try app_tui.bufWrite("hello");
+        try app_tui.bufWrite(" world");
+        var actual: [128]u8 = undefined;
+        try std.testing.expectEqualStrings("", try tmp.dir.readFile(std.testing.io, "frame", &actual));
+        try app_tui.endFrame();
+        try app_tui.endFrame();
+        try std.testing.expectEqualStrings(
+            if (synchronized) "\x1b[?2026hhello world\x1b[?2026l" else "hello world",
+            try tmp.dir.readFile(std.testing.io, "frame", &actual),
+        );
+        try std.testing.expectEqual(false, app_tui.frame_active);
+        try std.testing.expectEqual(@as(usize, 0), app_tui.frame_len);
+    }
+}
+
+test "synchronized frames preserve markers across buffer flushes" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const out = try tmp.dir.createFile(std.testing.io, "frame", .{});
+    defer out.close(std.testing.io);
+    var buf: [12]u8 = undefined;
+    var app_tui = testTui(&buf);
+    app_tui.out = out;
+    app_tui.frame_active = false;
+    app_tui.features.synchronized_output = true;
+    try app_tui.beginFrame();
+    try app_tui.bufWrite("abc");
+    try app_tui.bufWrite("longer than the frame buffer");
+    try app_tui.bufWrite("xyz");
+    try app_tui.endFrame();
+    var actual: [128]u8 = undefined;
+    try std.testing.expectEqualStrings("\x1b[?2026habclonger than the frame bufferxyz\x1b[?2026l", try tmp.dir.readFile(std.testing.io, "frame", &actual));
+}
+
 test "repeated UTF-8 glyphs and padding preserve style transitions" {
     var buf: [1024]u8 = undefined;
     var app_tui = testTui(&buf);
@@ -93,6 +142,130 @@ fn expectCursorBeforeText(output: []const u8, cursor: []const u8, text: []const 
     const cursor_index = std.mem.indexOf(u8, output, cursor) orelse return error.MissingCursor;
     const text_index = std.mem.indexOfPos(u8, output, cursor_index, text) orelse return error.MissingText;
     try std.testing.expect(text_index > cursor_index);
+}
+
+test "process row cache skips unchanged visible content and preserves style" {
+    var buf: [8192]u8 = undefined;
+    var app_tui = testTui(&buf);
+    var cache = render.ProcessTableCache.init(std.testing.allocator);
+    defer cache.deinit();
+    const region: render.ProcessTableCache.Region = .{ .x = 3, .y = 10, .width = 76, .height = 2 };
+    const theme = config.themePreset(.default);
+    const layout = render.planProcessTableLayout(config.ProcessColumns.defaultsMain(), region.width);
+    var proc: ztop.sysinfo.ProcStats = .{ .pid = 42, .name_len = 4, .cpu_percent = 1.01 };
+    @memcpy(proc.name_buf[0..4], "test");
+
+    try cache.clearFrame(&app_tui, 80, 24, region);
+    app_tui.frame_len = 0;
+    try cache.renderRow(&app_tui, 3, 10, &theme, &layout, &proc, false, "", 0, 8, null);
+    try expectCursorBeforeText(buf[0..app_tui.frame_len], "\x1b[10;3H", "test");
+
+    try cache.clearFrame(&app_tui, 80, 24, region);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..app_tui.frame_len], "\x1b[2J") == null);
+    app_tui.frame_len = 0;
+    app_tui.current_style = .{ .fg = .magenta };
+    try cache.renderRow(&app_tui, 3, 10, &theme, &layout, &proc, false, "", 0, 8, null);
+    try std.testing.expectEqual(@as(usize, 0), app_tui.frame_len);
+    proc.ppid = 100;
+    proc.cpu_percent = 1.02;
+    try cache.renderRow(&app_tui, 3, 10, &theme, &layout, &proc, false, "", 0, 8, null);
+    try std.testing.expectEqual(@as(usize, 0), app_tui.frame_len);
+    try std.testing.expectEqual(tui.Tui.Style{ .fg = .magenta }, app_tui.current_style.?);
+
+    proc.cpu_percent = 2;
+    try cache.renderRow(&app_tui, 3, 10, &theme, &layout, &proc, false, "", 0, 8, null);
+    try expectCursorBeforeText(buf[0..app_tui.frame_len], "\x1b[10;3H", "2.0% CPU");
+}
+
+test "process row cache updates selection and clears removed rows once" {
+    var buf: [8192]u8 = undefined;
+    var app_tui = testTui(&buf);
+    var cache = render.ProcessTableCache.init(std.testing.allocator);
+    defer cache.deinit();
+    const region: render.ProcessTableCache.Region = .{ .x = 3, .y = 10, .width = 76, .height = 3 };
+    const theme = config.themePreset(.default);
+    const layout = render.planProcessTableLayout(config.ProcessColumns.defaultsMain(), region.width);
+    const first: ztop.sysinfo.ProcStats = .{ .pid = 42 };
+    const second: ztop.sysinfo.ProcStats = .{ .pid = 43 };
+
+    try cache.clearFrame(&app_tui, 80, 24, region);
+    try cache.renderRow(&app_tui, 3, 10, &theme, &layout, &first, true, "", 0, 8, null);
+    try cache.renderRow(&app_tui, 3, 11, &theme, &layout, &second, false, "", 0, 8, null);
+    app_tui.frame_len = 0;
+    try cache.renderRow(&app_tui, 3, 10, &theme, &layout, &first, false, "", 0, 8, null);
+    try cache.renderRow(&app_tui, 3, 11, &theme, &layout, &second, true, "", 0, 8, null);
+    try expectCursorBeforeText(buf[0..app_tui.frame_len], "\x1b[10;3H", "42");
+    try expectCursorBeforeText(buf[0..app_tui.frame_len], "\x1b[11;3H", "43");
+
+    app_tui.frame_len = 0;
+    try cache.finishRows(&app_tui, 1);
+    try std.testing.expect(std.mem.startsWith(u8, buf[0..app_tui.frame_len], "\x1b[11;3H"));
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..app_tui.frame_len], "43") == null);
+    app_tui.frame_len = 0;
+    try cache.finishRows(&app_tui, 1);
+    try std.testing.expectEqual(@as(usize, 0), app_tui.frame_len);
+    try cache.renderRow(&app_tui, 3, 10, &theme, &layout, &second, false, "", 0, 8, null);
+    try expectCursorBeforeText(buf[0..app_tui.frame_len], "\x1b[10;3H", "43");
+}
+
+test "process row cache includes tree prefixes theme columns and power" {
+    var buf: [8192]u8 = undefined;
+    var app_tui = testTui(&buf);
+    var cache = render.ProcessTableCache.init(std.testing.allocator);
+    defer cache.deinit();
+    const region: render.ProcessTableCache.Region = .{ .x = 3, .y = 10, .width = 76, .height = 2 };
+    var theme = config.themePreset(.default);
+    var columns = config.ProcessColumns.defaultsMain();
+    var layout = render.planProcessTableLayout(columns, region.width);
+    const proc: ztop.sysinfo.ProcStats = .{ .pid = 42, .cpu_percent = 100 };
+    try cache.clearFrame(&app_tui, 80, 24, region);
+    try cache.renderRow(&app_tui, 3, 10, &theme, &layout, &proc, false, "", 0, 8, 20);
+
+    app_tui.frame_len = 0;
+    try cache.renderRow(&app_tui, 3, 10, &theme, &layout, &proc, false, "|- ", 3, 8, 20);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..app_tui.frame_len], "|- ") != null);
+    app_tui.frame_len = 0;
+    theme.text = .magenta;
+    try cache.renderRow(&app_tui, 3, 10, &theme, &layout, &proc, false, "|- ", 3, 8, 20);
+    try std.testing.expect(app_tui.frame_len > 0);
+
+    columns.energy = true;
+    layout = render.planProcessTableLayout(columns, region.width);
+    app_tui.frame_len = 0;
+    try cache.renderRow(&app_tui, 3, 10, &theme, &layout, &proc, false, "|- ", 3, 8, 20);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..app_tui.frame_len], "1.75W") != null);
+    app_tui.frame_len = 0;
+    try cache.renderRow(&app_tui, 3, 10, &theme, &layout, &proc, false, "|- ", 3, 8, 40);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..app_tui.frame_len], "3.50W") != null);
+}
+
+test "process row cache invalidates after overlays and geometry changes" {
+    var buf: [8192]u8 = undefined;
+    var app_tui = testTui(&buf);
+    var cache = render.ProcessTableCache.init(std.testing.allocator);
+    defer cache.deinit();
+    var region: render.ProcessTableCache.Region = .{ .x = 3, .y = 10, .width = 76, .height = 2 };
+    const theme = config.themePreset(.default);
+    const layout = render.planProcessTableLayout(config.ProcessColumns.defaultsMain(), region.width);
+    const proc: ztop.sysinfo.ProcStats = .{ .pid = 42 };
+    try cache.clearFrame(&app_tui, 80, 24, region);
+    try cache.renderRow(&app_tui, 3, 10, &theme, &layout, &proc, false, "", 0, 8, null);
+
+    try cache.clearFrame(&app_tui, 80, 24, null);
+    try cache.clearFrame(&app_tui, 80, 24, region);
+    app_tui.frame_len = 0;
+    try cache.renderRow(&app_tui, 3, 10, &theme, &layout, &proc, false, "", 0, 8, null);
+    try std.testing.expect(app_tui.frame_len > 0);
+
+    region.y = 11;
+    try cache.clearFrame(&app_tui, 80, 24, region);
+    app_tui.frame_len = 0;
+    try cache.renderRow(&app_tui, 3, 11, &theme, &layout, &proc, false, "", 0, 8, null);
+    try expectCursorBeforeText(buf[0..app_tui.frame_len], "\x1b[11;3H", "42");
+    try cache.clearFrame(&app_tui, 80, 25, region);
+    app_tui.frame_len = 0;
+    try cache.renderRow(&app_tui, 3, 11, &theme, &layout, &proc, false, "", 0, 8, null);
+    try std.testing.expect(app_tui.frame_len > 0);
 }
 
 test "planProcessTableLayout keeps enabled columns when width allows" {

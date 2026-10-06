@@ -31,7 +31,7 @@ pub fn renderLifelineView(
 
     // Layout: Top 5 rows for graphs (CPU and Mem sparklines)
     const graph_height: u16 = 5;
-    const graph_width = inner_width / 2;
+    const graph_width = inner_width >> 1;
     const right_graph_x = inner_x + graph_width + 1;
 
     // CPU Graph

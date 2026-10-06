@@ -57,6 +57,13 @@ pub const Tui = struct {
     };
 
     const STYLE_CACHE_CAPACITY = 32;
+    const HORIZONTAL_BORDER = blk: {
+        var buf: [512 * "─".len]u8 = undefined;
+        for (0..512) |i| {
+            @memcpy(buf[i * "─".len ..][0.."─".len], "─");
+        }
+        break :blk buf;
+    };
 
     /// Fixed-size memoization cache
     pub const StyleSequenceCache = struct {
@@ -426,18 +433,17 @@ pub const Tui = struct {
     }
 
     pub fn beginFrame(self: *Tui) !void {
-        if (!self.features.synchronized_output or self.frame_active) return;
-
-        try self.out.writeStreamingAll(self.io, "\x1b[?2026h");
+        if (self.frame_active) return;
         self.frame_active = true;
+        errdefer self.frame_active = false;
+        if (self.features.synchronized_output) try self.bufWrite("\x1b[?2026h");
     }
 
     pub fn endFrame(self: *Tui) !void {
         if (!self.frame_active) return;
 
-        // Flush buffered frame data then send sync-end marker
+        if (self.features.synchronized_output) try self.bufWrite("\x1b[?2026l");
         try self.flushBuffer();
-        try self.out.writeStreamingAll(self.io, "\x1b[?2026l");
         self.frame_active = false;
     }
 
@@ -474,11 +480,12 @@ pub const Tui = struct {
         if (count == 0 or char.len == 0) return;
 
         try self.setStyleIfChanged(style);
-        var buf: [512 * char.len]u8 = undefined;
+        const buf = comptime blk: {
+            var bytes: [512 * char.len]u8 = undefined;
+            for (0..512) |i| @memcpy(bytes[i * char.len ..][0..char.len], char);
+            break :blk bytes;
+        };
         const chunk_count = @min(count, 512);
-        for (0..chunk_count) |i| {
-            @memcpy(buf[i * char.len ..][0..char.len], char);
-        }
         var remaining = count;
         while (remaining > 0) {
             const repeats = @min(remaining, chunk_count);
@@ -578,6 +585,15 @@ pub const Tui = struct {
         return self.nerd_fonts;
     }
 
+    fn writeHorizontalBorder(self: *Tui, count: usize) !void {
+        var remaining = count * "─".len;
+        while (remaining > 0) {
+            const len = @min(remaining, HORIZONTAL_BORDER.len);
+            try self.bufWrite(HORIZONTAL_BORDER[0..len]);
+            remaining -= len;
+        }
+    }
+
     pub fn drawBoxStyled(self: *Tui, x: u16, y: u16, width: u16, height: u16, title: []const u8, border_style: Style, title_style: Style) !void {
         try self.setStyleIfChanged(border_style);
 
@@ -586,7 +602,7 @@ pub const Tui = struct {
         // Draw top border
         try self.moveCursor(x, y);
         try self.bufWrite("╭");
-        try self.writeRepeated(border_style, "─", repeat_count);
+        try self.writeHorizontalBorder(repeat_count);
         try self.bufWrite("╮");
 
         // Draw sides
@@ -600,7 +616,7 @@ pub const Tui = struct {
         // Draw bottom border
         try self.moveCursor(x, y + height - 1);
         try self.bufWrite("╰");
-        try self.writeRepeated(border_style, "─", repeat_count);
+        try self.writeHorizontalBorder(repeat_count);
         try self.bufWrite("╯");
         try self.resetStyle();
 

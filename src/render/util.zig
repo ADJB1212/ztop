@@ -139,7 +139,7 @@ pub fn renderMeter(
         total_eighths,
         @as(usize, @intFromFloat(@round((clamped / 100.0) * @as(f32, @floatFromInt(total_eighths))))),
     );
-    const full_blocks = filled_eighths / 8;
+    const full_blocks = filled_eighths >> 3;
     const partial_block = filled_eighths % 8;
 
     try app_tui.writeRepeated(fill_style, meter_blocks[8], full_blocks);

@@ -126,15 +126,45 @@ test "power sampling init, sample, and deinit" {
     }
 }
 
-test "cached thermal stats across multiple invocations" {
+test "thermal results are sampled immediately then cached for two seconds" {
     var si = darwin.SysInfo.init(std.testing.io);
     defer si.deinit();
+    const sentinel: common.ThermalStats = .{ .cpu_temp = -1, .gpu_temp = -1 };
+    si.thermal_stats = sentinel;
+    try std.testing.expectEqual(@as(?i64, null), si.prev_thermal_ms);
 
-    const t1 = si.getThermalStats();
-    const t2 = si.getThermalStats();
-    _ = t1;
-    _ = t2;
+    const first = si.getThermalStats();
+    try std.testing.expect(!std.meta.eql(sentinel, first));
+    try std.testing.expectEqual(first, si.thermal_stats);
+    const sampled_at = si.prev_thermal_ms.?;
     try std.testing.expect(si.sensors_initialized);
+
+    si.thermal_stats = sentinel;
+    try std.testing.expectEqual(sentinel, si.getThermalStats());
+    try std.testing.expectEqual(sampled_at, si.prev_thermal_ms.?);
+
+    si.prev_thermal_ms = std.Io.Clock.now(.real, std.testing.io).toMilliseconds() - 2_000;
+    const refreshed = si.getThermalStats();
+    try std.testing.expect(!std.meta.eql(sentinel, refreshed));
+    try std.testing.expectEqual(refreshed, si.thermal_stats);
+    try std.testing.expect(si.prev_thermal_ms.? >= sampled_at);
+}
+
+test "thermal cache retains unavailable results and refreshes after clock rollback" {
+    var si = darwin.SysInfo.init(std.testing.io);
+    defer si.deinit();
+    const now = std.Io.Clock.now(.real, std.testing.io).toMilliseconds();
+    si.prev_thermal_ms = now;
+    si.thermal_stats = .{};
+    try std.testing.expectEqual(common.ThermalStats{}, si.getThermalStats());
+    try std.testing.expectEqual(now, si.prev_thermal_ms.?);
+
+    si.thermal_stats = .{ .cpu_temp = -1, .gpu_temp = -1 };
+    si.prev_thermal_ms = now + 60_000;
+    const refreshed = si.getThermalStats();
+    try std.testing.expect(refreshed.cpu_temp == null or refreshed.cpu_temp.? >= 0);
+    try std.testing.expect(refreshed.gpu_temp == null or refreshed.gpu_temp.? >= 0);
+    try std.testing.expect(si.prev_thermal_ms.? < now + 60_000);
 }
 
 test "SysInfo deinit releases owned clients and collectors" {
@@ -179,6 +209,112 @@ test "cached proc stats preserves ppid and launch_cmd_fetched across polls" {
         try std.testing.expect(entry.launch_cmd_fetched);
         if (i > 0) try std.testing.expect(cached[i - 1].pid < entry.pid);
     }
+}
+
+fn cachedCurrentProcess(si: *darwin.SysInfo) !*common.ProcCpuEntry {
+    const pid: u32 = @intCast(std.c.getpid());
+    for (si.proc_buffers[si.prev_proc_buffer][0..si.prev_proc_count]) |*entry| {
+        if (entry.pid == pid) return entry;
+    }
+    return error.CurrentProcessNotFound;
+}
+
+fn currentProcess(procs: []const common.ProcStats) !*const common.ProcStats {
+    const pid: u32 = @intCast(std.c.getpid());
+    for (procs) |*proc| {
+        if (proc.pid == pid) return proc;
+    }
+    return error.CurrentProcessNotFound;
+}
+
+test "proc name and launch command results are reused across ticks including empty commands" {
+    var si = darwin.SysInfo.init(std.testing.io);
+    defer si.deinit();
+    var buf: [common.MAX_PROCS]common.ProcStats = undefined;
+    _ = try si.getProcStats(&buf, .cpu);
+
+    const cached = try cachedCurrentProcess(&si);
+    const name = "cached-name";
+    const command = "cached-command --arg";
+    @memcpy(cached.name_buf[0..name.len], name);
+    cached.name_len = name.len;
+    @memcpy(cached.launch_cmd_buf[0..command.len], command);
+    cached.launch_cmd_len = command.len;
+    cached.launch_cmd_fetched = true;
+
+    for (0..2) |_| {
+        const proc = try currentProcess(try si.getProcStats(&buf, .cpu));
+        try std.testing.expectEqualStrings(name, proc.name());
+        try std.testing.expectEqualStrings(command, proc.launchCommand());
+    }
+
+    (try cachedCurrentProcess(&si)).launch_cmd_len = 0;
+    const proc = try currentProcess(try si.getProcStats(&buf, .cpu));
+    try std.testing.expectEqualStrings(name, proc.name());
+    try std.testing.expectEqualStrings("", proc.launchCommand());
+    try std.testing.expect((try cachedCurrentProcess(&si)).launch_cmd_fetched);
+}
+
+test "proc metadata cache is discarded when the process start time changes" {
+    var si = darwin.SysInfo.init(std.testing.io);
+    defer si.deinit();
+    var buf: [common.MAX_PROCS]common.ProcStats = undefined;
+    const original = (try currentProcess(try si.getProcStats(&buf, .cpu))).*;
+
+    const cached = try cachedCurrentProcess(&si);
+    try std.testing.expect(cached.proc_start_abstime > 0);
+    cached.proc_start_abstime += 1;
+    const stale = "stale-metadata";
+    @memcpy(cached.name_buf[0..stale.len], stale);
+    cached.name_len = stale.len;
+    @memcpy(cached.launch_cmd_buf[0..stale.len], stale);
+    cached.launch_cmd_len = stale.len;
+    cached.launch_cmd_fetched = true;
+
+    const proc = try currentProcess(try si.getProcStats(&buf, .cpu));
+    try std.testing.expectEqualStrings(original.name(), proc.name());
+    try std.testing.expectEqualStrings(original.launchCommand(), proc.launchCommand());
+    try std.testing.expectEqual(@as(f32, 0), proc.cpu_percent);
+}
+
+test "battery results are sampled immediately then cached for five seconds" {
+    var si = darwin.SysInfo.init(std.testing.io);
+    defer si.deinit();
+    const sentinel: common.BatteryStats = .{ .charge_percent = -1, .power_draw_w = -1, .status = .charging };
+    si.battery_stats = sentinel;
+    try std.testing.expectEqual(@as(?i64, null), si.prev_battery_ms);
+
+    const first = si.getBatteryStats();
+    try std.testing.expect(!std.meta.eql(sentinel, first));
+    try std.testing.expectEqual(first, si.battery_stats);
+    const sampled_at = si.prev_battery_ms.?;
+
+    si.battery_stats = sentinel;
+    try std.testing.expectEqual(sentinel, si.getBatteryStats());
+    try std.testing.expectEqual(sampled_at, si.prev_battery_ms.?);
+
+    si.prev_battery_ms = std.Io.Clock.now(.real, std.testing.io).toMilliseconds() - 5_000;
+    const refreshed = si.getBatteryStats();
+    try std.testing.expect(!std.meta.eql(sentinel, refreshed));
+    try std.testing.expectEqual(refreshed, si.battery_stats);
+    try std.testing.expect(si.prev_battery_ms.? >= sampled_at);
+}
+
+test "battery cache retains unavailable results and refreshes after clock rollback" {
+    var si = darwin.SysInfo.init(std.testing.io);
+    defer si.deinit();
+    const now = std.Io.Clock.now(.real, std.testing.io).toMilliseconds();
+    si.prev_battery_ms = now;
+    si.battery_stats = .{};
+    try std.testing.expectEqual(common.BatteryStats{}, si.getBatteryStats());
+    try std.testing.expectEqual(now, si.prev_battery_ms.?);
+
+    si.battery_stats = .{ .charge_percent = -1, .power_draw_w = -1 };
+    si.prev_battery_ms = now + 60_000;
+    const refreshed = si.getBatteryStats();
+    try std.testing.expect(refreshed.charge_percent == null or refreshed.charge_percent.? >= 0);
+    try std.testing.expect(refreshed.power_draw_w == null or refreshed.power_draw_w.? >= 0);
+    try std.testing.expect(si.prev_battery_ms.? < now + 60_000);
 }
 
 test "aggregate CPU stats avoid per-core sampling" {
