@@ -145,16 +145,7 @@ fn formatSocketAddress(dest: *[46]u8, in_info: c.struct_in_sockinfo, is_local: b
 
     if ((in_info.insi_vflag & c.INI_IPV6) != 0) {
         const addr = if (is_local) in_info.insi_laddr.ina_6 else in_info.insi_faddr.ina_6;
-        const octets = std.mem.asBytes(&addr);
-        _ = std.fmt.bufPrint(
-            dest,
-            "{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}:{x:0>2}{x:0>2}",
-            .{
-                octets[0],  octets[1],  octets[2],  octets[3],
-                octets[4],  octets[5],  octets[6],  octets[7],
-                octets[8],  octets[9],  octets[10], octets[11],
-                octets[12], octets[13], octets[14], octets[15],
-            },
-        ) catch {};
+        const ip: std.Io.net.Ip6Address.Unresolved = .{ .bytes = std.mem.asBytes(&addr)[0..16].*, .interface_name = null };
+        _ = std.fmt.bufPrint(dest, "{f}", .{ip}) catch {};
     }
 }

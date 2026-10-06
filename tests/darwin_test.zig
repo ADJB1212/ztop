@@ -61,8 +61,8 @@ test "parseSocketFdInfo extracts IPv6 UDP endpoints" {
     try std.testing.expectEqual(@as(u16, 5353), conn.local_port);
     try std.testing.expectEqual(@as(u16, 5354), conn.remote_port);
     try std.testing.expectEqual(common.NetConnState.unknown, conn.state);
-    try std.testing.expectEqualStrings("2001:0db8:0000:0000:0000:0000:0000:0001", std.mem.sliceTo(&conn.local_addr, 0));
-    try std.testing.expectEqualStrings("2001:0db8:0000:0000:0000:0000:0000:0002", std.mem.sliceTo(&conn.remote_addr, 0));
+    try std.testing.expectEqualStrings("2001:db8::1", std.mem.sliceTo(&conn.local_addr, 0));
+    try std.testing.expectEqualStrings("2001:db8::2", std.mem.sliceTo(&conn.remote_addr, 0));
     try std.testing.expectEqualStrings("dns", conn.name());
 }
 

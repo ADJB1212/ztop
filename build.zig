@@ -4,9 +4,15 @@ const Translator = @import("translate_c").Translator;
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
+    if (target.result.os.tag != .macos) {
+        std.debug.panic("ztop is only supported on macOS", .{});
+    }
+    if (target.result.cpu.arch != .aarch64) {
+        std.debug.panic("ztop is only supported on ARM (Apple Silicon) Macs", .{});
+    }
 
     const optimize = b.standardOptimizeOption(.{});
-    const sdk_root = b.option([]const u8, "sdk-root", "Path to macOS SDK root (for cross-compilation)");
+    const sdk_root = resolveSdkRoot(b);
     const version = std.SemanticVersion.parse(manifest.version) catch @panic("invalid version in build.zig.zon");
 
     const build_options = b.addOptions();
@@ -16,6 +22,7 @@ pub fn build(b: *std.Build) void {
     const mod = b.addModule("ztop", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
+        .optimize = optimize,
     });
 
     const exe = b.addExecutable(.{
@@ -32,7 +39,10 @@ pub fn build(b: *std.Build) void {
         }),
     });
     exe.root_module.addOptions("build_options", build_options);
-    exe.link_gc_sections = true;
+
+    if (exe.root_module.optimize != .debug) {
+        exe.link_gc_sections = true;
+    }
 
     const tests_module = b.createModule(.{
         .root_source_file = b.path("tests/main.zig"),
@@ -48,46 +58,18 @@ pub fn build(b: *std.Build) void {
         .root_module = tests_module,
     });
 
-    if (target.result.os.tag != .macos) {
-        std.debug.panic("ztop is only supported on macOS", .{});
-    }
-    if (target.result.cpu.arch != .aarch64) {
-        std.debug.panic("ztop is only supported on ARM (Apple Silicon) Macs", .{});
-    }
-
-    const swiftc = b.addSystemCommand(&.{ "swiftc", "-O", "-gnone", "-emit-library", "-static", "-framework", "FoundationModels" });
-    if (sdk_root) |root| {
-        swiftc.addArgs(&.{ "-sdk", root });
-    }
+    const swiftc = b.addSystemCommand(&.{ "swiftc", "-emit-library", "-static", "-framework", "FoundationModels", "-use-ld=lld" });
+    swiftc.addArgs(switch (optimize) {
+        .debug => &.{ "-Onone", "-g" },
+        .fast, .safe => &.{ "-O", "-whole-module-optimization", "-gnone" },
+        .small => &.{ "-Osize", "-whole-module-optimization", "-gnone" },
+    });
+    swiftc.addArgs(&.{ "-sdk", sdk_root });
     const fm_lib = swiftc.addPrefixedOutputFileArg("-o", "libfmbridge.a");
     swiftc.addFileArg(b.path("src/ai/fm_bridge.swift"));
 
-    exe.root_module.addObjectFile(fm_lib);
-    tests.root_module.addObjectFile(fm_lib);
-
-    exe.root_module.addCSourceFiles(.{
-        .files = &.{ "src/sysinfo/darwin/wifi.m", "src/sysinfo/darwin/power.m" },
-        .flags = &.{ "-O3", "-ffast-math", "-ftree-vectorize" },
-    });
-
-    tests.root_module.addCSourceFiles(.{
-        .files = &.{ "src/sysinfo/darwin/wifi.m", "src/sysinfo/darwin/power.m" },
-    });
-
-    var sdk_path_buf: [1024]u8 = undefined;
-    const effective_sdk_root: ?[]const u8 = if (sdk_root) |root| root else blk: {
-        var code: u8 = 0;
-        if (b.runAllowFail(&.{ "xcrun", "--show-sdk-path" }, &code, .ignore)) |out| {
-            if (code == 0) {
-                const trimmed = std.mem.trimEnd(u8, out, "\r\n ");
-                if (trimmed.len > 0 and trimmed.len < sdk_path_buf.len) {
-                    @memcpy(sdk_path_buf[0..trimmed.len], trimmed);
-                    break :blk sdk_path_buf[0..trimmed.len];
-                }
-            }
-        } else |_| {}
-        break :blk null;
-    };
+    configureNativeModule(b, exe.root_module, sdk_root, fm_lib);
+    configureNativeModule(b, tests.root_module, sdk_root, fm_lib);
 
     const translate_c = b.dependency("translate_c", .{});
     const darwin_c: Translator = .init(translate_c, .{
@@ -97,25 +79,55 @@ pub fn build(b: *std.Build) void {
     });
     mod.addImport("darwin_c", darwin_c.mod);
 
-    if (effective_sdk_root) |root| {
-        darwin_c.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/include" }) });
-        darwin_c.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ root, "System/Library/Frameworks" }) });
-        exe.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/include" }) });
-        exe.root_module.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ root, "System/Library/Frameworks" }) });
-        exe.root_module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/lib/swift" }) });
-        exe.root_module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/lib" }) });
-        tests.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/include" }) });
-        tests.root_module.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ root, "System/Library/Frameworks" }) });
-        tests.root_module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/lib/swift" }) });
-        tests.root_module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ root, "usr/lib" }) });
-    }
-    exe.root_module.addLibraryPath(.{ .cwd_relative = "/usr/lib/swift" });
-    exe.root_module.addLibraryPath(.{ .cwd_relative = "/usr/lib" });
-    tests.root_module.addLibraryPath(.{ .cwd_relative = "/usr/lib/swift" });
-    tests.root_module.addLibraryPath(.{ .cwd_relative = "/usr/lib" });
+    darwin_c.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ sdk_root, "usr/include" }) });
+    darwin_c.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ sdk_root, "System/Library/Frameworks" }) });
 
-    exe.root_module.linkSystemLibrary("c", .{});
-    tests.root_module.linkSystemLibrary("c", .{});
+    b.installArtifact(exe);
+
+    const run_step = b.step("run", "Run the app");
+    const run_cmd = b.addRunArtifact(exe);
+    run_step.dependOn(&run_cmd.step);
+    run_cmd.step.dependOn(b.getInstallStep());
+    run_cmd.addPassthruArgs();
+
+    const test_step = b.step("test", "Run unit tests");
+    const run_tests = b.addRunArtifact(tests);
+    const print_success = b.addSystemCommand(&.{ "echo", "All tests passed" });
+    print_success.step.dependOn(&run_tests.step);
+    test_step.dependOn(&print_success.step);
+}
+
+fn resolveSdkRoot(b: *std.Build) []const u8 {
+    if (b.option([]const u8, "sdk-root", "Path to macOS SDK root (for cross-compilation)")) |root| {
+        if (root.len == 0) std.debug.panic("-Dsdk-root must not be empty", .{});
+        return root;
+    }
+
+    var code: u8 = 0;
+    const output = b.runAllowFail(&.{ "xcrun", "--sdk", "macosx", "--show-sdk-path" }, &code, .inherit) catch |err| {
+        std.debug.panic("Unable to locate the macOS SDK ({s}); set -Dsdk-root", .{@errorName(err)});
+    };
+    const root = std.mem.trimEnd(u8, output, "\r\n ");
+    if (code != 0 or root.len == 0) {
+        std.debug.panic("Unable to locate the macOS SDK; set -Dsdk-root", .{});
+    }
+    return root;
+}
+
+fn configureNativeModule(b: *std.Build, module: *std.Build.Module, sdk_root: []const u8, fm_lib: std.Build.LazyPath) void {
+    module.addObjectFile(fm_lib);
+    module.addCSourceFiles(.{
+        .files = &.{ "src/sysinfo/darwin/wifi.m", "src/sysinfo/darwin/power.m" },
+        .flags = &([_][]const u8{"-fuse-ld=lld"} ++ if (module.optimize != .debug) [_][]const u8{ "-O3", "-ftree-vectorize" } else [_][]const u8{ "-Wall", "-Wextra" }),
+    });
+    module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ sdk_root, "usr/include" }) });
+    module.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ sdk_root, "System/Library/Frameworks" }) });
+    module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sdk_root, "usr/lib/swift" }) });
+    module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sdk_root, "usr/lib" }) });
+    module.addLibraryPath(.{ .cwd_relative = "/usr/lib/swift" });
+    module.addLibraryPath(.{ .cwd_relative = "/usr/lib" });
+    module.linkSystemLibrary("c", .{});
+    module.linkSystemLibrary("IOReport", .{});
 
     const swift_libs: []const []const u8 = &.{
         "swiftCore",           "swift_Concurrency",      "swiftDispatch",
@@ -126,8 +138,7 @@ pub fn build(b: *std.Build) void {
         "swiftCoreImage",      "swiftMetal",             "swiftUniformTypeIdentifiers",
     };
     for (swift_libs) |lib| {
-        exe.root_module.linkSystemLibrary(lib, .{});
-        tests.root_module.linkSystemLibrary(lib, .{});
+        module.linkSystemLibrary(lib, .{});
     }
 
     const frameworks: []const []const u8 = &.{
@@ -135,33 +146,6 @@ pub fn build(b: *std.Build) void {
     };
 
     for (frameworks) |framework| {
-        exe.root_module.linkFramework(framework, .{});
-        tests.root_module.linkFramework(framework, .{});
+        module.linkFramework(framework, .{});
     }
-
-    exe.root_module.linkSystemLibrary("IOReport", .{});
-    tests.root_module.linkSystemLibrary("IOReport", .{});
-
-    b.installArtifact(exe);
-
-    const run_step = b.step("run", "Run the app");
-
-    const run_cmd = b.addRunArtifact(exe);
-    run_step.dependOn(&run_cmd.step);
-
-    run_cmd.step.dependOn(b.getInstallStep());
-
-    run_cmd.addPassthruArgs();
-
-    const test_step = b.step("test", "Run unit tests");
-
-    const run_tests = b.addRunArtifact(tests);
-
-    const print_success = b.addSystemCommand(&.{
-        "echo",
-        "\x1b[32m✔ All tests passed!\x1b[0m",
-    });
-    print_success.step.dependOn(&run_tests.step);
-
-    test_step.dependOn(&print_success.step);
 }

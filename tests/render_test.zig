@@ -25,6 +25,62 @@ fn testTui(frame_buf: []u8) tui.Tui {
     };
 }
 
+fn stripStyles(text: []const u8, buf: []u8) []const u8 {
+    var i: usize = 0;
+    var len: usize = 0;
+    while (i < text.len) {
+        if (text[i] == '\x1b' and i + 1 < text.len and text[i + 1] == '[') {
+            i += 2;
+            while (i < text.len and !(text[i] >= 0x40 and text[i] <= 0x7e)) : (i += 1) {}
+            if (i < text.len) i += 1;
+        } else {
+            buf[len] = text[i];
+            len += 1;
+            i += 1;
+        }
+    }
+    return buf[0..len];
+}
+
+test "connection endpoints bracket IPv6 and preserve ports when shortened" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("[2001:db8::1]:443", render.connections.formatEndpoint(&buf, "2001:db8::1", 443, 64));
+    try std.testing.expectEqualStrings("127.0.0.1:8080", render.connections.formatEndpoint(&buf, "127.0.0.1", 8080, 64));
+    const shortened = render.connections.formatEndpoint(&buf, "fe80:17::8bd:4c0e:39b6:5e94", 65535, 24);
+    try std.testing.expectEqual(@as(usize, 24), shortened.len);
+    try std.testing.expect(std.mem.indexOf(u8, shortened, "...") != null);
+    try std.testing.expect(std.mem.endsWith(u8, shortened, "]:65535"));
+    try std.testing.expectEqualStrings("::", render.connections.formatEndpoint(&buf, "::", 0, 64));
+}
+
+test "connection headers and long IPv6 rows fit narrow and wide terminals" {
+    var conn: ztop.sysinfo.common.NetConnection = .{ .protocol = .tcp6, .state = .established, .pid = 1234567 };
+    const local = "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff";
+    @memcpy(conn.local_addr[0..local.len], local);
+    @memcpy(conn.remote_addr[0..local.len], local);
+    conn.local_port = 65535;
+    conn.remote_port = 65535;
+    const name = "long-process-name-éééééééééé";
+    @memcpy(conn.process_name[0..name.len], name);
+    conn.process_name_len = name.len;
+    const theme = config.themePreset(.default);
+    for (0..241) |width| {
+        const layout = render.connections.Layout.init(width);
+        var header_len: usize = 0;
+        for ([_]?ztop.sysinfo.common.NetConnection{ null, conn }, 0..) |value, row| {
+            var frame_buf: [4096]u8 = undefined;
+            var app_tui = testTui(&frame_buf);
+            try render.connections.renderRow(&app_tui, theme, layout, value, row == 1);
+            var plain_buf: [4096]u8 = undefined;
+            const plain = stripStyles(frame_buf[0..app_tui.frame_len], &plain_buf);
+            const len = try std.unicode.utf8CountCodepoints(plain);
+            try std.testing.expect(len <= width);
+            if (row == 0) header_len = len else try std.testing.expectEqual(header_len, len);
+            try std.testing.expect(std.mem.indexOfScalar(u8, plain, '\n') == null);
+        }
+    }
+}
+
 test "SIMD graph levels agree with scalar quantization across vector tails" {
     const metrics = [_]?f32{ null, 0, -1, 0.001, 12.5, 33.3, 50, 99.999, 100, 101, 6.25, 75, 25 };
     const rates = [_]?u64{ null, 0, 1, 7, 8, 9, 15, 16, 17, 1024, std.math.maxInt(u64), 3, 100 };

@@ -19,6 +19,7 @@ const process_lifeline = @import("render/process_lifeline.zig");
 const pipeline_lens = @import("render/pipeline_lens.zig");
 const overlays = @import("render/overlays.zig");
 const footer = @import("render/footer.zig");
+pub const connections = @import("render/connections.zig");
 
 // Re-exports from util.zig
 pub const UnitValue = util.UnitValue;
