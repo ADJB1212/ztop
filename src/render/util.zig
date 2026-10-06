@@ -2,6 +2,7 @@ const std = @import("std");
 const tui = @import("../tui.zig");
 const sysinfo = @import("../sysinfo.zig");
 const config = @import("../config.zig");
+const simd = @import("../simd.zig");
 const Tui = tui.Tui;
 
 pub fn usageColor(theme: config.Theme, percent: f32) Tui.Color {
@@ -71,6 +72,8 @@ pub const TextAlign = enum {
 
 pub fn clipUtf8(text: []const u8, max_codepoints: usize) []const u8 {
     if (max_codepoints == 0) return text[0..0];
+    const prefix = text[0..@min(text.len, max_codepoints)];
+    if (simd.asciiPrefixLen(prefix) == prefix.len) return prefix;
 
     var view = std.unicode.Utf8View.init(text) catch {
         return if (text.len > max_codepoints) text[0..max_codepoints] else text;

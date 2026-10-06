@@ -322,6 +322,7 @@ pub const ThreadStats = struct {
 pub const ProcCpuEntry = struct {
     pid: u32,
     ppid: u32 = 0,
+    open_files: ?u32 = null,
     proc_start_abstime: u64 = 0,
     cpu_total: u64,
     disk_read: u64 = 0,

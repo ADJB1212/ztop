@@ -4,6 +4,7 @@ test {
     _ = @import("common_test.zig");
     _ = @import("config_test.zig");
     _ = @import("history_test.zig");
+    _ = @import("simd_test.zig");
     _ = @import("process_commands_test.zig");
     _ = @import("process_tracer_test.zig");
     _ = @import("render_test.zig");

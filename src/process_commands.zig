@@ -1,5 +1,6 @@
 const std = @import("std");
 const common = @import("sysinfo/common.zig");
+const simd = @import("simd.zig");
 
 const PID_INDEX_CAPACITY = common.MAX_PROCS * 2;
 const empty_pid_index = std.math.maxInt(u16);
@@ -188,7 +189,10 @@ pub fn containsParentPid(entries: []const ZombieParentEntry, pid: u32) bool {
 
 pub fn matchesProcessFilter(proc: *const common.ProcStats, filter: []const u8) bool {
     if (filter.len == 0) return true;
-    if (std.ascii.findIgnoreCase(proc.name(), filter) != null) return true;
+    if (simd.containsIgnoreCase(proc.name(), filter)) return true;
+    for (filter) |ch| {
+        if (!std.ascii.isDigit(ch)) return false;
+    }
 
     var pid_buf: [10]u8 = undefined;
     const pid = std.fmt.bufPrint(&pid_buf, "{d}", .{proc.pid}) catch return false;

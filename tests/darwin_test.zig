@@ -356,3 +356,61 @@ test "disk and GPU collectors retain discovered services" {
     defer std.testing.allocator.free(gpus);
     try std.testing.expect(si.gpu_collector.initialized);
 }
+
+test "GPU refresh reuses caller capacity without accumulating samples" {
+    var si = darwin.SysInfo.init(std.testing.io);
+    defer si.deinit();
+    var gpus: std.ArrayList(common.GpuStats) = .empty;
+    defer gpus.deinit(std.testing.allocator);
+    try gpus.ensureTotalCapacity(std.testing.allocator, 64);
+    const buffer = gpus.items.ptr;
+    try si.refreshGpuStats(std.testing.allocator, &gpus);
+    const count = gpus.items.len;
+    try si.refreshGpuStats(std.testing.allocator, &gpus);
+    try std.testing.expectEqual(count, gpus.items.len);
+    try std.testing.expectEqual(buffer, gpus.items.ptr);
+}
+
+test "swap cache refreshes on expiry and clock rollback" {
+    var si = darwin.SysInfo.init(std.testing.io);
+    defer si.deinit();
+    _ = si.getMemStats();
+    const sampled_at = si.prev_swap_ms.?;
+    si.swap_usage.xsu_total = 123;
+    si.swap_usage.xsu_used = 45;
+    const cached = si.getMemStats();
+    try std.testing.expectEqual(@as(u64, 123), cached.swap_total);
+    try std.testing.expectEqual(@as(u64, 45), cached.swap_used);
+    try std.testing.expectEqual(sampled_at, si.prev_swap_ms.?);
+
+    si.prev_swap_ms = std.Io.Clock.now(.real, std.testing.io).toMilliseconds() - 2_000;
+    _ = si.getMemStats();
+    try std.testing.expect(si.prev_swap_ms.? >= sampled_at);
+    const future = std.Io.Clock.now(.real, std.testing.io).toMilliseconds() + 60_000;
+    si.prev_swap_ms = future;
+    _ = si.getMemStats();
+    try std.testing.expect(si.prev_swap_ms.? < future);
+}
+
+test "connection refresh skips known empty descriptor tables and scans unknown ones" {
+    var si = darwin.SysInfo.init(std.testing.io);
+    defer si.deinit();
+    const socket = std.c.socket(std.c.AF.INET, std.c.SOCK.STREAM, 0);
+    try std.testing.expect(socket >= 0);
+    defer _ = std.c.close(socket);
+    const pid: u32 = @intCast(std.c.getpid());
+    si.prev_proc_count = 1;
+    si.proc_buffers[si.prev_proc_buffer][0] = .{ .pid = pid, .cpu_total = 0, .open_files = 0 };
+    var connections: std.ArrayList(common.NetConnection) = .empty;
+    defer connections.deinit(std.testing.allocator);
+    try si.refreshNetConnections(std.testing.allocator, &connections);
+    try std.testing.expectEqual(@as(usize, 0), connections.items.len);
+
+    si.proc_buffers[si.prev_proc_buffer][0].open_files = null;
+    try si.refreshNetConnections(std.testing.allocator, &connections);
+    try std.testing.expect(connections.items.len > 0);
+    for (connections.items) |connection| try std.testing.expectEqual(pid, connection.pid);
+    si.proc_buffers[si.prev_proc_buffer][0].open_files = 0;
+    try si.refreshNetConnections(std.testing.allocator, &connections);
+    try std.testing.expectEqual(@as(usize, 0), connections.items.len);
+}

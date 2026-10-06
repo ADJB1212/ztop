@@ -130,15 +130,47 @@ pub const ProcessTableCache = struct {
             var normalized_layout = layout.*;
             @memset(normalized_layout.columns[layout.count..], .pid);
             @memset(normalized_layout.column_widths[layout.count..], 0);
+            var visible_proc: sysinfo.ProcStats = .{ .pid = 0, .name_len = proc.name_len };
+            @memcpy(visible_proc.name_buf[0..proc.name_len], proc.name());
+            var show_energy = false;
+            for (layout.columns[0..layout.count]) |column| {
+                switch (column) {
+                    .pid => visible_proc.pid = proc.pid,
+                    .ppid => visible_proc.ppid = proc.ppid,
+                    .launch_path => {
+                        visible_proc.launch_cmd_len = proc.launch_cmd_len;
+                        @memcpy(visible_proc.launch_cmd_buf[0..proc.launch_cmd_len], proc.launchCommand());
+                    },
+                    .state => visible_proc.state = proc.state,
+                    .cpu => visible_proc.cpu_percent = proc.cpu_percent,
+                    .mem => visible_proc.mem_percent = proc.mem_percent,
+                    .threads => visible_proc.threads = proc.threads,
+                    .disk_read => visible_proc.disk_read_ps = proc.disk_read_ps,
+                    .disk_write => visible_proc.disk_write_ps = proc.disk_write_ps,
+                    .wakeups => {
+                        visible_proc.wakeups_ps = proc.wakeups_ps;
+                        visible_proc.context_switches_ps = proc.context_switches_ps;
+                    },
+                    .energy => show_energy = system_power_w != null,
+                }
+            }
+            if (show_energy) {
+                visible_proc.cpu_percent = proc.cpu_percent;
+                visible_proc.mem_percent = proc.mem_percent;
+                visible_proc.disk_read_ps = proc.disk_read_ps;
+                visible_proc.disk_write_ps = proc.disk_write_ps;
+                visible_proc.wakeups_ps = proc.wakeups_ps;
+                visible_proc.context_switches_ps = proc.context_switches_ps;
+            }
             input = .{
                 .theme = theme.*,
                 .layout = normalized_layout,
-                .proc = proc.*,
+                .proc = visible_proc,
                 .is_selected = is_selected,
                 .prefix_len = prefix.len,
                 .prefix_width = prefix_width,
-                .cpu_cores = cpu_cores,
-                .system_power_w = system_power_w,
+                .cpu_cores = if (show_energy) cpu_cores else 0,
+                .system_power_w = if (show_energy) system_power_w else null,
             };
             @memcpy(input.?.prefix[0..prefix.len], prefix);
             if (std.meta.eql(self.row_inputs[row], input)) return;
@@ -150,6 +182,7 @@ pub const ProcessTableCache = struct {
         scratch_tui.frame_len = 0;
         scratch_tui.current_style = null;
         try renderProcessRow(&scratch_tui, theme, layout, proc, is_selected, prefix, prefix_width, cpu_cores, system_power_w);
+        app_tui.style_cache = scratch_tui.style_cache;
         const rendered = scratch_tui.frame_buf[0..scratch_tui.frame_len];
         if (std.mem.eql(u8, previous[0..self.row_lengths[row]], rendered)) {
             self.row_inputs[row] = input;

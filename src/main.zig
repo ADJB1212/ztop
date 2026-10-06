@@ -20,6 +20,16 @@ const repo_label = "github.com/ADJB1212/ztop";
 var quit_flag = false;
 var sigwinch_flag = false;
 
+const ProcessViewKey = struct {
+    filter: [32]u8,
+    filter_len: usize,
+    sort_by: ztop.sysinfo.SortBy,
+    tree_view: bool,
+    show_zombie_parents: bool,
+    is_scrubbing: bool,
+    scrub_offset: usize,
+};
+
 fn handleSigInt(sig: posix.SIG) callconv(.c) void {
     _ = sig;
     quit_flag = true;
@@ -104,8 +114,8 @@ pub fn main(main_init: std.process.Init) !void {
     var filtered_is_lasts: [2048]u16 = std.mem.zeroes([2048]u16);
     var filtered_count: usize = 0;
     var tree_view: bool = app_config.default_tree_view;
-    var tree_cache_sort: ?ztop.sysinfo.SortBy = null;
-    var tree_cache_count: usize = 0;
+    var process_view_key: ?ProcessViewKey = null;
+    var process_view_count: usize = 0;
 
     var zombie_parents: [ztop.sysinfo.common.MAX_PROCS]process_commands.ZombieParentEntry = undefined;
     var zombie_summary: process_commands.ZombieParentSummary = .{};
@@ -141,8 +151,8 @@ pub fn main(main_init: std.process.Init) !void {
     var cached_connections: std.ArrayList(ztop.sysinfo.common.NetConnection) = .empty;
     defer cached_connections.deinit(allocator);
 
-    var cached_gpus: []ztop.sysinfo.GpuStats = &.{};
-    defer if (cached_gpus.len > 0) allocator.free(cached_gpus);
+    var cached_gpus: std.ArrayList(ztop.sysinfo.GpuStats) = .empty;
+    defer cached_gpus.deinit(allocator);
 
     var status_buf: [160]u8 = std.mem.zeroes([160]u8);
     var status_len: usize = 0;
@@ -190,7 +200,7 @@ pub fn main(main_init: std.process.Init) !void {
     var net = sys_info.getNetStats();
     var thermal = sys_info.getThermalStats();
     if (app_config.default_tab == 3) {
-        cached_gpus = try sys_info.getGpuStats(allocator);
+        try sys_info.refreshGpuStats(allocator, &cached_gpus);
     }
     var battery = sys_info.getBatteryStats();
     cached_procs = try sys_info.getProcStats(proc_buf, sort_by);
@@ -241,10 +251,7 @@ pub fn main(main_init: std.process.Init) !void {
             net = sys_info.getNetStats();
             thermal = sys_info.getThermalStats();
             if (current_tab == 3) {
-                if (cached_gpus.len > 0) {
-                    allocator.free(cached_gpus);
-                }
-                cached_gpus = try sys_info.getGpuStats(allocator);
+                try sys_info.refreshGpuStats(allocator, &cached_gpus);
             }
             battery = sys_info.getBatteryStats();
             if (!is_scrubbing) {
@@ -256,7 +263,7 @@ pub fn main(main_init: std.process.Init) !void {
             }
 
             cached_procs = try sys_info.getProcStats(proc_buf, sort_by);
-            tree_cache_sort = null;
+            process_view_key = null;
             cached_procs = ztop.sysinfo.common.filterProcStatsByLaunchCommandSubstring(cached_procs, app_config.ignoredLaunchCommandSubstr());
 
             if (current_tab == 4) {
@@ -523,7 +530,7 @@ pub fn main(main_init: std.process.Init) !void {
                         mem_box_height,
                         display_thermal,
                         display_battery,
-                        cached_gpus,
+                        cached_gpus.items,
                         app_config.temperature_unit,
                     );
                 } else if (current_tab == 4) {
@@ -728,44 +735,44 @@ pub fn main(main_init: std.process.Init) !void {
                             .{ .fg = theme.process_title, .bold = true },
                         );
 
-                        // Filtering / proc source selection
-                        filtered_count = 0;
-
-                        if (is_scrubbing) {
-                            tree_cache_sort = null;
-                            // In scrub mode: show snapshot procs directly, no filtering
-                            for (0..scrub_proc_count) |i| {
-                                filtered_indices[i] = i;
-                            }
-                            filtered_count = scrub_proc_count;
-                        } else {
-                            const filter_str = filter_buf[0..filter_len];
-
-                            if (tree_view and filter_len == 0 and !show_zombie_parents) {
-                                if (tree_cache_sort == null or tree_cache_sort.? != sort_by) {
-                                    tree_cache_count = process_commands.buildTreeView(
-                                        cached_procs,
-                                        &filtered_indices,
-                                        &filtered_depths,
-                                        &filtered_is_lasts,
-                                    );
-                                    tree_cache_sort = sort_by;
-                                }
-                                filtered_count = tree_cache_count;
+                        const view_key: ProcessViewKey = .{
+                            .filter = filter_buf,
+                            .filter_len = filter_len,
+                            .sort_by = sort_by,
+                            .tree_view = tree_view,
+                            .show_zombie_parents = show_zombie_parents,
+                            .is_scrubbing = is_scrubbing,
+                            .scrub_offset = scrub_offset,
+                        };
+                        if (process_view_key == null or !std.meta.eql(process_view_key.?, view_key)) {
+                            process_view_count = 0;
+                            if (is_scrubbing) {
+                                for (0..scrub_proc_count) |i| filtered_indices[i] = i;
+                                process_view_count = scrub_proc_count;
+                            } else if (tree_view and filter_len == 0 and !show_zombie_parents) {
+                                process_view_count = process_commands.buildTreeView(
+                                    cached_procs,
+                                    &filtered_indices,
+                                    &filtered_depths,
+                                    &filtered_is_lasts,
+                                );
                             } else {
-                                tree_cache_sort = null;
                                 for (cached_procs, 0..) |*proc, i| {
                                     if (show_zombie_parents and !process_commands.containsParentPid(zombie_parents[0..zombie_summary.parent_count], proc.pid)) {
                                         continue;
                                     }
 
-                                    if (!process_commands.matchesProcessFilter(proc, filter_str)) continue;
-                                    filtered_indices[filtered_count] = i;
-                                    filtered_count += 1;
-                                    if (filtered_count >= filtered_indices.len) break;
+                                    if (!process_commands.matchesProcessFilter(proc, filter_buf[0..filter_len])) continue;
+                                    filtered_indices[process_view_count] = i;
+                                    process_view_count += 1;
+                                    if (process_view_count >= filtered_indices.len) break;
                                 }
                             }
+                            process_view_key = view_key;
+                        }
+                        filtered_count = process_view_count;
 
+                        if (!is_scrubbing) {
                             if (top_n) |n| {
                                 filtered_count = @min(filtered_count, n);
                             }
@@ -973,7 +980,7 @@ pub fn main(main_init: std.process.Init) !void {
             };
             const previous_sort = sort_by;
             force_redraw = try input_handler.handleAvailableInput(&input_ctx);
-            if (previous_sort != sort_by) tree_cache_sort = null;
+            if (previous_sort != sort_by or show_zombie_parents) process_view_key = null;
         } else if (render.isAiQuerying()) {
             force_redraw = true;
         }

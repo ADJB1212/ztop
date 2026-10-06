@@ -77,6 +77,7 @@ const TH_STATE_HALTED = bindings.TH_STATE_HALTED;
 const MAX_THREADS = common.MAX_THREADS;
 const THERMAL_REFRESH_INTERVAL_MS: i64 = 2_000;
 const BATTERY_REFRESH_INTERVAL_MS: i64 = 5_000;
+const SWAP_REFRESH_INTERVAL_MS: i64 = 2_000;
 
 const kIOHIDEventTypeTemperature: i64 = 15;
 const kIOHIDEventTypePower: i64 = 25;
@@ -201,6 +202,8 @@ pub const SysInfo = struct {
     last_power_reading: ?bindings.PowerReadingRaw = null,
     battery_stats: BatteryStats = .{},
     prev_battery_ms: ?i64 = null,
+    swap_usage: xsw_usage = std.mem.zeroes(xsw_usage),
+    prev_swap_ms: ?i64 = null,
 
     pub fn init(io: std.Io) SysInfo {
         const host_port = bindings.mach_host_self();
@@ -452,10 +455,16 @@ pub const SysInfo = struct {
         const free = if (self.total_mem > used) self.total_mem - used else 0;
         const cached = purgeable + inactive + speculative;
 
-        var swap: xsw_usage = std.mem.zeroes(xsw_usage);
-        var swap_size: usize = @sizeOf(xsw_usage);
-        var swap_mib = [_]c_int{ c.CTL_VM, c.VM_SWAPUSAGE };
-        _ = c.sysctl(&swap_mib, swap_mib.len, @ptrCast(&swap), &swap_size, null, 0);
+        const now = nowMs(self.io);
+        if (self.prev_swap_ms == null or now < self.prev_swap_ms.? or now - self.prev_swap_ms.? >= SWAP_REFRESH_INTERVAL_MS) {
+            var swap: xsw_usage = std.mem.zeroes(xsw_usage);
+            var swap_size: usize = @sizeOf(xsw_usage);
+            var swap_mib = [_]c_int{ c.CTL_VM, c.VM_SWAPUSAGE };
+            if (c.sysctl(&swap_mib, swap_mib.len, @ptrCast(&swap), &swap_size, null, 0) == 0) {
+                self.swap_usage = swap;
+            }
+            self.prev_swap_ms = now;
+        }
 
         return .{
             .total = self.total_mem,
@@ -463,8 +472,8 @@ pub const SysInfo = struct {
             .free = free,
             .cached = cached,
             .buffered = 0,
-            .swap_total = swap.xsu_total,
-            .swap_used = swap.xsu_used,
+            .swap_total = self.swap_usage.xsu_total,
+            .swap_used = self.swap_usage.xsu_used,
         };
     }
 
@@ -743,7 +752,14 @@ pub const SysInfo = struct {
         var result: std.ArrayList(GpuStats) = .empty;
         errdefer result.deinit(allocator);
 
-        try gpu_mod.appendAppleGpuStats(&self.gpu_collector, allocator, &result);
+        try self.refreshGpuStats(allocator, &result);
+        return result.toOwnedSlice(allocator);
+    }
+
+    pub fn refreshGpuStats(self: *SysInfo, allocator: std.mem.Allocator, result: *std.ArrayList(GpuStats)) !void {
+        result.clearRetainingCapacity();
+        errdefer result.clearRetainingCapacity();
+        try gpu_mod.appendAppleGpuStats(&self.gpu_collector, allocator, result);
         self.updatePowerSample();
         if (self.last_power_reading) |last| {
             if (last.gpu_watts > 0) {
@@ -752,8 +768,6 @@ pub const SysInfo = struct {
                 }
             }
         }
-
-        return result.toOwnedSlice(allocator);
     }
 
     fn findPrevProcEntry(self: *const SysInfo, pid: u32) ?*const ProcCpuEntry {
@@ -903,6 +917,7 @@ pub const SysInfo = struct {
                 new_procs[new_proc_count] = .{
                     .pid = pid,
                     .ppid = ppid,
+                    .open_files = bsd_info.pbi_nfiles,
                     .proc_start_abstime = effective_start_abstime,
                     .cpu_total = cpu_total,
                     .disk_read = disk_read,
@@ -1055,6 +1070,7 @@ pub const SysInfo = struct {
 
         if (self.prev_proc_count > 0) {
             for (self.proc_buffers[self.prev_proc_buffer][0..self.prev_proc_count]) |proc| {
+                if (proc.open_files == 0) continue;
                 try collectProcessConnections(
                     allocator,
                     result,
@@ -1109,7 +1125,7 @@ fn collectProcessConnections(
     for (fd_buf[0..num_fds]) |fdinfo| {
         if (fdinfo.proc_fdtype != c.PROX_FDTYPE_SOCKET) continue;
 
-        var socket_info: c.struct_socket_fdinfo = std.mem.zeroes(c.struct_socket_fdinfo);
+        var socket_info: c.struct_socket_fdinfo = undefined;
         const sret = bindings.proc_pidfdinfo(
             pid,
             fdinfo.proc_fd,

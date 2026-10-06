@@ -36,6 +36,8 @@ pub const renderMeter = util.renderMeter;
 // Re-exports from graphs.zig
 pub const MetricColorMode = graphs.MetricColorMode;
 pub const historyGraphRows = graphs.historyGraphRows;
+pub const historyGraphLevels = graphs.historyGraphLevels;
+pub const rateGraphLevels = graphs.rateGraphLevels;
 pub const suggestedHistoryGraphRows = graphs.suggestedHistoryGraphRows;
 pub const renderHistoryGraph = graphs.renderHistoryGraph;
 pub const renderRateHistoryGraph = graphs.renderRateHistoryGraph;

@@ -4,6 +4,7 @@ const sysinfo = @import("../sysinfo.zig");
 const config = @import("../config.zig");
 const util = @import("util.zig");
 const timeline_mod = @import("../timeline.zig");
+const simd = @import("../simd.zig");
 const Tui = tui.Tui;
 
 pub const MAX_HINTS = 10;
@@ -173,7 +174,7 @@ fn detectRunawayWriter(data: *PressureHintsData, procs: []const sysinfo.ProcStat
     const log_patterns = [_][]const u8{ "log", "journal", "syslog", "rsyslog", "logd", "logger", "fluent", "filebeat", "splunk" };
     var is_log_writer = false;
     for (log_patterns) |pat| {
-        if (std.ascii.findIgnoreCase(top_name, pat) != null) {
+        if (simd.containsIgnoreCase(top_name, pat)) {
             is_log_writer = true;
             break;
         }

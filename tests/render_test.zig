@@ -25,6 +25,44 @@ fn testTui(frame_buf: []u8) tui.Tui {
     };
 }
 
+test "SIMD graph levels agree with scalar quantization across vector tails" {
+    const metrics = [_]?f32{ null, 0, -1, 0.001, 12.5, 33.3, 50, 99.999, 100, 101, 6.25, 75, 25 };
+    const rates = [_]?u64{ null, 0, 1, 7, 8, 9, 15, 16, 17, 1024, std.math.maxInt(u64), 3, 100 };
+    var levels: [metrics.len]u32 = undefined;
+    for ([_]u16{ 0, 1, 2, 4, 255, 65535 }) |rows| {
+        for (0..metrics.len + 1) |len| {
+            render.historyGraphLevels(metrics[0..len], rows, levels[0..len]);
+            for (metrics[0..len], levels[0..len]) |sample, level| {
+                const value = sample orelse 0;
+                const total: u32 = @as(u32, rows) * 8;
+                const clamped = @max(0.0, @min(value, 100.0));
+                const expected: u32 = if (rows == 0 or value <= 0) 0 else @max(1, @min(total, @as(u32, @intFromFloat(@ceil((clamped / 100.0) * @as(f32, @floatFromInt(total)))))));
+                try std.testing.expectEqual(expected, level);
+            }
+            for ([_]u64{ 0, 1, 16, 1024, std.math.maxInt(u64) }) |maximum| {
+                render.rateGraphLevels(rates[0..len], maximum, rows, levels[0..len]);
+                for (rates[0..len], levels[0..len]) |sample, level| {
+                    const value = sample orelse 0;
+                    const total: u32 = @as(u32, rows) * 8;
+                    const normalized = @as(f32, @floatFromInt(value)) / @as(f32, @floatFromInt(@max(maximum, 1)));
+                    const scaled = @min(@as(f32, @floatFromInt(total)), @ceil(normalized * @as(f32, @floatFromInt(total))));
+                    const expected: u32 = if (rows == 0 or value == 0 or maximum == 0) 0 else @max(1, @as(u32, @intFromFloat(scaled)));
+                    try std.testing.expectEqual(expected, level);
+                }
+            }
+        }
+    }
+}
+
+test "ASCII clipping fast path preserves UTF8 and invalid input behavior" {
+    try std.testing.expectEqualStrings("abcdefghijklmnopq", render.clipUtf8("abcdefghijklmnopqrstuvwxyz", 17));
+    try std.testing.expectEqualStrings("abc", render.clipUtf8("abc", 50));
+    try std.testing.expectEqualStrings("", render.clipUtf8("abc", 0));
+    try std.testing.expectEqualStrings("abcé", render.clipUtf8("abcédef", 4));
+    try std.testing.expectEqualStrings("abc", render.clipUtf8("abcédef", 3));
+    try std.testing.expectEqualStrings("ab\xffc", render.clipUtf8("ab\xffcdef", 4));
+}
+
 test "frames buffer output with and without terminal synchronization" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -206,6 +244,36 @@ test "process row cache updates selection and clears removed rows once" {
     try std.testing.expectEqual(@as(usize, 0), app_tui.frame_len);
     try cache.renderRow(&app_tui, 3, 10, &theme, &layout, &second, false, "", 0, 8, null);
     try expectCursorBeforeText(buf[0..app_tui.frame_len], "\x1b[10;3H", "43");
+}
+
+test "process row cache tracks energy dependencies when other columns are hidden" {
+    var buf: [8192]u8 = undefined;
+    var app_tui = testTui(&buf);
+    var cache = render.ProcessTableCache.init(std.testing.allocator);
+    defer cache.deinit();
+    const region: render.ProcessTableCache.Region = .{ .x = 3, .y = 10, .width = 76, .height = 1 };
+    const theme = config.themePreset(.default);
+    var layout: render.ProcessTableLayout = .{ .count = 1, .name_width = 67, .name_column_index = 1 };
+    layout.columns[0] = .energy;
+    layout.column_widths[0] = 9;
+    var proc: ztop.sysinfo.ProcStats = .{ .pid = 42, .cpu_percent = 100 };
+    try cache.clearFrame(&app_tui, 80, 24, region);
+    try cache.renderRow(&app_tui, 3, 10, &theme, &layout, &proc, false, "", 0, 8, null);
+    app_tui.frame_len = 0;
+    proc.cpu_percent = 200;
+    proc.pid = 43;
+    try cache.renderRow(&app_tui, 3, 10, &theme, &layout, &proc, false, "", 0, 16, null);
+    try std.testing.expectEqual(@as(usize, 0), app_tui.frame_len);
+
+    try cache.renderRow(&app_tui, 3, 10, &theme, &layout, &proc, false, "", 0, 8, 20);
+    try std.testing.expect(app_tui.frame_len > 0);
+    app_tui.frame_len = 0;
+    proc.cpu_percent = 100;
+    try cache.renderRow(&app_tui, 3, 10, &theme, &layout, &proc, false, "", 0, 8, 20);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..app_tui.frame_len], "1.75W") != null);
+    app_tui.frame_len = 0;
+    try cache.renderRow(&app_tui, 3, 10, &theme, &layout, &proc, false, "", 0, 16, 20);
+    try std.testing.expect(app_tui.frame_len > 0);
 }
 
 test "process row cache includes tree prefixes theme columns and power" {

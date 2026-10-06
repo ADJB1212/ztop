@@ -41,6 +41,40 @@ fn historyGraphLevel(percent: f32, rows: usize) usize {
     return @max(1, @min(total_levels, @as(usize, @intFromFloat(@ceil((clamped / 100.0) * @as(f32, @floatFromInt(total_levels)))))));
 }
 
+fn graphLevels(comptime T: type, values: []const ?T, max_value: T, rows: usize, levels: []u32) void {
+    std.debug.assert(values.len == levels.len);
+    if (rows == 0 or max_value == 0) {
+        @memset(levels, 0);
+        return;
+    }
+    const Floats = @Vector(4, f32);
+    const limit: Floats = @splat(if (T == f32) max_value else @floatFromInt(max_value));
+    const total: Floats = @splat(@floatFromInt(rows * 8));
+    var column: usize = 0;
+    while (values.len - column >= 4) : (column += 4) {
+        var samples: [4]T = undefined;
+        inline for (0..4) |lane| samples[lane] = values[column + lane] orelse 0;
+        const input: @Vector(4, T) = samples;
+        const floats: Floats = if (T == f32) input else @floatFromInt(input);
+        const clamped = @max(@as(Floats, @splat(0)), @min(floats, limit));
+        const scaled = @min(total, @max(@as(Floats, @splat(1)), @ceil((clamped / limit) * total)));
+        const result: @Vector(4, u32) = @intFromFloat(@select(f32, clamped > @as(Floats, @splat(0)), scaled, @as(Floats, @splat(0))));
+        levels[column..][0..4].* = result;
+    }
+    while (column < values.len) : (column += 1) {
+        const value = values[column] orelse 0;
+        levels[column] = @intCast(if (T == f32) historyGraphLevel(value, rows) else rateGraphLevel(value, max_value, rows));
+    }
+}
+
+pub fn historyGraphLevels(values: []const ?f32, rows: u16, levels: []u32) void {
+    graphLevels(f32, values, 100, rows, levels);
+}
+
+pub fn rateGraphLevels(values: []const ?u64, max_value: u64, rows: u16, levels: []u32) void {
+    graphLevels(u64, values, max_value, rows, levels);
+}
+
 pub fn renderHistoryGraph(
     app_tui: *Tui,
     theme: config.Theme,
@@ -56,13 +90,11 @@ pub fn renderHistoryGraph(
     const graph_width: usize = width;
     const graph_height: usize = height;
     var column_values: [history_mod.MAX_HISTORY_SAMPLES]?f32 = undefined;
-    var column_levels: [history_mod.MAX_HISTORY_SAMPLES]usize = undefined;
+    var column_levels: [history_mod.MAX_HISTORY_SAMPLES]u32 = undefined;
     const cache_columns = graph_width <= column_values.len;
     if (cache_columns) {
         history.valuesForColumns(column_values[0..graph_width]);
-        for (column_values[0..graph_width], 0..) |maybe_value, column| {
-            column_levels[column] = if (maybe_value) |value| historyGraphLevel(value, graph_height) else 0;
-        }
+        historyGraphLevels(column_values[0..graph_width], height, column_levels[0..graph_width]);
     }
 
     for (0..graph_height) |row| {
@@ -97,7 +129,7 @@ fn rateGraphLevel(value: u64, max_value: u64, rows: usize) usize {
     if (rows == 0 or value == 0 or max_value == 0) return 0;
 
     const total_levels = rows * 8;
-    const normalized = @as(f32, @floatFromInt(value)) / @as(f32, @floatFromInt(max_value));
+    const normalized = @as(f32, @floatFromInt(@min(value, max_value))) / @as(f32, @floatFromInt(max_value));
     return @max(1, @min(total_levels, @as(usize, @intFromFloat(@ceil(normalized * @as(f32, @floatFromInt(total_levels)))))));
 }
 
@@ -117,13 +149,11 @@ pub fn renderRateHistoryGraph(
     const graph_width: usize = width;
     const graph_height: usize = height;
     var column_values: [history_mod.MAX_HISTORY_SAMPLES]?u64 = undefined;
-    var column_levels: [history_mod.MAX_HISTORY_SAMPLES]usize = undefined;
+    var column_levels: [history_mod.MAX_HISTORY_SAMPLES]u32 = undefined;
     const cache_columns = graph_width <= column_values.len;
     if (cache_columns) {
         history.valuesForColumns(column_values[0..graph_width]);
-        for (column_values[0..graph_width], 0..) |maybe_value, column| {
-            column_levels[column] = if (maybe_value) |value| rateGraphLevel(value, max_value, graph_height) else 0;
-        }
+        rateGraphLevels(column_values[0..graph_width], max_value, height, column_levels[0..graph_width]);
     }
 
     for (0..graph_height) |row| {

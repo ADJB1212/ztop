@@ -156,35 +156,33 @@ pub const Context = struct {
 };
 
 pub fn handleAvailableInput(ctx: *Context) !bool {
-    var buf: [16]u8 = undefined;
-    const n = ctx.app_tui.in.readStreaming(ctx.app_tui.io, &.{buf[0..]}) catch 0;
-    if (n == 0) return false;
-
-    if (ctx.input_len.* + n > ctx.input_buf.len) {
+    if (ctx.input_len.* == ctx.input_buf.len) {
         ctx.input_len.* = 0;
     }
-
-    const write_len = @min(n, ctx.input_buf.len - ctx.input_len.*);
-    @memcpy(ctx.input_buf.*[ctx.input_len.* .. ctx.input_len.* + write_len], buf[0..write_len]);
-    ctx.input_len.* += write_len;
+    const n = ctx.app_tui.in.readStreaming(ctx.app_tui.io, &.{ctx.input_buf[ctx.input_len.*..]}) catch 0;
+    if (n == 0) return false;
+    ctx.input_len.* += n;
 
     var handled_any = false;
     var sort_dirty = false;
+    var consumed: usize = 0;
+    defer {
+        const remaining = ctx.input_len.* - consumed;
+        std.mem.copyForwards(u8, ctx.input_buf[0..remaining], ctx.input_buf[consumed..ctx.input_len.*]);
+        ctx.input_len.* = remaining;
+    }
 
-    while (ctx.input_len.* > 0) {
-        const parsed = switch (Tui.parseInputToken(ctx.input_buf.*[0..ctx.input_len.*])) {
+    while (consumed < ctx.input_len.*) {
+        const parsed = switch (Tui.parseInputToken(ctx.input_buf[consumed..ctx.input_len.*])) {
             .parsed => |token| token,
             .incomplete => break,
             .invalid => |used| {
-                const consume = @max(@as(usize, 1), used);
-                std.mem.copyForwards(u8, ctx.input_buf.*[0 .. ctx.input_len.* - consume], ctx.input_buf.*[consume..ctx.input_len.*]);
-                ctx.input_len.* -= consume;
+                consumed += @max(@as(usize, 1), used);
                 continue;
             },
         };
 
-        std.mem.copyForwards(u8, ctx.input_buf.*[0 .. ctx.input_len.* - parsed.used], ctx.input_buf.*[parsed.used..ctx.input_len.*]);
-        ctx.input_len.* -= parsed.used;
+        consumed += parsed.used;
 
         var handled = false;
         const token = parsed.token;
@@ -214,7 +212,7 @@ pub fn handleAvailableInput(ctx: *Context) !bool {
         sysinfo.sortProcStats(ctx.cached_procs, ctx.sort_by.*);
     }
 
-    return handled_any or (!ctx.quit_flag.* and write_len > 0);
+    return handled_any or !ctx.quit_flag.*;
 }
 
 fn handleColumnPickerToken(ctx: *Context, token: Tui.InputToken) bool {

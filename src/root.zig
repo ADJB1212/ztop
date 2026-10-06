@@ -5,6 +5,7 @@ pub const config = @import("config.zig");
 pub const process_commands = @import("process_commands.zig");
 pub const input_handler = @import("input_handler.zig");
 pub const history = @import("history.zig");
+pub const simd = @import("simd.zig");
 pub const render = @import("render.zig");
 pub const timeline = @import("timeline.zig");
 pub const process_tracer = @import("process_tracer.zig");
