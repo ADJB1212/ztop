@@ -377,7 +377,19 @@ pub fn renderNetworkTotalsBox(
             const elapsed = @max(0, speed_test.started.untilNow(app_tui.io, .awake).toMilliseconds());
             const frame: usize = @intCast(@mod(@divTrunc(elapsed, 80), frames.len));
             try app_tui.printStyled(.{ .fg = theme.command_prompt, .bold = true }, "{s}", .{render.clipUtf8(frames[frame], inner_width)});
-            try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "{s}", .{render.clipUtf8(" Running download/upload speed test...", inner_width -| 1)});
+            var download_buf: [32]u8 = undefined;
+            var upload_buf: [32]u8 = undefined;
+            const download = if (speed_test.live.download_mbps) |value|
+                try std.fmt.bufPrint(&download_buf, "{d:.1} Mbps", .{value})
+            else
+                "...";
+            const upload = if (speed_test.live.upload_mbps) |value|
+                try std.fmt.bufPrint(&upload_buf, "{d:.1} Mbps", .{value})
+            else
+                "...";
+            var live_buf: [112]u8 = undefined;
+            const live = try std.fmt.bufPrint(&live_buf, " Download: {s} | Upload: {s} (live)", .{ download, upload });
+            try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "{s}", .{render.clipUtf8(live, inner_width -| 1)});
         },
         .failed => try app_tui.printStyled(.{ .fg = theme.muted }, "{s}", .{render.clipUtf8("Speed test failed or timed out.", inner_width)}),
         .ready => {

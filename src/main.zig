@@ -236,7 +236,7 @@ pub fn main(main_init: std.process.Init) !void {
     var size = try app_tui.getWinSize();
 
     while (!quit_flag) {
-        if (network_speed_test.poll(allocator, io)) force_redraw = true;
+        if (network_speed_test.poll(io)) force_redraw = true;
         if (sigwinch_flag) {
             sigwinch_flag = false;
             size = try app_tui.getWinSize();
