@@ -13,6 +13,7 @@ const HelpItem = struct {
 const help_items = [_]HelpItem{
     .{ .key = "1–5", .description = "Switch tabs" },
     .{ .key = "Tab", .description = "Run AI diagnosis (Diagnostics tab)" },
+    .{ .key = "Tab (Network)", .description = "Run download/upload speed test" },
     .{ .key = "j/k, Up/Down", .description = "Navigate processes" },
     .{ .key = "c,m,p,n,u", .description = "Sort by CPU/Mem/PID/Name/Wakeups" },
     .{ .key = "r,w (I/O)", .description = "Sort by disk Read/Write" },

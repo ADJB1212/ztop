@@ -153,6 +153,7 @@ pub const Context = struct {
     top_n: *?usize,
     pipeline_view: *bool,
     pipeline_row_count: *usize,
+    network_speed_test: *@import("network_speed_test.zig").SpeedTest,
 };
 
 pub fn handleAvailableInput(ctx: *Context) !bool {
@@ -387,6 +388,10 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
                 return true;
             },
             '\t' => {
+                if (ctx.current_tab.* == 4) {
+                    ctx.network_speed_test.start(ctx.app_tui.io);
+                    return true;
+                }
                 if (ctx.current_tab.* == 5) {
                     render.triggerAiDiagnostic();
                     return true;

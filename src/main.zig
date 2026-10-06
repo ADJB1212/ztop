@@ -84,6 +84,8 @@ pub fn main(main_init: std.process.Init) !void {
 
     var sys_info = SysInfo.init(io);
     defer sys_info.deinit();
+    var network_speed_test: ztop.network_speed_test.SpeedTest = .{};
+    defer network_speed_test.deinit(io);
 
     // Pre-allocate proc buffer once — reused every tick, no per-tick alloc/free
     const proc_buf = try allocator.alloc(ztop.sysinfo.ProcStats, ztop.sysinfo.common.MAX_PROCS);
@@ -234,6 +236,7 @@ pub fn main(main_init: std.process.Init) !void {
     var size = try app_tui.getWinSize();
 
     while (!quit_flag) {
+        if (network_speed_test.poll(allocator, io)) force_redraw = true;
         if (sigwinch_flag) {
             sigwinch_flag = false;
             size = try app_tui.getWinSize();
@@ -544,6 +547,7 @@ pub fn main(main_init: std.process.Init) !void {
                         display_net,
                         wifi_ssid_line,
                         wifi_generation_line,
+                        &network_speed_test,
                     );
                 } else if (current_tab == 5 and cpu_box_height >= 5) {
                     const ph_data = pressure_hints_cache.get(
@@ -914,7 +918,7 @@ pub fn main(main_init: std.process.Init) !void {
         const now = nowMs(io);
         var remaining_ms = fetch_interval_ms - (now - last_fetch_time);
         if (remaining_ms < 0) remaining_ms = 0;
-        if (render.isAiQuerying() and remaining_ms > 80) {
+        if ((render.isAiQuerying() or network_speed_test.state == .running) and remaining_ms > 80) {
             remaining_ms = 80;
         }
 
@@ -977,11 +981,12 @@ pub fn main(main_init: std.process.Init) !void {
                 .top_n = &top_n,
                 .pipeline_view = &pipeline_view,
                 .pipeline_row_count = &pipeline_row_count,
+                .network_speed_test = &network_speed_test,
             };
             const previous_sort = sort_by;
             force_redraw = try input_handler.handleAvailableInput(&input_ctx);
             if (previous_sort != sort_by or show_zombie_parents) process_view_key = null;
-        } else if (render.isAiQuerying()) {
+        } else if (render.isAiQuerying() or (current_tab == 4 and network_speed_test.state == .running)) {
             force_redraw = true;
         }
     }

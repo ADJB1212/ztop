@@ -17,4 +17,5 @@ test {
     _ = @import("sysinfo_test.zig");
     _ = @import("darwin_test.zig");
     _ = @import("ai_test.zig");
+    _ = @import("network_speed_test_test.zig");
 }

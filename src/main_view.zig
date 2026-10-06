@@ -311,6 +311,7 @@ pub fn renderNetworkTotalsBox(
     net: sysinfo.NetStats,
     wifi_ssid_line: ?[]const u8,
     wifi_generation_line: ?[]const u8,
+    speed_test: *const ztop.network_speed_test.SpeedTest,
 ) !void {
     try app_tui.drawBoxStyled(
         box_x,
@@ -334,8 +335,9 @@ pub fn renderNetworkTotalsBox(
     try app_tui.printStyled(.{ .fg = theme.io_rate, .bold = true }, "{d:4.1} {s}/s", .{ tx_ps.value, tx_ps.unit });
 
     var wifi_row: u16 = 2;
+    const speed_rows: u16 = if (speed_test.state == .idle) 1 else 2;
     if (wifi_ssid_line) |line| {
-        if (box_height >= wifi_row + 2) {
+        if (box_height >= wifi_row + speed_rows + 2) {
             try app_tui.moveCursor(box_x + 2, box_y + wifi_row);
             try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{render.clipUtf8(line, box_width -| 4)});
             wifi_row += 1;
@@ -343,10 +345,48 @@ pub fn renderNetworkTotalsBox(
     }
 
     if (wifi_generation_line) |line| {
-        if (box_height >= wifi_row + 2) {
+        if (box_height >= wifi_row + speed_rows + 2) {
             try app_tui.moveCursor(box_x + 2, box_y + wifi_row);
             try app_tui.printStyled(.{ .fg = theme.text, .dim = true }, "{s}", .{render.clipUtf8(line, box_width -| 4)});
+            wifi_row += 1;
         }
+    }
+    if (box_height >= wifi_row + speed_rows + 3) wifi_row += 1;
+    if (box_height < wifi_row + 2) return;
+
+    const inner_width = box_width -| 4;
+    const title = if (speed_test.state == .ready) "⚡ Network Speed Test" else "⚡ Network Speed Test:";
+    const prompt = switch (speed_test.state) {
+        .idle => " Press [Tab] for Network Speed Test",
+        .running => "",
+        .failed => " Press [Tab] to retry",
+        .ready => " (Press [Tab] to refresh):",
+    };
+    try app_tui.moveCursor(box_x + 2, box_y + wifi_row);
+    try app_tui.printStyled(.{ .fg = theme.command_prompt, .bold = true }, "{s}", .{render.clipUtf8(title, inner_width)});
+    const prompt_width = inner_width -| @as(u16, @intCast(displayWidth(title)));
+    try app_tui.printStyled(.{ .fg = theme.muted }, "{s}", .{render.clipUtf8(prompt, prompt_width)});
+    wifi_row += 1;
+    if (speed_test.state == .idle or box_height < wifi_row + 2) return;
+
+    try app_tui.moveCursor(box_x + 2, box_y + wifi_row);
+    switch (speed_test.state) {
+        .idle => unreachable,
+        .running => {
+            const frames = [_][]const u8{ "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" };
+            const elapsed = @max(0, speed_test.started.untilNow(app_tui.io, .awake).toMilliseconds());
+            const frame: usize = @intCast(@mod(@divTrunc(elapsed, 80), frames.len));
+            try app_tui.printStyled(.{ .fg = theme.command_prompt, .bold = true }, "{s}", .{render.clipUtf8(frames[frame], inner_width)});
+            try app_tui.printStyled(.{ .fg = theme.text, .bold = true }, "{s}", .{render.clipUtf8(" Running download/upload speed test...", inner_width -| 1)});
+        },
+        .failed => try app_tui.printStyled(.{ .fg = theme.muted }, "{s}", .{render.clipUtf8("Speed test failed or timed out.", inner_width)}),
+        .ready => {
+            var result_buf: [96]u8 = undefined;
+            const result = std.fmt.bufPrint(&result_buf, "Download: {d:.1} Mbps | Upload: {d:.1} Mbps", .{
+                speed_test.result.download_mbps, speed_test.result.upload_mbps,
+            }) catch "Speed test complete";
+            try app_tui.printStyled(.{ .fg = theme.usage_good, .bold = true }, "{s}", .{render.clipUtf8(result, inner_width)});
+        },
     }
 }
 
@@ -394,10 +434,17 @@ pub fn renderConnectionsTable(
         .{ .fg = theme.process_title, .bold = true },
     );
 
-    const visible_rows = box_height - 2;
+    const has_header = box_height >= 4;
+    const first_row = box_y + 1 + @as(u16, @intFromBool(has_header));
+    const visible_rows = box_height - 2 - @as(u16, @intFromBool(has_header));
+    const layout = render.connections.Layout.init(box_width -| 4);
+    if (has_header) {
+        try app_tui.moveCursor(box_x + 2, box_y + 1);
+        try render.connections.renderRow(app_tui, theme, layout, null, false);
+    }
     mouse_regions.list_rect = .{
         .x = box_x + 1,
-        .y = box_y + 1,
+        .y = first_row,
         .width = box_width -| 2,
         .height = visible_rows,
     };
@@ -406,8 +453,8 @@ pub fn renderConnectionsTable(
     normalizeListWindow(selected_idx, scroll_offset, conn_count, visible_rows);
 
     if (conn_count == 0) {
-        try app_tui.moveCursor(box_x + 2, box_y + 1);
-        try app_tui.printStyled(.{ .fg = theme.muted }, "No active connections detected", .{});
+        try app_tui.moveCursor(box_x + 2, first_row);
+        try app_tui.printStyled(.{ .fg = theme.muted }, "{s}", .{render.clipUtf8("No active connections detected", box_width -| 4)});
         return;
     }
 
@@ -418,70 +465,8 @@ pub fn renderConnectionsTable(
 
         const is_selected = (idx == selected_idx.*) and !show_help;
 
-        try app_tui.moveCursor(box_x + 2, box_y + 1 + @as(u16, @intCast(row)));
-
-        if (is_selected) {
-            try app_tui.setStyle(.{ .bg = theme.selection_bg });
-            try app_tui.writeSpaces(box_width - 4);
-            try app_tui.moveCursor(box_x + 2, box_y + 1 + @as(u16, @intCast(row)));
-        }
-
-        try app_tui.printStyled(
-            if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text },
-            "{s:4} ",
-            .{@tagName(conn.protocol)},
-        );
-
-        const local_str = std.mem.sliceTo(&conn.local_addr, 0);
-        if (conn.local_port > 0) {
-            try app_tui.printStyled(
-                if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text },
-                "{s}:{d:<5} ",
-                .{ local_str, conn.local_port },
-            );
-        } else {
-            try app_tui.printStyled(
-                if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text },
-                "{s:<11} ",
-                .{local_str},
-            );
-        }
-        try app_tui.printStyled(if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.muted } else .{ .fg = theme.muted }, "-> ", .{});
-
-        const remote_str = std.mem.sliceTo(&conn.remote_addr, 0);
-        if (conn.remote_port > 0) {
-            try app_tui.printStyled(
-                if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text },
-                "{s}:{d:<5} ",
-                .{ remote_str, conn.remote_port },
-            );
-        } else {
-            try app_tui.printStyled(
-                if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.selection_fg } else .{ .fg = theme.text },
-                "{s:<11} ",
-                .{remote_str},
-            );
-        }
-
-        if (conn.protocol == .tcp or conn.protocol == .tcp6) {
-            try app_tui.printStyled(
-                if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.muted } else .{ .fg = theme.muted },
-                "[{s:<11}] ",
-                .{@tagName(conn.state)},
-            );
-        } else {
-            try app_tui.printStyled(
-                if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.muted } else .{ .fg = theme.muted },
-                "[{s:<11}] ",
-                .{"-"},
-            );
-        }
-
-        try app_tui.printStyled(
-            if (is_selected) .{ .bg = theme.selection_bg, .fg = theme.process_title } else .{ .fg = theme.process_title },
-            "{s} (PID: {d})",
-            .{ conn.name(), conn.pid },
-        );
+        try app_tui.moveCursor(box_x + 2, first_row + @as(u16, @intCast(row)));
+        try render.connections.renderRow(app_tui, theme, layout, conn, is_selected);
 
         if (is_selected) {
             try app_tui.resetStyle();

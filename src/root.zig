@@ -11,3 +11,4 @@ pub const timeline = @import("timeline.zig");
 pub const process_tracer = @import("process_tracer.zig");
 pub const AI = @import("AI.zig");
 pub const ai = AI;
+pub const network_speed_test = @import("network_speed_test.zig");

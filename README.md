@@ -78,34 +78,34 @@ ztop [--version]
 
 ### Key Bindings
 
-| Key                     | Action                                                                     |
-| ----------------------- | -------------------------------------------------------------------------- |
-| `1`, `2`, `3`, `4`, `5` | Switch to `Main`, `I/O`, `Sensors`, `Network`, `Diagnostics`               |
-| `Tab`                   | Trigger on-device Apple Intelligence diagnosis (when on `Diagnostics` tab) |
-| `j` / `k` or arrow keys | Move through the process list                                              |
-| `Enter`                 | Drill into threads of the selected process                                 |
-| `Esc`                   | Return from any view; clear follow, filter, status, or zombie view         |
-| `c`, `m`, `p`, `n`, `u` | Sort by CPU, memory, PID, name, or wakeups/churn                           |
-| `r`, `w`                | Sort by disk read or disk write (I/O tab only)                             |
-| `C`                     | Toggle process-table columns for the current view                          |
-| `v`                     | Toggle tree view (process hierarchy)                                       |
-| `/`                     | Filter processes by name or PID                                            |
-| `:`                     | Open command mode                                                          |
-| `f`                     | Follow selected process (lock view to it as it moves)                      |
-| `L`                     | Process lifeline view for selected process (timeline of events)            |
-| `P`                     | Build/test pipeline lens (groups build processes by orchestrator)          |
-| `g`                     | Resource causality graph for selected process (children + connections)     |
-| `T`                     | Toggle timeline scrubbing mode (requires enough collected history)         |
-| `←` / `→`               | While scrubbing: move older/newer by one snapshot                          |
-| `[` / `]`               | While scrubbing: jump older/newer by 10 snapshots                          |
-| `b`                     | While scrubbing: drop a bookmark at the current position                   |
-| `B`                     | While scrubbing: remove the nearest bookmark                               |
-| `{` / `}`               | While scrubbing: jump to previous/next bookmark                            |
-| `d`                     | While scrubbing: toggle diff view (set anchor, then navigate to compare)   |
-| `t`                     | Send `SIGTERM` to the selected process                                     |
-| `K`                     | Send `SIGKILL` to the selected process                                     |
-| `?`                     | Open help overlay                                                          |
-| `q`                     | Quit                                                                       |
+| Key                     | Action                                                                         |
+| ----------------------- | ------------------------------------------------------------------------------ |
+| `1`, `2`, `3`, `4`, `5` | Switch to `Main`, `I/O`, `Sensors`, `Network`, `Diagnostics`                   |
+| `Tab`                   | Run download/upload speed test on `Network`; run AI diagnosis on `Diagnostics` |
+| `j` / `k` or arrow keys | Move through the process list                                                  |
+| `Enter`                 | Drill into threads of the selected process                                     |
+| `Esc`                   | Return from any view; clear follow, filter, status, or zombie view             |
+| `c`, `m`, `p`, `n`, `u` | Sort by CPU, memory, PID, name, or wakeups/churn                               |
+| `r`, `w`                | Sort by disk read or disk write (I/O tab only)                                 |
+| `C`                     | Toggle process-table columns for the current view                              |
+| `v`                     | Toggle tree view (process hierarchy)                                           |
+| `/`                     | Filter processes by name or PID                                                |
+| `:`                     | Open command mode                                                              |
+| `f`                     | Follow selected process (lock view to it as it moves)                          |
+| `L`                     | Process lifeline view for selected process (timeline of events)                |
+| `P`                     | Build/test pipeline lens (groups build processes by orchestrator)              |
+| `g`                     | Resource causality graph for selected process (children + connections)         |
+| `T`                     | Toggle timeline scrubbing mode (requires enough collected history)             |
+| `←` / `→`               | While scrubbing: move older/newer by one snapshot                              |
+| `[` / `]`               | While scrubbing: jump older/newer by 10 snapshots                              |
+| `b`                     | While scrubbing: drop a bookmark at the current position                       |
+| `B`                     | While scrubbing: remove the nearest bookmark                                   |
+| `{` / `}`               | While scrubbing: jump to previous/next bookmark                                |
+| `d`                     | While scrubbing: toggle diff view (set anchor, then navigate to compare)       |
+| `t`                     | Send `SIGTERM` to the selected process                                         |
+| `K`                     | Send `SIGKILL` to the selected process                                         |
+| `?`                     | Open help overlay                                                              |
+| `q`                     | Quit                                                                           |
 
 While scrubbing is active, destructive process actions and view-mutating actions are disabled until you exit scrubbing.
 Press `Esc` or `T` to leave scrubbing and return to live view.
