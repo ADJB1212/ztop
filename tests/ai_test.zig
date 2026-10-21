@@ -25,3 +25,21 @@ test "parseDiagnosisJson correctly decodes structured diagnosis" {
     try std.testing.expectEqualStrings("CPU Bound", parsed.value.bottleneck);
     try std.testing.expectEqualStrings("Normal compiler work", parsed.value.advice);
 }
+
+test "diagnosis cache reuses decoded strings and replaces invalid responses" {
+    var cache: ai.DiagnosisCache = .{};
+    const json = "{\"explanation\":\"line\\nnext\",\"bottleneck\":\"CPU\",\"advice\":\"wait\",\"extra\":42}";
+    const first = cache.get(json).?;
+    try std.testing.expectEqualStrings("line\nnext", first.explanation);
+    try std.testing.expectEqualStrings("CPU", first.bottleneck);
+    const second = cache.get(json).?;
+    try std.testing.expectEqual(first.explanation.ptr, second.explanation.ptr);
+    try std.testing.expectEqual(@as(?ai.ParsedDiagnosis, null), cache.get("invalid"));
+    try std.testing.expectEqual(@as(?ai.ParsedDiagnosis, null), cache.get("invalid"));
+    const replaced = cache.get("{\"explanation\":\"updated\"}").?;
+    try std.testing.expectEqualStrings("updated", replaced.explanation);
+    try std.testing.expectEqualStrings("", replaced.advice);
+    const oversized: [1025]u8 = @splat('x');
+    try std.testing.expectEqual(@as(?ai.ParsedDiagnosis, null), cache.get(&oversized));
+    try std.testing.expectEqualStrings("line\nnext", cache.get(json).?.explanation);
+}

@@ -182,6 +182,7 @@ pub const Timeline = struct {
     events: [MAX_EVENTS]TimelineEvent,
     ev_start: usize,
     ev_count: usize,
+    events_ordered: bool = true,
 
     // State for birth/death detection
     prev_pids: [common.MAX_PROCS]u32,
@@ -268,6 +269,9 @@ pub const Timeline = struct {
     }
 
     fn appendEvent(self: *Timeline, event: TimelineEvent) void {
+        if (self.getEvent(self.ev_count -| 1)) |last| {
+            if (event.timestamp_ms < last.timestamp_ms) self.events_ordered = false;
+        }
         if (self.ev_count < MAX_EVENTS) {
             self.events[(self.ev_start + self.ev_count) % MAX_EVENTS] = event;
             self.ev_count += 1;
@@ -387,14 +391,30 @@ pub const Timeline = struct {
     /// Return bitmask of EventKind bits for all events in [ts_start, ts_end].
     pub fn eventMaskInRange(self: *const Timeline, ts_start: i64, ts_end: i64) u8 {
         var mask: u8 = 0;
-        for (0..self.ev_count) |i| {
+        for (self.firstEventAtOrAfter(ts_start)..self.ev_count) |i| {
             const ev = self.getEvent(i) orelse break;
+            if (self.events_ordered and ev.timestamp_ms > ts_end) break;
             if (ev.timestamp_ms >= ts_start and ev.timestamp_ms <= ts_end) {
                 const bit = @as(u3, @intCast(@backingInt(ev.kind) & 7));
                 mask |= @as(u8, 1) << bit;
             }
         }
         return mask;
+    }
+
+    fn firstEventAtOrAfter(self: *const Timeline, timestamp_ms: i64) usize {
+        if (!self.events_ordered) return 0;
+        var lo: usize = 0;
+        var hi = self.ev_count;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            if (self.getEvent(mid).?.timestamp_ms < timestamp_ms) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        return lo;
     }
 
     /// Format a duration in seconds as a compact human-readable string (e.g. "45s", "2m30s").
@@ -534,11 +554,11 @@ pub const Timeline = struct {
         const snap = self.getSnapshot(snap_offset) orelse return 0;
         const ts = snap.timestamp_ms;
         var count: usize = 0;
-        for (0..self.ev_count) |i| {
+        for (self.firstEventAtOrAfter(ts -| 1000)..self.ev_count) |i| {
             if (count >= out.len) break;
             const ev = self.getEvent(i) orelse break;
-            const diff = ts - ev.timestamp_ms;
-            if (diff >= -1000 and diff <= 1000) {
+            if (self.events_ordered and ev.timestamp_ms > ts +| 1000) break;
+            if (ev.timestamp_ms >= ts -| 1000 and ev.timestamp_ms <= ts +| 1000) {
                 out[count] = ev.*;
                 count += 1;
             }

@@ -7,6 +7,7 @@ const ai = @import("../AI.zig");
 const Tui = tui.Tui;
 
 var ai_query = ai.AsyncQuery.init();
+var diagnosis_cache: ai.DiagnosisCache = .{};
 var pending_ai_trigger: bool = false;
 var query_counter: u64 = 100;
 var spinner_frame: usize = 0;
@@ -435,17 +436,16 @@ pub fn renderWhyBusyView(
             if (cur_y < y + height - 1) {
                 var res_buf: [1024]u8 = undefined;
                 if (ai_query.getResult(&res_buf)) |res| {
-                    if (ai.parseDiagnosisJson(std.heap.c_allocator, res)) |parsed| {
-                        defer parsed.deinit();
-                        if (parsed.value.explanation.len > 0) {
+                    if (diagnosis_cache.get(res)) |parsed| {
+                        if (parsed.explanation.len > 0) {
                             if (cur_y < y + height - 1) {
                                 try app_tui.moveCursor(inner_x, cur_y);
-                                try app_tui.printStyled(.{ .fg = theme.command_prompt, .bold = true }, "⚡ [{s}] ", .{parsed.value.bottleneck});
-                                try app_tui.printStyled(.{ .fg = theme.usage_good, .bold = true }, "💡 {s}", .{parsed.value.advice});
+                                try app_tui.printStyled(.{ .fg = theme.command_prompt, .bold = true }, "⚡ [{s}] ", .{parsed.bottleneck});
+                                try app_tui.printStyled(.{ .fg = theme.usage_good, .bold = true }, "💡 {s}", .{parsed.advice});
                                 cur_y += 1;
                             }
                             var line_start: usize = 0;
-                            const exp = parsed.value.explanation;
+                            const exp = parsed.explanation;
                             while (line_start < exp.len and cur_y < y + height - 1) {
                                 const max_len = @min(exp.len - line_start, @as(usize, inner_width));
                                 var line_end = line_start + max_len;
@@ -468,7 +468,7 @@ pub fn renderWhyBusyView(
                             }
                             return;
                         }
-                    } else |_| {}
+                    }
 
                     var line_start: usize = 0;
                     while (line_start < res.len and cur_y < y + height - 1) {

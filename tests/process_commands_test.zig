@@ -43,6 +43,24 @@ test "containsParentPid matches collected parent processes" {
     try std.testing.expect(!process_commands.containsParentPid(&entries, 99));
 }
 
+test "zombie parent marking follows process order and ignores missing parents" {
+    const procs = [_]common.ProcStats{
+        proc(8193, 0, .running),
+        proc(1, 0, .running),
+        proc(42, 0, .running),
+    };
+    const entries = [_]process_commands.ZombieParentEntry{
+        .{ .pid = 1, .zombie_count = 2 },
+        .{ .pid = 8193, .zombie_count = 1 },
+        .{ .pid = 99, .zombie_count = 1 },
+    };
+    var flags: [3]bool = @splat(true);
+    process_commands.markZombieParents(&procs, &entries, &flags);
+    try std.testing.expectEqualSlices(bool, &.{ true, true, false }, &flags);
+    process_commands.markZombieParents(&procs, &.{}, &flags);
+    try std.testing.expectEqualSlices(bool, &.{ false, false, false }, &flags);
+}
+
 test "collectZombieParents keeps counting existing groups when output is full" {
     const procs = [_]common.ProcStats{
         proc(100, 1, .running),

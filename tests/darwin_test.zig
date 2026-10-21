@@ -345,6 +345,48 @@ test "single-process connection collection only returns the requested PID" {
     }
 }
 
+test "process detail collectors reuse capacity across refreshes and empty results" {
+    var si = darwin.SysInfo.init(std.testing.io);
+    defer si.deinit();
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    const allocator = failing.allocator();
+    var threads: std.ArrayList(common.ThreadStats) = .empty;
+    defer threads.deinit(allocator);
+    var connections: std.ArrayList(common.NetConnection) = .empty;
+    defer connections.deinit(allocator);
+    try threads.ensureTotalCapacity(allocator, common.MAX_THREADS);
+    try connections.ensureTotalCapacity(allocator, 4096);
+    const thread_buffer = threads.items.ptr;
+    const connection_buffer = connections.items.ptr;
+    failing.fail_index = failing.alloc_index;
+    failing.resize_fail_index = failing.resize_index;
+
+    const socket = std.c.socket(std.c.AF.INET, std.c.SOCK.STREAM, 0);
+    try std.testing.expect(socket >= 0);
+    defer _ = std.c.close(socket);
+    const pid: u32 = @intCast(std.c.getpid());
+    for (0..2) |_| {
+        try si.refreshThreadStats(allocator, pid, &threads);
+        try std.testing.expect(threads.items.len > 0);
+        try si.refreshProcNetConnections(allocator, pid, &connections);
+        try std.testing.expect(connections.items.len > 0);
+        for (connections.items) |conn| try std.testing.expectEqual(pid, conn.pid);
+    }
+    try si.refreshThreadStats(allocator, std.math.maxInt(i32), &threads);
+    try si.refreshProcNetConnections(allocator, std.math.maxInt(i32), &connections);
+    try std.testing.expectEqual(@as(usize, 0), threads.items.len);
+    try std.testing.expectEqual(@as(usize, 0), connections.items.len);
+    try std.testing.expectEqual(thread_buffer, threads.items.ptr);
+    try std.testing.expectEqual(connection_buffer, connections.items.ptr);
+}
+
+test "owned thread collection releases allocations on failure" {
+    var si = darwin.SysInfo.init(std.testing.io);
+    defer si.deinit();
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    try std.testing.expectError(error.OutOfMemory, si.getThreadStats(failing.allocator(), @intCast(std.c.getpid())));
+}
+
 test "disk and GPU collectors retain discovered services" {
     var si = darwin.SysInfo.init(std.testing.io);
     defer si.deinit();

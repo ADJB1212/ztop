@@ -969,7 +969,16 @@ pub const SysInfo = struct {
     }
 
     pub fn getThreadStats(self: *SysInfo, allocator: std.mem.Allocator, pid: u32) ![]common.ThreadStats {
+        var result: std.ArrayList(common.ThreadStats) = .empty;
+        errdefer result.deinit(allocator);
+        try self.refreshThreadStats(allocator, pid, &result);
+        return result.toOwnedSlice(allocator);
+    }
+
+    pub fn refreshThreadStats(self: *SysInfo, allocator: std.mem.Allocator, pid: u32, result: *std.ArrayList(common.ThreadStats)) !void {
         _ = self;
+        result.clearRetainingCapacity();
+        errdefer result.clearRetainingCapacity();
 
         // Get list of thread unique IDs
         var tid_buf: [MAX_THREADS]u64 = undefined;
@@ -981,11 +990,10 @@ pub const SysInfo = struct {
             @intCast(MAX_THREADS * @sizeOf(u64)),
         );
 
-        if (tid_ret <= 0) return allocator.alloc(common.ThreadStats, 0);
+        if (tid_ret <= 0) return;
 
-        const num_threads = @as(usize, @intCast(tid_ret)) / @sizeOf(u64);
-
-        var result: std.ArrayList(common.ThreadStats) = .empty;
+        const num_threads = @min(@as(usize, @intCast(tid_ret)) / @sizeOf(u64), tid_buf.len);
+        try result.ensureTotalCapacity(allocator, num_threads);
 
         for (tid_buf[0..num_threads]) |tid| {
             var thread_info: ProcThreadInfo = undefined;
@@ -996,7 +1004,7 @@ pub const SysInfo = struct {
                 @ptrCast(&thread_info),
                 @sizeOf(ProcThreadInfo),
             );
-            if (info_ret <= 0) continue;
+            if (info_ret != @sizeOf(ProcThreadInfo)) continue;
 
             const state: common.ProcState = switch (thread_info.pth_run_state) {
                 TH_STATE_RUNNING => .running,
@@ -1026,12 +1034,10 @@ pub const SysInfo = struct {
                 @memcpy(thread_stat.name_buf[0..name_len], thread_info.pth_name[0..name_len]);
             }
 
-            try result.append(allocator, thread_stat);
+            result.appendAssumeCapacity(thread_stat);
         }
 
-        const thread_slice = try result.toOwnedSlice(allocator);
-        common.sortThreadStats(thread_slice);
-        return thread_slice;
+        common.sortThreadStats(result.items);
     }
 
     pub fn getNetConnections(self: *SysInfo, allocator: std.mem.Allocator) ![]common.NetConnection {
@@ -1045,6 +1051,13 @@ pub const SysInfo = struct {
     pub fn getProcNetConnections(self: *SysInfo, allocator: std.mem.Allocator, pid: u32) ![]common.NetConnection {
         var result: std.ArrayList(common.NetConnection) = .empty;
         errdefer result.deinit(allocator);
+        try self.refreshProcNetConnections(allocator, pid, &result);
+        return result.toOwnedSlice(allocator);
+    }
+
+    pub fn refreshProcNetConnections(self: *SysInfo, allocator: std.mem.Allocator, pid: u32, result: *std.ArrayList(common.NetConnection)) !void {
+        result.clearRetainingCapacity();
+        errdefer result.clearRetainingCapacity();
 
         var fd_buf: [4096]c.struct_proc_fdinfo = undefined;
         const cached_proc = self.findPrevProcEntry(pid);
@@ -1052,8 +1065,7 @@ pub const SysInfo = struct {
             proc.name_buf[0..proc.name_len]
         else
             null;
-        try collectProcessConnections(allocator, &result, &fd_buf, @intCast(pid), cached_name);
-        return result.toOwnedSlice(allocator);
+        try collectProcessConnections(allocator, result, &fd_buf, @intCast(pid), cached_name);
     }
 
     pub fn refreshNetConnections(

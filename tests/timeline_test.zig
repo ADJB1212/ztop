@@ -163,6 +163,41 @@ test "eventMaskInRange returns correct bitmask" {
     try std.testing.expectEqual(@as(u8, 0), mask2);
 }
 
+test "event range lookup handles wrapped rings inclusive bounds and unordered timestamps" {
+    var tl = Timeline.init();
+    for (0..timeline_mod.MAX_EVENTS + 20) |i| {
+        const snap = makeSnap(@intCast(i * 1000), 10);
+        tl.prev_battery_status = .discharging;
+        var changed = snap;
+        changed.battery.status = .charging;
+        tl.detectAndRecordEvents(&changed, &.{}, .celsius);
+    }
+    try std.testing.expectEqual(timeline_mod.MAX_EVENTS, tl.ev_count);
+    const first_ts = tl.getEvent(0).?.timestamp_ms;
+    const last_ts = tl.getEvent(tl.ev_count - 1).?.timestamp_ms;
+    const battery_bit = @as(u8, 1) << @backingInt(timeline_mod.EventKind.battery_change);
+    try std.testing.expectEqual(battery_bit, tl.eventMaskInRange(first_ts, first_ts));
+    try std.testing.expectEqual(battery_bit, tl.eventMaskInRange(last_ts, last_ts));
+    try std.testing.expectEqual(@as(u8, 0), tl.eventMaskInRange(first_ts - 1, first_ts - 1));
+    try std.testing.expectEqual(@as(u8, 0), tl.eventMaskInRange(last_ts + 1, last_ts + 1));
+    try std.testing.expectEqual(@as(u8, 0), tl.eventMaskInRange(last_ts, first_ts));
+    tl.recordSnapshot(makeSnap(first_ts, 10), &.{});
+    var nearby: [4]timeline_mod.TimelineEvent = undefined;
+    try std.testing.expectEqual(@as(usize, 2), tl.getEventsNearSnapshot(0, &nearby));
+
+    var rollback = makeSnap(1, 95);
+    rollback.battery.status = .charging;
+    tl.detectAndRecordEvents(&rollback, &.{}, .celsius);
+    const cpu_bit = @as(u8, 1) << @backingInt(timeline_mod.EventKind.cpu_spike);
+    try std.testing.expectEqual(cpu_bit, tl.eventMaskInRange(1, 1));
+    try std.testing.expectEqual(battery_bit, tl.eventMaskInRange(last_ts, last_ts));
+    const bytes = try tl.toBytes(std.testing.allocator);
+    defer std.testing.allocator.free(bytes);
+    var restored = Timeline.init();
+    try restored.fromBytes(bytes);
+    try std.testing.expectEqual(cpu_bit, restored.eventMaskInRange(1, 1));
+}
+
 test "getEventsNearSnapshot collects nearby events" {
     var tl = Timeline.init();
 

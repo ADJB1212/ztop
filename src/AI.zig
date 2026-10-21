@@ -134,6 +134,25 @@ pub const ParsedDiagnosis = struct {
     advice: []const u8 = "",
 };
 
+pub const DiagnosisCache = struct {
+    json: [1024]u8 = undefined,
+    json_len: usize = 0,
+    storage: [8192]u8 = undefined,
+    value: ?ParsedDiagnosis = null,
+    valid: bool = false,
+
+    pub fn get(self: *DiagnosisCache, json: []const u8) ?ParsedDiagnosis {
+        if (json.len > self.json.len) return null;
+        if (self.valid and std.mem.eql(u8, self.json[0..self.json_len], json)) return self.value;
+        @memcpy(self.json[0..json.len], json);
+        self.json_len = json.len;
+        self.valid = true;
+        var buffer = std.heap.FixedBufferAllocator.init(&self.storage);
+        self.value = std.json.parseFromSliceLeaky(ParsedDiagnosis, buffer.allocator(), self.json[0..self.json_len], .{ .ignore_unknown_fields = true }) catch null;
+        return self.value;
+    }
+};
+
 pub fn parseDiagnosisJson(allocator: std.mem.Allocator, json_str: []const u8) !std.json.Parsed(ParsedDiagnosis) {
     return std.json.parseFromSlice(ParsedDiagnosis, allocator, json_str, .{ .ignore_unknown_fields = true });
 }

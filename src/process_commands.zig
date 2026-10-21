@@ -152,6 +152,7 @@ pub const ZombieParentSummary = struct {
 pub fn collectZombieParents(procs: []const common.ProcStats, out: []ZombieParentEntry) ZombieParentSummary {
     var summary: ZombieParentSummary = .{};
     const pid_to_idx = ProcPidIndex.init(procs);
+    var parent_entries: [common.MAX_PROCS]u16 = @splat(empty_pid_index);
 
     for (procs) |*proc| {
         if (proc.state != .zombie) continue;
@@ -159,17 +160,16 @@ pub fn collectZombieParents(procs: []const common.ProcStats, out: []ZombieParent
         summary.zombie_count += 1;
         if (proc.ppid == 0) continue;
 
-        var found = false;
-        for (out[0..summary.parent_count]) |*entry| {
-            if (entry.pid != proc.ppid) continue;
-            entry.zombie_count += 1;
-            found = true;
-            break;
+        const parent_idx = pid_to_idx.get(proc.ppid) orelse continue;
+        const entry_idx = parent_entries[parent_idx];
+        if (entry_idx != empty_pid_index) {
+            out[entry_idx].zombie_count += 1;
+            continue;
         }
 
-        if (found or summary.parent_count >= out.len) continue;
-        if (pid_to_idx.get(proc.ppid) == null) continue;
+        if (summary.parent_count >= out.len) continue;
 
+        parent_entries[parent_idx] = @intCast(summary.parent_count);
         out[summary.parent_count] = .{
             .pid = proc.ppid,
             .zombie_count = 1,
@@ -185,6 +185,16 @@ pub fn containsParentPid(entries: []const ZombieParentEntry, pid: u32) bool {
         if (entry.pid == pid) return true;
     }
     return false;
+}
+
+pub fn markZombieParents(procs: []const common.ProcStats, entries: []const ZombieParentEntry, flags: []bool) void {
+    std.debug.assert(flags.len >= procs.len);
+    @memset(flags, false);
+    if (entries.len == 0) return;
+    const pid_to_idx = ProcPidIndex.init(procs);
+    for (entries) |entry| {
+        if (pid_to_idx.get(entry.pid)) |idx| flags[idx] = true;
+    }
 }
 
 pub fn matchesProcessFilter(proc: *const common.ProcStats, filter: []const u8) bool {

@@ -59,6 +59,7 @@ pub const ProcessTracer = struct {
     prev_mem_percent: f32 = 0,
     prev_cpu_percent: f32 = 0,
     prev_sockets: std.ArrayList(common.NetConnection),
+    sampled_sockets: std.ArrayList(common.NetConnection) = .empty,
     prev_socket_set: SocketSet = .empty,
     current_socket_set: SocketSet = .empty,
     allocator: std.mem.Allocator,
@@ -77,6 +78,7 @@ pub const ProcessTracer = struct {
 
     pub fn deinit(self: *ProcessTracer) void {
         self.prev_sockets.deinit(self.allocator);
+        self.sampled_sockets.deinit(self.allocator);
         self.prev_socket_set.deinit(self.allocator);
         self.current_socket_set.deinit(self.allocator);
         self.allocator.destroy(self);
@@ -147,10 +149,8 @@ pub const ProcessTracer = struct {
         self.prev_threads = proc.threads;
 
         // Socket opens/closes
-        const conns = sys_info.getProcNetConnections(self.allocator, self.pid) catch &.{};
-        defer self.allocator.free(conns);
-
-        self.updateSockets(conns, ts) catch {};
+        sys_info.refreshProcNetConnections(self.allocator, self.pid, &self.sampled_sockets) catch return;
+        self.updateSockets(self.sampled_sockets.items, ts) catch {};
     }
 
     pub fn updateSockets(self: *ProcessTracer, conns: []const common.NetConnection, ts: i64) !void {

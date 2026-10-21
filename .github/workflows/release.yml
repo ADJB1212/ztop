@@ -1,0 +1,111 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Build release (macOS ARM64)
+    runs-on: xcode-27
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Validate version
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(sed -nE 's/^[[:space:]]*\.version = "([^"]+)",/\1/p' build.zig.zon)
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid version in build.zig.zon: $version"
+            exit 1
+          fi
+          if [[ "$TAG" != "v$version" ]]; then
+            echo "::error::Tag $TAG must match manifest version v$version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: |
+          brew update
+          brew install zig
+          echo "$(brew --prefix zig)/bin" >> "$GITHUB_PATH"
+
+      - name: Build release binary
+        run: zig build -Doptimize=ReleaseFast -Dstrip=true
+
+      - name: Check binary version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: test "$(zig-out/bin/ztop --version)" = "$VERSION"
+
+      - name: Package binary
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          package="ztop-$VERSION-macos-arm64"
+          mkdir -p "dist/$package"
+          cp zig-out/bin/ztop README.md LICENSE "dist/$package/"
+          tar -czf "dist/$package.tar.gz" -C dist "$package"
+          cd dist
+          shasum -a 256 "$package.tar.gz" > "$package.tar.gz.sha256"
+
+      - name: Upload package
+        uses: actions/upload-artifact@v7
+        with:
+          name: ztop-macos-arm64
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download package
+        uses: actions/download-artifact@v8
+        with:
+          name: ztop-macos-arm64
+          path: dist
+
+      - name: Verify checksum
+        working-directory: dist
+        run: sha256sum --check *.sha256
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          args=(--verify-tag --generate-notes --title "ztop $TAG")
+          if [[ "$VERSION" == *-* ]]; then
+            args+=(--prerelease --latest=false)
+          fi
+          gh release create "$TAG" dist/*.tar.gz dist/*.sha256 "${args[@]}"

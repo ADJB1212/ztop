@@ -129,14 +129,14 @@ pub fn main(main_init: std.process.Init) !void {
     var follow_pid: u32 = 0;
     var thread_view_name_buf: [64]u8 = std.mem.zeroes([64]u8);
     var thread_view_name_len: u8 = 0;
-    var cached_threads: []ztop.sysinfo.common.ThreadStats = &.{};
-    defer if (cached_threads.len > 0) allocator.free(cached_threads);
+    var cached_threads: std.ArrayList(ztop.sysinfo.common.ThreadStats) = .empty;
+    defer cached_threads.deinit(allocator);
 
     var causality_view: bool = false;
     var causality_pid: u32 = 0;
     var causality_name_buf: [64]u8 = std.mem.zeroes([64]u8);
     var causality_name_len: u8 = 0;
-    var causality_connections: []ztop.sysinfo.common.NetConnection = &.{};
+    var causality_connections: std.ArrayList(ztop.sysinfo.common.NetConnection) = .empty;
 
     var lifeline_view: bool = false;
     var lifeline_name_buf: [64]u8 = std.mem.zeroes([64]u8);
@@ -148,7 +148,7 @@ pub fn main(main_init: std.process.Init) !void {
         if (active_tracer) |tracer| tracer.deinit();
     }
 
-    defer if (causality_connections.len > 0) allocator.free(causality_connections);
+    defer causality_connections.deinit(allocator);
 
     var cached_connections: std.ArrayList(ztop.sysinfo.common.NetConnection) = .empty;
     defer cached_connections.deinit(allocator);
@@ -274,17 +274,11 @@ pub fn main(main_init: std.process.Init) !void {
             }
 
             if (thread_view) {
-                if (cached_threads.len > 0) {
-                    allocator.free(cached_threads);
-                }
-                cached_threads = try sys_info.getThreadStats(allocator, thread_view_pid);
+                try sys_info.refreshThreadStats(allocator, thread_view_pid, &cached_threads);
             }
 
             if (causality_view) {
-                if (causality_connections.len > 0) {
-                    allocator.free(causality_connections);
-                }
-                causality_connections = input_handler.fetchProcConnections(allocator, &sys_info, causality_pid) catch &.{};
+                sys_info.refreshProcNetConnections(allocator, causality_pid, &causality_connections) catch {};
             }
 
             if (lifeline_view) {
@@ -650,7 +644,7 @@ pub fn main(main_init: std.process.Init) !void {
                         causality_pid,
                         causality_name_buf[0..causality_name_len],
                         cached_procs,
-                        causality_connections,
+                        causality_connections.items,
                     );
                 } else if (lifeline_view and procs_box_height >= 5) {
                     if (active_tracer) |tracer| {
@@ -677,7 +671,7 @@ pub fn main(main_init: std.process.Init) !void {
                             procs_box_height,
                             thread_view_name_buf[0..thread_view_name_len],
                             thread_view_pid,
-                            cached_threads,
+                            cached_threads.items,
                             show_help,
                             &selected_idx,
                             &scroll_offset,
@@ -761,8 +755,12 @@ pub fn main(main_init: std.process.Init) !void {
                                     &filtered_is_lasts,
                                 );
                             } else {
+                                var zombie_parent_flags: [ztop.sysinfo.common.MAX_PROCS]bool = undefined;
+                                if (show_zombie_parents) {
+                                    process_commands.markZombieParents(cached_procs, zombie_parents[0..zombie_summary.parent_count], zombie_parent_flags[0..cached_procs.len]);
+                                }
                                 for (cached_procs, 0..) |*proc, i| {
-                                    if (show_zombie_parents and !process_commands.containsParentPid(zombie_parents[0..zombie_summary.parent_count], proc.pid)) {
+                                    if (show_zombie_parents and !zombie_parent_flags[i]) {
                                         continue;
                                     }
 

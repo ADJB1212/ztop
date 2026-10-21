@@ -67,10 +67,9 @@ pub fn renderLifelineView(
 
     var row: u16 = 0;
     // Iterate backwards (newest first)
-    var i: usize = tracer.ev_count;
+    var i = tracer.ev_count -| scroll_offset;
     while (i > 0) {
         i -= 1;
-        if (tracer.ev_count - 1 - i < scroll_offset) continue;
         if (row >= event_list_height) break;
 
         const ev = tracer.getEvent(i) orelse continue;

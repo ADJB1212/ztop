@@ -102,7 +102,7 @@ pub const Context = struct {
     sys_info: *SysInfo,
     app_tui: *Tui,
     cached_procs: []sysinfo.ProcStats,
-    cached_threads: *[]sysinfo.ThreadStats,
+    cached_threads: *std.ArrayList(sysinfo.ThreadStats),
     cached_connections: *std.ArrayList(sysinfo.common.NetConnection),
     sort_by: *sysinfo.SortBy,
     selected_idx: *usize,
@@ -129,7 +129,7 @@ pub const Context = struct {
     causality_pid: *u32,
     causality_name_buf: *[64]u8,
     causality_name_len: *u8,
-    causality_connections: *[]sysinfo.common.NetConnection,
+    causality_connections: *std.ArrayList(sysinfo.common.NetConnection),
     lifeline_view: *bool,
     lifeline_name_buf: *[64]u8,
     lifeline_name_len: *u8,
@@ -291,7 +291,7 @@ fn handleMainModeToken(ctx: *Context, token: Tui.InputToken, sort_dirty: *bool) 
     const list_count = if (ctx.current_tab.* == 4)
         ctx.cached_connections.items.len
     else if (ctx.thread_view.*)
-        ctx.cached_threads.*.len
+        ctx.cached_threads.items.len
     else if (ctx.pipeline_view.*)
         ctx.pipeline_row_count.*
     else
@@ -840,10 +840,7 @@ fn enterCausalityView(ctx: *Context) !void {
     ctx.scroll_offset.* = 0;
 
     // Load connections for this process
-    if (ctx.causality_connections.*.len > 0) {
-        ctx.allocator.free(ctx.causality_connections.*);
-    }
-    ctx.causality_connections.* = fetchProcConnections(ctx.allocator, ctx.sys_info, proc.pid) catch &.{};
+    ctx.sys_info.refreshProcNetConnections(ctx.allocator, proc.pid, ctx.causality_connections) catch {};
 }
 
 pub fn fetchProcConnections(allocator: std.mem.Allocator, sys_info: *SysInfo, pid: u32) ![]sysinfo.common.NetConnection {
@@ -863,10 +860,7 @@ fn enterThreadView(ctx: *Context) !void {
     ctx.selected_idx.* = 0;
     ctx.scroll_offset.* = 0;
 
-    if (ctx.cached_threads.*.len > 0) {
-        ctx.allocator.free(ctx.cached_threads.*);
-    }
-    ctx.cached_threads.* = ctx.sys_info.getThreadStats(ctx.allocator, ctx.thread_view_pid.*) catch &.{};
+    ctx.sys_info.refreshThreadStats(ctx.allocator, ctx.thread_view_pid.*, ctx.cached_threads) catch {};
 }
 
 fn clearCurrentView(ctx: *Context) void {
@@ -877,18 +871,12 @@ fn clearCurrentView(ctx: *Context) void {
         ctx.scrub_offset.* = 0;
     } else if (ctx.causality_view.*) {
         ctx.causality_view.* = false;
-        if (ctx.causality_connections.*.len > 0) {
-            ctx.allocator.free(ctx.causality_connections.*);
-            ctx.causality_connections.* = &.{};
-        }
+        ctx.causality_connections.clearRetainingCapacity();
         ctx.selected_idx.* = 0;
         ctx.scroll_offset.* = 0;
     } else if (ctx.thread_view.*) {
         ctx.thread_view.* = false;
-        if (ctx.cached_threads.*.len > 0) {
-            ctx.allocator.free(ctx.cached_threads.*);
-            ctx.cached_threads.* = &.{};
-        }
+        ctx.cached_threads.clearRetainingCapacity();
         ctx.selected_idx.* = 0;
         ctx.scroll_offset.* = 0;
     } else if (ctx.lifeline_view.*) {
