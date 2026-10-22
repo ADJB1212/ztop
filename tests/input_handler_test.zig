@@ -71,6 +71,7 @@ test "input batches preserve split escape sequences and fill the available buffe
     var is_filtering = true;
     var quit = false;
     var sort_by: ztop.sysinfo.SortBy = .cpu;
+    var process_order_changed = false;
     var tab: u8 = 1;
     var ctx: input_handler.Context = undefined;
     ctx.app_tui = &app_tui;
@@ -84,6 +85,8 @@ test "input batches preserve split escape sequences and fill the available buffe
     ctx.is_filtering = &is_filtering;
     ctx.quit_flag = &quit;
     ctx.sort_by = &sort_by;
+    ctx.process_order_changed = &process_order_changed;
+    ctx.cached_procs = &.{};
     ctx.current_tab = &tab;
 
     const paste = "abcdefghijklmnopqrstuvwx";
@@ -102,4 +105,11 @@ test "input batches preserve split escape sequences and fill the available buffe
     try std.testing.expect(try input_handler.handleAvailableInput(&ctx));
     try std.testing.expectEqualStrings(burst[0..32], filter_buf[0..filter_len]);
     try std.testing.expectEqual(@as(usize, 0), input_len);
+    try std.testing.expect(!process_order_changed);
+
+    sort_by = .disk_read;
+    try output.writeStreamingAll(std.testing.io, "x");
+    _ = try input_handler.handleAvailableInput(&ctx);
+    try std.testing.expectEqual(ztop.sysinfo.SortBy.cpu, sort_by);
+    try std.testing.expect(process_order_changed);
 }

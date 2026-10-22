@@ -3,6 +3,17 @@ const darwin = @import("ztop").sysinfo.sys_darwin;
 const common = @import("ztop").sysinfo.common;
 const c = darwin.c;
 
+test "network collector reuses storage and releases it" {
+    var collector: @TypeOf(@as(darwin.SysInfo, undefined).net_collector) = .{};
+    defer collector.deinit(std.testing.allocator);
+    _ = try collector.readTotals(std.testing.allocator);
+    try std.testing.expect(collector.buffer.capacity >= 4096);
+    const ptr = collector.buffer.items.ptr;
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    _ = try collector.readTotals(failing.allocator());
+    try std.testing.expectEqual(ptr, collector.buffer.items.ptr);
+}
+
 test "process rusage v2 binding matches the macOS ABI" {
     const Rusage = darwin.bindings.rusage_info_v2;
 

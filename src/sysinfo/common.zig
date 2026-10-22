@@ -383,6 +383,9 @@ fn procOrder(sort_by: SortBy, a: *const ProcStats, b: *const ProcStats) std.math
 
 pub fn sortProcStats(slice: []ProcStats, sort_by: SortBy) void {
     if (slice.len < 2) return;
+    var ordered: usize = 1;
+    while (ordered < slice.len and procOrder(sort_by, &slice[ordered - 1], &slice[ordered]) != .gt) : (ordered += 1) {}
+    if (ordered == slice.len) return;
 
     if (slice.len <= MAX_PROCS) {
         var indices: [MAX_PROCS]u16 = undefined;

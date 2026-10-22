@@ -8,54 +8,55 @@ pub const NetTotals = struct {
     tx_bytes: u64,
 };
 
-var static_net_buf: []u8 = &[_]u8{};
+pub const NetCollector = struct {
+    buffer: std.ArrayList(u8) = .empty,
 
-fn ensureNetBufferCapacity(required: usize) !void {
-    if (required <= static_net_buf.len) return;
-    const new_buf = try std.heap.page_allocator.alloc(u8, required);
-    if (static_net_buf.len > 0) std.heap.page_allocator.free(static_net_buf);
-    static_net_buf = new_buf;
-}
-
-pub fn readNetTotals() !NetTotals {
-    var mib = [_]c_int{ c.CTL_NET, c.PF_ROUTE, 0, 0, c.NET_RT_IFLIST2, 0 };
-    if (static_net_buf.len == 0) {
-        var required: usize = 0;
-        if (c.sysctl(&mib, mib.len, null, &required, null, 0) != 0) return error.SysctlFailed;
-        try ensureNetBufferCapacity(required);
+    pub fn deinit(self: *NetCollector, allocator: std.mem.Allocator) void {
+        self.buffer.deinit(allocator);
+        self.* = .{};
     }
 
-    var len = static_net_buf.len;
-    if (c.sysctl(&mib, mib.len, static_net_buf.ptr, &len, null, 0) != 0) {
-        var required: usize = 0;
-        if (c.sysctl(&mib, mib.len, null, &required, null, 0) != 0) return error.SysctlFailed;
-        try ensureNetBufferCapacity(required);
-        len = static_net_buf.len;
-        if (c.sysctl(&mib, mib.len, static_net_buf.ptr, &len, null, 0) != 0) return error.SysctlFailed;
-    }
-
-    var rx: u64 = 0;
-    var tx: u64 = 0;
-    var offset: usize = 0;
-
-    while (offset + @sizeOf(c.struct_if_msghdr2) <= len) {
-        const hdr: *align(1) const c.struct_if_msghdr2 = @ptrCast(static_net_buf.ptr + offset);
-        const msg_len: usize = hdr.ifm_msglen;
-        if (msg_len == 0) break;
-
-        if (msg_len >= @sizeOf(c.struct_if_msghdr2) and hdr.ifm_type == c.RTM_IFINFO2 and (hdr.ifm_flags & c.IFF_LOOPBACK) == 0) {
-            rx +|= hdr.ifm_data.ifi_ibytes;
-            tx +|= hdr.ifm_data.ifi_obytes;
+    pub fn readTotals(self: *NetCollector, allocator: std.mem.Allocator) !NetTotals {
+        var mib = [_]c_int{ c.CTL_NET, c.PF_ROUTE, 0, 0, c.NET_RT_IFLIST2, 0 };
+        if (self.buffer.capacity == 0) {
+            var required: usize = 0;
+            if (c.sysctl(&mib, mib.len, null, &required, null, 0) != 0) return error.SysctlFailed;
+            try self.buffer.ensureTotalCapacity(allocator, @max(required, 4096));
         }
 
-        offset += msg_len;
-    }
+        var len = self.buffer.capacity;
+        if (c.sysctl(&mib, mib.len, self.buffer.items.ptr, &len, null, 0) != 0) {
+            if (std.posix.errno(-1) != .NOMEM) return error.SysctlFailed;
+            var required: usize = 0;
+            if (c.sysctl(&mib, mib.len, null, &required, null, 0) != 0) return error.SysctlFailed;
+            try self.buffer.ensureTotalCapacity(allocator, required);
+            len = self.buffer.capacity;
+            if (c.sysctl(&mib, mib.len, self.buffer.items.ptr, &len, null, 0) != 0) return error.SysctlFailed;
+        }
 
-    return .{
-        .rx_bytes = rx,
-        .tx_bytes = tx,
-    };
-}
+        var rx: u64 = 0;
+        var tx: u64 = 0;
+        var offset: usize = 0;
+
+        while (offset + @sizeOf(c.struct_if_msghdr2) <= len) {
+            const hdr: *align(1) const c.struct_if_msghdr2 = @ptrCast(self.buffer.items.ptr + offset);
+            const msg_len: usize = hdr.ifm_msglen;
+            if (msg_len == 0 or msg_len > len - offset) break;
+
+            if (msg_len >= @sizeOf(c.struct_if_msghdr2) and hdr.ifm_type == c.RTM_IFINFO2 and (hdr.ifm_flags & c.IFF_LOOPBACK) == 0) {
+                rx +|= hdr.ifm_data.ifi_ibytes;
+                tx +|= hdr.ifm_data.ifi_obytes;
+            }
+
+            offset += msg_len;
+        }
+
+        return .{
+            .rx_bytes = rx,
+            .tx_bytes = tx,
+        };
+    }
+};
 
 pub fn mapWifiGeneration(phy_mode: i64, channel_band: i64) common.WifiGeneration {
     return switch (phy_mode) {

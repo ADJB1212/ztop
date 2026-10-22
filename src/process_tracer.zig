@@ -58,7 +58,7 @@ pub const ProcessTracer = struct {
     prev_threads: u32 = 0,
     prev_mem_percent: f32 = 0,
     prev_cpu_percent: f32 = 0,
-    prev_sockets: std.ArrayList(common.NetConnection),
+    prev_sockets: std.ArrayList(SocketKey),
     sampled_sockets: std.ArrayList(common.NetConnection) = .empty,
     prev_socket_set: SocketSet = .empty,
     current_socket_set: SocketSet = .empty,
@@ -157,24 +157,22 @@ pub const ProcessTracer = struct {
         try self.prev_sockets.ensureTotalCapacity(self.allocator, conns.len);
         try self.current_socket_set.ensureTotalCapacity(self.allocator, @intCast(conns.len));
         self.current_socket_set.clearRetainingCapacity();
-        for (conns) |conn| {
-            self.current_socket_set.putAssumeCapacity(SocketKey.fromConnection(conn), {});
-        }
-
         for (conns) |curr| {
-            if (!self.prev_socket_set.contains(SocketKey.fromConnection(curr))) {
+            const key = SocketKey.fromConnection(curr);
+            self.current_socket_set.putAssumeCapacity(key, {});
+            if (!self.prev_socket_set.contains(key)) {
                 self.appendEvent(.socket_open, ts, "Socket opened: {s} {s}:{d} -> {s}:{d}", .{ @tagName(curr.protocol), std.mem.sliceTo(&curr.local_addr, 0), curr.local_port, std.mem.sliceTo(&curr.remote_addr, 0), curr.remote_port });
             }
         }
 
         for (self.prev_sockets.items) |prev| {
-            if (!self.current_socket_set.contains(SocketKey.fromConnection(prev))) {
+            if (!self.current_socket_set.contains(prev)) {
                 self.appendEvent(.socket_close, ts, "Socket closed: {s} {s}:{d} -> {s}:{d}", .{ @tagName(prev.protocol), std.mem.sliceTo(&prev.local_addr, 0), prev.local_port, std.mem.sliceTo(&prev.remote_addr, 0), prev.remote_port });
             }
         }
 
         self.prev_sockets.clearRetainingCapacity();
-        self.prev_sockets.appendSliceAssumeCapacity(conns);
+        for (conns) |conn| self.prev_sockets.appendAssumeCapacity(SocketKey.fromConnection(conn));
         std.mem.swap(SocketSet, &self.prev_socket_set, &self.current_socket_set);
     }
 };

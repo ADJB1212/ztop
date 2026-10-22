@@ -34,7 +34,6 @@ const MAX_PROCS = common.MAX_PROCS;
 const DiskTotals = disk_mod.DiskTotals;
 const DiskUsage = disk_mod.DiskUsage;
 const DiskCollector = disk_mod.DiskCollector;
-const NetTotals = net_mod.NetTotals;
 const GpuCollector = gpu_mod.GpuCollector;
 
 const mach_port_t = bindings.mach_port_t;
@@ -186,6 +185,7 @@ pub const SysInfo = struct {
     disk_collector: DiskCollector = .{},
     gpu_collector: GpuCollector = .{},
     prev_net_rx: u64 = 0,
+    net_collector: net_mod.NetCollector = .{},
     prev_net_tx: u64 = 0,
     prev_ms: i64 = 0,
     prev_disk_ms: i64 = 0,
@@ -276,6 +276,7 @@ pub const SysInfo = struct {
         }
         self.disk_collector.deinit();
         self.gpu_collector.deinit();
+        self.net_collector.deinit(std.heap.page_allocator);
     }
 
     fn updatePowerSample(self: *SysInfo) void {
@@ -506,7 +507,13 @@ pub const SysInfo = struct {
     }
 
     pub fn getNetStats(self: *SysInfo) NetStats {
-        const stats = net_mod.readNetTotals() catch NetTotals{ .rx_bytes = 0, .tx_bytes = 0 };
+        const stats = self.net_collector.readTotals(std.heap.page_allocator) catch return .{
+            .rx_bytes_ps = 0,
+            .tx_bytes_ps = 0,
+            .rx_bytes = self.prev_net_rx,
+            .tx_bytes = self.prev_net_tx,
+            .wifi = self.wifi_details,
+        };
         const now = nowMs(self.io);
         const elapsed = now - self.prev_net_ms;
 

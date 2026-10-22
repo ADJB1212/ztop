@@ -276,6 +276,31 @@ test "buildTreeView caps input at MAX_PROCS" {
     try std.testing.expectEqual(@as(usize, common.MAX_PROCS - 1), indices[count - 1]);
 }
 
+test "buildTreeView handles maximum depth and width without recursion" {
+    const allocator = std.testing.allocator;
+    const procs = try allocator.alloc(common.ProcStats, common.MAX_PROCS);
+    defer allocator.free(procs);
+    const indices = try allocator.alloc(usize, procs.len);
+    defer allocator.free(indices);
+    const depths = try allocator.alloc(u8, procs.len);
+    defer allocator.free(depths);
+    const masks = try allocator.alloc(u16, procs.len);
+    defer allocator.free(masks);
+
+    for ([_]bool{ false, true }) |wide| {
+        for (procs, 0..) |*p, i| {
+            p.* = proc(@intCast(i + 1), if (i == 0) 0 else if (wide) 1 else @intCast(i), .running);
+        }
+        try std.testing.expectEqual(procs.len, process_commands.buildTreeView(procs, indices, depths, masks));
+        for (indices, 0..) |index, i| {
+            try std.testing.expectEqual(i, index);
+            const expected_depth: u8 = if (wide and i > 0) 1 else @intCast(@min(i, 16));
+            try std.testing.expectEqual(expected_depth, depths[i]);
+        }
+        try std.testing.expectEqual(@as(u16, if (wide) 1 else 65535), masks[masks.len - 1]);
+    }
+}
+
 test "buildPipelineGroups handles empty input and zero group capacity" {
     var no_groups: [0]process_commands.PipelineGroup = .{};
     try std.testing.expectEqual(@as(usize, 0), process_commands.buildPipelineGroups(&.{}, &no_groups));
@@ -285,4 +310,50 @@ test "buildPipelineGroups handles empty input and zero group capacity" {
     cargo.name_len = 5;
     const procs = [_]common.ProcStats{cargo};
     try std.testing.expectEqual(@as(usize, 0), process_commands.buildPipelineGroups(&procs, &no_groups));
+}
+
+test "pipeline cache refreshes metrics and child indices after invalidation" {
+    var procs = [_]common.ProcStats{
+        proc(100, 0, .running),
+        proc(200, 100, .running),
+    };
+    @memcpy(procs[0].name_buf[0..5], "cargo");
+    procs[0].name_len = 5;
+    procs[1].cpu_percent = 20;
+    var cache: process_commands.PipelineCache = .{};
+    const first = cache.get(&procs);
+    try std.testing.expectEqual(@as(usize, 1), first.len);
+    try std.testing.expectEqual(@as(f32, 20), first[0].total_cpu);
+    try std.testing.expectEqual(@as(u16, 1), first[0].child_proc_indices[0]);
+
+    procs[1].cpu_percent = 30;
+    try std.testing.expectEqual(@as(f32, 20), cache.get(&procs)[0].total_cpu);
+    std.mem.swap(common.ProcStats, &procs[0], &procs[1]);
+    cache.invalidate();
+    const refreshed = cache.get(&procs);
+    try std.testing.expectEqual(@as(f32, 30), refreshed[0].total_cpu);
+    try std.testing.expectEqual(@as(u16, 0), refreshed[0].child_proc_indices[0]);
+    cache.invalidate();
+    try std.testing.expectEqual(@as(usize, 0), cache.get(&.{}).len);
+}
+
+test "pipeline groups assign descendants to the nearest nested build root" {
+    var procs = [_]common.ProcStats{
+        proc(1, 0, .running),
+        proc(8193, 1, .running),
+        proc(3, 8193, .running),
+        proc(4, 3, .running),
+        proc(5, 99, .running),
+    };
+    for (procs[0..2]) |*p| {
+        @memcpy(p.name_buf[0..5], "cargo");
+        p.name_len = 5;
+    }
+    procs[2].cpu_percent = 10;
+    procs[3].cpu_percent = 20;
+    var groups: [2]process_commands.PipelineGroup = undefined;
+    try std.testing.expectEqual(@as(usize, 2), process_commands.buildPipelineGroups(&procs, &groups));
+    try std.testing.expectEqual(@as(u8, 0), groups[0].child_count);
+    try std.testing.expectEqual(@as(u8, 2), groups[1].child_count);
+    try std.testing.expectEqual(@as(f32, 30), groups[1].total_cpu);
 }

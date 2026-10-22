@@ -80,7 +80,7 @@ test "speed test drains long progress streams without filling its output buffer"
     defer test_state.deinit(io);
     try spawnTestChild(
         &test_state,
-        "i=0; while [ $i -lt 1000 ]; do " ++
+        "i=0; while [ $i -lt 4000 ]; do " ++
             "printf 'Downlink: 25.000 Mbps, 0 RPM - Uplink: 10.000 Mbps, 0 RPM\r'; i=$((i+1)); done; " ++
             "printf 'Uplink capacity: 10.000 Mbps\nDownlink capacity: 25.000 Mbps'",
     );

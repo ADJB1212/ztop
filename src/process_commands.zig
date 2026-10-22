@@ -45,6 +45,9 @@ const ProcPidIndex = struct {
 };
 
 pub const TreeBuilder = struct {
+    const Entry = struct { index: usize, depth: u8, mask: u16 };
+
+    stack: [common.MAX_PROCS]Entry = undefined,
     first_child: []const usize,
     next_sibling: []const usize,
     visited: []bool = &.{},
@@ -54,27 +57,37 @@ pub const TreeBuilder = struct {
     count: *usize,
 
     pub fn walk(self: *@This(), idx: usize, depth: u8, is_last_mask: u16) void {
-        if (self.count.* >= self.indices.len or
-            self.count.* >= self.depths.len or
-            self.count.* >= self.is_lasts.len or
-            (idx < self.visited.len and self.visited[idx])) return;
+        const stack = &self.stack;
+        stack[0] = .{ .index = idx, .depth = depth, .mask = is_last_mask };
+        var pending: usize = 1;
+        const capacity = @min(self.indices.len, self.depths.len, self.is_lasts.len);
+        while (pending > 0 and self.count.* < capacity) {
+            pending -= 1;
+            const entry = stack[pending];
+            if (entry.index < self.visited.len) {
+                if (self.visited[entry.index]) continue;
+                self.visited[entry.index] = true;
+            }
+            self.indices[self.count.*] = entry.index;
+            self.depths[self.count.*] = @min(entry.depth, 16);
+            self.is_lasts[self.count.*] = entry.mask;
+            self.count.* += 1;
+            if (self.count.* == capacity) return;
 
-        if (idx < self.visited.len) self.visited[idx] = true;
-        self.indices[self.count.*] = idx;
-        self.depths[self.count.*] = @min(depth, 16);
-        self.is_lasts[self.count.*] = is_last_mask;
-        self.count.* += 1;
-
-        var child = self.first_child[idx];
-        while (child != std.math.maxInt(usize)) {
-            const next = self.next_sibling[child];
-            const is_last_child = (next == std.math.maxInt(usize));
-            const new_mask = if (is_last_child and depth < 16)
-                is_last_mask | (@as(u16, 1) << @as(u4, @intCast(depth)))
-            else
-                is_last_mask;
-            self.walk(child, depth +| 1, new_mask);
-            child = next;
+            const children_start = pending;
+            var child = self.first_child[entry.index];
+            while (child != std.math.maxInt(usize)) {
+                const next = self.next_sibling[child];
+                const mask = if (next == std.math.maxInt(usize) and entry.depth < 16)
+                    entry.mask | (@as(u16, 1) << @as(u4, @intCast(entry.depth)))
+                else
+                    entry.mask;
+                if (pending == stack.len) return;
+                stack[pending] = .{ .index = child, .depth = entry.depth +| 1, .mask = mask };
+                pending += 1;
+                child = next;
+            }
+            std.mem.reverse(Entry, stack[children_start..pending]);
         }
     }
 };
@@ -86,7 +99,7 @@ pub fn buildTreeView(
     is_lasts: []u16,
 ) usize {
     var count: usize = 0;
-    if (procs.len == 0) return 0;
+    if (procs.len == 0 or indices.len == 0 or depths.len == 0 or is_lasts.len == 0) return 0;
     const bounded_procs = procs[0..@min(procs.len, common.MAX_PROCS)];
 
     var first_child_buf: [common.MAX_PROCS]usize = undefined;
@@ -294,12 +307,12 @@ pub fn buildPipelineGroups(
     groups: []PipelineGroup,
 ) usize {
     var group_count: usize = 0;
-    if (procs.len == 0) return 0;
-
-    const pid_to_idx = ProcPidIndex.init(procs);
+    if (procs.len == 0 or groups.len == 0) return 0;
+    std.debug.assert(procs.len <= common.MAX_PROCS);
+    var root_groups: [common.MAX_PROCS]u16 = @splat(empty_pid_index);
 
     // Pass 1: create groups for root build processes
-    for (procs) |*proc| {
+    for (procs, 0..) |*proc, proc_index| {
         if (!isBuildRoot(proc.name())) continue;
         if (group_count >= groups.len) break;
         const g = &groups[group_count];
@@ -314,20 +327,23 @@ pub fn buildPipelineGroups(
         g.child_proc_indices = std.mem.zeroes([MAX_PIPELINE_CHILDREN]u16);
         g.child_count = 0;
         @memcpy(g.root_name_buf[0..proc.name_len], proc.name());
+        root_groups[proc_index] = @intCast(group_count);
         group_count += 1;
     }
 
     if (group_count == 0) return 0;
+    const pid_to_idx = ProcPidIndex.init(procs);
 
     // Pass 2: assign children by walking PPID chain
     for (procs, 0..) |*proc, proc_index| {
-        if (findPipelineGroup(groups[0..group_count], proc.pid) != null) continue;
+        if (root_groups[proc_index] != empty_pid_index) continue;
 
         var ppid = proc.ppid;
         var depth: u8 = 0;
         while (depth < 8 and ppid != 0 and ppid != proc.pid) : (depth += 1) {
-            if (findPipelineGroup(groups[0..group_count], ppid)) |gi| {
-                const g = &groups[gi];
+            const parent_idx = pid_to_idx.get(ppid) orelse break;
+            if (root_groups[parent_idx] != empty_pid_index) {
+                const g = &groups[root_groups[parent_idx]];
                 if (g.child_count < MAX_PIPELINE_CHILDREN) {
                     const ci = g.child_count;
                     g.child_pids[ci] = proc.pid;
@@ -341,20 +357,29 @@ pub fn buildPipelineGroups(
                 }
                 break;
             }
-            if (pid_to_idx.get(ppid)) |parent_idx| {
-                const parent = &procs[parent_idx];
-                if (parent.ppid == ppid) break;
-                ppid = parent.ppid;
-            } else break;
+            const parent = &procs[parent_idx];
+            if (parent.ppid == ppid) break;
+            ppid = parent.ppid;
         }
     }
 
     return group_count;
 }
 
-fn findPipelineGroup(groups: []const PipelineGroup, pid: u32) ?usize {
-    for (groups, 0..) |*group, index| {
-        if (group.root_pid == pid) return index;
+pub const PipelineCache = struct {
+    groups: [MAX_PIPELINE_GROUPS]PipelineGroup = undefined,
+    count: usize = 0,
+    valid: bool = false,
+
+    pub fn invalidate(self: *PipelineCache) void {
+        self.valid = false;
     }
-    return null;
-}
+
+    pub fn get(self: *PipelineCache, procs: []const common.ProcStats) []const PipelineGroup {
+        if (!self.valid) {
+            self.count = buildPipelineGroups(procs, &self.groups);
+            self.valid = true;
+        }
+        return self.groups[0..self.count];
+    }
+};

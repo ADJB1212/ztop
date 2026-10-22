@@ -339,6 +339,22 @@ test "reconnect loop: critical when > 50 TIME_WAIT" {
     try std.testing.expectEqual(render.HintSeverity.critical, h.?.severity);
 }
 
+test "reconnect loop tracks more than 32 processes and resolves PID collisions" {
+    const tl = emptyTimeline();
+    const mem = makeMem(8 * 1024 * MB, 4 * 1024 * MB, 0, 0, 0);
+    var conns: [80]sysinfo.common.NetConnection = undefined;
+    for (conns[0..40], 0..) |*conn, i| conn.* = makeConn(@intCast(i + 1), .time_wait);
+    const culprit = 1 + sysinfo.common.MAX_PROCS * 2;
+    for (conns[40..60]) |*conn| conn.* = makeConn(culprit, .close_wait);
+    for (conns[60..]) |*conn| conn.* = makeConn(1, .time_wait);
+    var data = buildHints(mem, 40, 5, 0, null, &.{}, &conns, &tl);
+    try std.testing.expectEqual(@as(u32, 1), findPattern(data, .reconnect_loop).?.culprit_pid);
+    conns[0].state = .established;
+    conns[60].state = .established;
+    data = buildHints(mem, 40, 5, 0, null, &.{}, &conns, &tl);
+    try std.testing.expectEqual(@as(u32, culprit), findPattern(data, .reconnect_loop).?.culprit_pid);
+}
+
 // ── FD pressure ───────────────────────────────────────────────────────────────
 
 test "fd pressure: no hint when threads < 400" {

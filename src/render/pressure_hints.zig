@@ -196,23 +196,25 @@ fn detectRunawayWriter(data: *PressureHintsData, procs: []const sysinfo.ProcStat
 fn detectReconnectLoop(data: *PressureHintsData, connections: []const sysinfo.common.NetConnection) void {
     if (connections.len == 0) return;
 
-    const MAX_TRACKED = 32;
+    const MAX_TRACKED = sysinfo.common.MAX_PROCS;
+    const slot_count = MAX_TRACKED * 2;
+    const empty = std.math.maxInt(u16);
+    var slots: [slot_count]u16 = @splat(empty);
     var pids: [MAX_TRACKED]u32 = undefined;
-    var tw_counts: [MAX_TRACKED]u32 = std.mem.zeroes([MAX_TRACKED]u32);
+    var tw_counts: [MAX_TRACKED]u32 = undefined;
     var pid_count: usize = 0;
 
     for (connections) |conn| {
         if (conn.state != .time_wait and conn.state != .close_wait) continue;
         if (conn.pid == 0) continue;
-        var found = false;
-        for (pids[0..pid_count], 0..) |p, i| {
-            if (p == conn.pid) {
-                tw_counts[i] += 1;
-                found = true;
-                break;
-            }
+        var slot = (@as(usize, conn.pid) *% 0x9e37_79b1) & (slot_count - 1);
+        while (slots[slot] != empty and pids[slots[slot]] != conn.pid) {
+            slot = (slot + 1) & (slot_count - 1);
         }
-        if (!found and pid_count < MAX_TRACKED) {
+        if (slots[slot] != empty) {
+            tw_counts[slots[slot]] +|= 1;
+        } else if (pid_count < MAX_TRACKED) {
+            slots[slot] = @intCast(pid_count);
             pids[pid_count] = conn.pid;
             tw_counts[pid_count] = 1;
             pid_count += 1;

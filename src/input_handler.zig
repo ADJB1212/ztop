@@ -105,6 +105,7 @@ pub const Context = struct {
     cached_threads: *std.ArrayList(sysinfo.ThreadStats),
     cached_connections: *std.ArrayList(sysinfo.common.NetConnection),
     sort_by: *sysinfo.SortBy,
+    process_order_changed: ?*bool = null,
     selected_idx: *usize,
     scroll_offset: *usize,
     show_help: *bool,
@@ -211,6 +212,7 @@ pub fn handleAvailableInput(ctx: *Context) !bool {
 
     if (sort_dirty) {
         sysinfo.sortProcStats(ctx.cached_procs, ctx.sort_by.*);
+        if (ctx.process_order_changed) |changed| changed.* = true;
     }
 
     return handled_any or !ctx.quit_flag.*;

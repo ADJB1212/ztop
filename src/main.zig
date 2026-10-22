@@ -143,6 +143,7 @@ pub fn main(main_init: std.process.Init) !void {
     var lifeline_name_len: u8 = 0;
     var pipeline_view: bool = false;
     var pipeline_row_count: usize = 0;
+    var pipeline_cache: process_commands.PipelineCache = .{};
     var active_tracer: ?*ztop.process_tracer.ProcessTracer = null;
     defer {
         if (active_tracer) |tracer| tracer.deinit();
@@ -266,6 +267,7 @@ pub fn main(main_init: std.process.Init) !void {
             }
 
             cached_procs = try sys_info.getProcStats(proc_buf, sort_by);
+            pipeline_cache.invalidate();
             process_view_key = null;
             cached_procs = ztop.sysinfo.common.filterProcStatsByLaunchCommandSubstring(cached_procs, app_config.ignoredLaunchCommandSubstr());
 
@@ -686,6 +688,7 @@ pub fn main(main_init: std.process.Init) !void {
                             procs_box_width,
                             procs_box_height,
                             cached_procs,
+                            pipeline_cache.get(cached_procs),
                             selected_idx,
                             &scroll_offset,
                         );
@@ -923,6 +926,7 @@ pub fn main(main_init: std.process.Init) !void {
         const poll_res = posix.poll(&fds, @intCast(remaining_ms)) catch 0;
 
         if (poll_res > 0 and (fds[0].revents & posix.POLL.IN) != 0) {
+            var process_order_changed = false;
             var input_ctx: input_handler.Context = .{
                 .allocator = allocator,
                 .sys_info = &sys_info,
@@ -931,6 +935,7 @@ pub fn main(main_init: std.process.Init) !void {
                 .cached_threads = &cached_threads,
                 .cached_connections = &cached_connections,
                 .sort_by = &sort_by,
+                .process_order_changed = &process_order_changed,
                 .selected_idx = &selected_idx,
                 .scroll_offset = &scroll_offset,
                 .show_help = &show_help,
@@ -981,9 +986,9 @@ pub fn main(main_init: std.process.Init) !void {
                 .pipeline_row_count = &pipeline_row_count,
                 .network_speed_test = &network_speed_test,
             };
-            const previous_sort = sort_by;
             force_redraw = try input_handler.handleAvailableInput(&input_ctx);
-            if (previous_sort != sort_by or show_zombie_parents) process_view_key = null;
+            if (process_order_changed) pipeline_cache.invalidate();
+            if (process_order_changed or show_zombie_parents) process_view_key = null;
         } else if (render.isAiQuerying() or (current_tab == 4 and network_speed_test.state == .running)) {
             force_redraw = true;
         }

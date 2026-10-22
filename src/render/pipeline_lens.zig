@@ -23,6 +23,7 @@ pub fn renderPipelineLensView(
     width: u16,
     height: u16,
     cached_procs: []const sysinfo.ProcStats,
+    groups: []const process_commands.PipelineGroup,
     selected_idx: usize,
     scroll_offset: *usize,
 ) !usize {
@@ -43,9 +44,7 @@ pub fn renderPipelineLensView(
     const inner_height = height -| 2;
     if (inner_width < 10 or inner_height < 2) return 0;
 
-    var groups_buf: [process_commands.MAX_PIPELINE_GROUPS]process_commands.PipelineGroup = undefined;
-    const group_count = process_commands.buildPipelineGroups(cached_procs, &groups_buf);
-    const groups = groups_buf[0..group_count];
+    const group_count = groups.len;
 
     if (group_count == 0) {
         try app_tui.moveCursor(inner_x, y + 2);

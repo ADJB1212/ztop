@@ -278,6 +278,21 @@ test "sortProcStats preserves input order for equal metrics" {
     try std.testing.expectEqual(@as(u32, 30), procs[1].pid);
     try std.testing.expectEqual(@as(u32, 10), procs[2].pid);
     try std.testing.expectEqual(@as(u32, 20), procs[3].pid);
+    common.sortProcStats(&procs, .cpu);
+    try std.testing.expectEqual(@as(u32, 40), procs[0].pid);
+    try std.testing.expectEqual(@as(u32, 30), procs[1].pid);
+    try std.testing.expectEqual(@as(u32, 10), procs[2].pid);
+    try std.testing.expectEqual(@as(u32, 20), procs[3].pid);
+}
+
+test "sortProcStats handles a final inversion after an ordered prefix" {
+    var procs = [_]common.ProcStats{
+        .{ .pid = 1 }, .{ .pid = 2 }, .{ .pid = 4 }, .{ .pid = 3 },
+    };
+    common.sortProcStats(&procs, .pid);
+    for (procs, 0..) |p, i| try std.testing.expectEqual(@as(u32, @intCast(i + 1)), p.pid);
+    common.sortProcStats(&procs, .pid);
+    for (procs, 0..) |p, i| try std.testing.expectEqual(@as(u32, @intCast(i + 1)), p.pid);
 }
 
 test "filterProcStatsByLaunchCommandSubstring removes matches in place" {

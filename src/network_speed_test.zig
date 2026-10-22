@@ -49,6 +49,7 @@ pub const SpeedTest = struct {
     child: ?std.process.Child = null,
     output: [16384]u8 = undefined,
     output_len: usize = 0,
+    output_eof: bool = false,
     started: std.Io.Timestamp = .zero,
 
     pub fn deinit(self: *SpeedTest, io: std.Io) void {
@@ -60,6 +61,7 @@ pub const SpeedTest = struct {
         if (self.state == .running) return;
         self.state = .failed;
         self.output_len = 0;
+        self.output_eof = false;
         self.live = .{};
         self.final = .{};
         var child = std.process.spawn(io, .{
@@ -92,6 +94,7 @@ pub const SpeedTest = struct {
             self.state = .failed;
             return true;
         };
+        if (!self.output_eof) return changed;
         var status: c_int = 0;
         const pid = std.c.waitpid(child.id.?, &status, std.c.W.NOHANG);
         if (pid == 0) return changed;
@@ -101,11 +104,10 @@ pub const SpeedTest = struct {
             self.state = .failed;
             return true;
         }
-        const output_valid = if (self.readOutput(child.stdout.?.handle)) |_| true else |_| false;
         child.stdout.?.close(io);
         self.child = null;
         self.state = .failed;
-        if (status == 0 and output_valid) {
+        if (status == 0) {
             _ = self.consumeLine(self.output[0..self.output_len]);
             self.result = self.final.result() catch return true;
             self.state = .ready;
@@ -131,23 +133,32 @@ pub const SpeedTest = struct {
 
     fn readOutput(self: *SpeedTest, fd: std.posix.fd_t) !bool {
         var changed = false;
-        while (self.output_len < self.output.len) {
-            const n = std.posix.read(fd, self.output[self.output_len..]) catch |err| {
+        var remaining = self.output.len;
+        while (self.output_len < self.output.len and remaining > 0) {
+            const previous_len = self.output_len;
+            const n = std.posix.read(fd, self.output[self.output_len..][0..@min(self.output.len - self.output_len, remaining)]) catch |err| {
                 if (err == error.WouldBlock) return changed;
                 return err;
             };
-            if (n == 0) return changed;
+            if (n == 0) {
+                self.output_eof = true;
+                return changed;
+            }
+            remaining -= n;
             self.output_len += n;
             var line_start: usize = 0;
-            for (self.output[0..self.output_len], 0..) |byte, i| {
+            for (self.output[previous_len..self.output_len], previous_len..) |byte, i| {
                 if (byte == '\r' or byte == '\n') {
                     changed = self.consumeLine(self.output[line_start..i]) or changed;
                     line_start = i + 1;
                 }
             }
-            std.mem.copyForwards(u8, &self.output, self.output[line_start..self.output_len]);
-            self.output_len -= line_start;
+            if (line_start > 0) {
+                std.mem.copyForwards(u8, &self.output, self.output[line_start..self.output_len]);
+                self.output_len -= line_start;
+            }
         }
-        return error.OutputTooLarge;
+        if (self.output_len == self.output.len) return error.OutputTooLarge;
+        return changed;
     }
 };
